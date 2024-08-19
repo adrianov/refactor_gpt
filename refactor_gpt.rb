@@ -8,14 +8,13 @@ class OpenAi
     @api_base_url = fetch_env_variable('OPENAI_BASE_URL')
     @api_key = fetch_env_variable('OPENAI_ACCESS_TOKEN')
     @model = 'gpt-4o'
-    @temperature = 0.2
   end
 
   # Method to send prompts to OpenAI API and get a response
   def ask(prompts)
     uri = URI("#{@api_base_url}/chat/completions")
     request = Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json', 'Authorization' => "Bearer #{@api_key}")
-    request.body = Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, mode: :compat, symbol_keys: true)
+    request.body = Oj.dump({ model: @model, messages: prompts }, mode: :compat, symbol_keys: true)
     response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 100) { |http| http.request(request) }
     parse_response(response)
   end
