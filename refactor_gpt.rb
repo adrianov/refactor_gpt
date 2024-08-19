@@ -55,13 +55,21 @@ class OpenAi
 
   # Method to fetch environment variables from .env file
   def fetch_env_variable(key, default = nil)
-    env_file = File.join(File.dirname(__FILE__), '.env')
-    return default unless File.exist?(env_file)
+    @env_vars ||= load_env_vars
+    @env_vars.fetch(key, default)
+  end
 
+  # Method to load environment variables into a hash
+  def load_env_vars
+    env_file = File.join(File.dirname(__FILE__), '.env')
+    return {} unless File.exist?(env_file)
+
+    env_vars = {}
     File.foreach(env_file) do |line|
-      return line.split('=')[1].strip if line.start_with?(key)
+      key, value = line.split('=')
+      env_vars[key.strip] = value.strip if key && value
     end
-    default
+    env_vars
   end
 end
 
