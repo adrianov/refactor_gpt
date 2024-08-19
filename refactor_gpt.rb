@@ -9,15 +9,15 @@ class OpenAi
     @api_base_url = fetch_env_variable('OPENAI_BASE_URL')
     @api_key = fetch_env_variable('OPENAI_ACCESS_TOKEN')
     @model = 'gpt-4o'
-    @temperature = 0
+    @temperature = 0.2
   end
 
   # Method to send prompts to OpenAI API and get a response
   def ask(prompts)
     with_retries(base_sleep_seconds: 5, max_sleep_seconds: 5, rescue: [Net::ReadTimeout]) do
-      uri = URI(@api_base_url + '/chat/completions')
+      uri = URI("#{@api_base_url}/chat/completions")
       request = Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json', 'Authorization' => "Bearer #{@api_key}")
-      request.body = Oj.dump({ model: @model, temperature: @temperature, messages: prompts, response_format: { type: 'json_object' } }, mode: :compat, symbol_keys: true)
+      request.body = Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, mode: :compat, symbol_keys: true)
       response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 100) { |http| http.request(request) }
       parse_response(response)
     end
@@ -25,42 +25,34 @@ class OpenAi
 
   # Method to parse the response and handle errors
   def parse_response(response)
-    response_body = response&.body.to_s
-    answer = Oj.load(response_body).dig('choices', 0, 'message', 'content') rescue {}
+    answer = Oj.load(response&.body.to_s).dig('choices', 0, 'message', 'content') rescue {}
     return answer unless answer.nil? || answer.empty?
 
-    puts response_body
+    puts response.body.to_s
     exit
   end
 
   # Method to refactor code using OpenAI
   def refactor(code, additional_instructions = nil)
-    response = ask([{
-      role: 'system',
-      content: "Refactor software code. Return complete code block only in JSON {\"code\": \"...\"}."
-    }, {
-      role: 'user',
-      content: <<~HEREDOC
-        Refactor the following software code according to these guidelines:
+    instruction = <<~HEREDOC
+      Return the complete refactored code block only without explanations.
 
-        1. Error Handling: Identify and fix any errors by rewriting the affected sections if necessary.
-        2. Descriptive Naming: Use clear and descriptive variable names.
-        3. Function Length: Ensure all functions are shorter than 15 lines.
-        4. Inline Variables: If a variable used only once, replace it with its value.
-        5. Simplify Logic: Reduce the number of assignments, branches, and conditions.
-        6. Comments: Add a brief comment before each class or function to explain its purpose.
-        7. Preserve Logic: Maintain all existing business logic.
+      1. Error Handling: Identify and fix any errors by rewriting the affected sections if necessary.
+      2. Descriptive Naming: Use clear and descriptive variable names.
+      3. Function Length: Ensure all functions are shorter than 15 lines.
+      4. Inline Variables: If a variable used only once, replace it with its value.
+      5. Simplify Logic: Reduce the number of assignments, branches, and conditions.
+      6. Comments: Add a brief comment before each class or function to explain its purpose.
+      7. Preserve Logic: Maintain all existing business logic.
+      8. Complete TODO
 
-        Return the complete refactored code block only without explanations.
+      #{additional_instructions ? 'Additional user instructions: ' + additional_instructions + '.' : ''}
+    HEREDOC
 
-        #{additional_instructions ? 'Additional user instructions: ' + additional_instructions + '.' : ''}
-
-        ```
-        #{code}
-        ```
-      HEREDOC
-    }])
-    Oj.load(response)['code']
+    ask([
+          { role: 'system', content: instruction },
+          { role: 'user', content: code }
+        ]).gsub(/^```.*\n?/, '')
   end
 
   private
@@ -94,5 +86,5 @@ code = File.read(file_path)
 additional_instructions = ARGV.length > 1 ? ARGV[1..-1].join(' ') : nil
 refactored_code = OpenAi.new.refactor(code, additional_instructions)
 
-IO.binwrite(file_path, refactored_code)
+IO.binwrite(file_path, refactored_code + "\n")
 puts refactored_code
