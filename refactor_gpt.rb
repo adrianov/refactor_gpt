@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 require 'net/http'
 require 'oj'
-require 'retries'
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -14,13 +13,11 @@ class OpenAi
 
   # Method to send prompts to OpenAI API and get a response
   def ask(prompts)
-    with_retries(base_sleep_seconds: 5, max_sleep_seconds: 5, rescue: [Net::ReadTimeout]) do
-      uri = URI("#{@api_base_url}/chat/completions")
-      request = Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json', 'Authorization' => "Bearer #{@api_key}")
-      request.body = Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, mode: :compat, symbol_keys: true)
-      response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 100) { |http| http.request(request) }
-      parse_response(response)
-    end
+    uri = URI("#{@api_base_url}/chat/completions")
+    request = Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json', 'Authorization' => "Bearer #{@api_key}")
+    request.body = Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, mode: :compat, symbol_keys: true)
+    response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 100) { |http| http.request(request) }
+    parse_response(response)
   end
 
   # Method to parse the response and handle errors
