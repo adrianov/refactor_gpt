@@ -10,25 +10,25 @@ class OpenAi
     @model = 'gpt-4o'
   end
 
-  # Method to send prompts to OpenAI API and get a response
+  # Send prompts to OpenAI API and get a response
   def ask(prompts)
     uri = URI("#{@api_base_url}/chat/completions")
-    request = Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json', 'Authorization' => "Bearer #{@api_key}")
-    request.body = Oj.dump({ model: @model, messages: prompts }, mode: :compat, symbol_keys: true)
-    response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 100) { |http| http.request(request) }
+    request = create_post_request(uri, prompts)
+    response = send_request(uri, request)
     parse_response(response)
   end
 
-  # Method to parse the response and handle errors
+  # Parse the response and handle errors
   def parse_response(response)
-    answer = Oj.load(response&.body.to_s).dig('choices', 0, 'message', 'content') rescue {}
+    response_body = response.body.to_s
+    answer = Oj.load(response_body).dig('choices', 0, 'message', 'content') rescue {}
     return answer unless answer.nil? || answer.empty?
 
-    puts response.body.to_s
+    puts response_body
     exit
   end
 
-  # Method to refactor code using OpenAI
+  # Refactor code using OpenAI
   def refactor(code, additional_instructions = nil)
     instruction = <<~HEREDOC
       Return the complete refactored code block only without explanations.
@@ -45,31 +45,38 @@ class OpenAi
       #{additional_instructions ? 'Additional user instructions: ' + additional_instructions + '.' : ''}
     HEREDOC
 
-    ask([
-          { role: 'system', content: instruction },
-          { role: 'user', content: code }
-        ]).gsub(/^```.*\n?/, '')
+    ask([{ role: 'system', content: instruction }, { role: 'user', content: code }]).gsub(/^```.*\n?/, '')
   end
 
   private
 
-  # Method to fetch environment variables from .env file
+  # Create a POST request
+  def create_post_request(uri, prompts)
+    Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json', 'Authorization' => "Bearer #{@api_key}").tap do |request|
+      request.body = Oj.dump({ model: @model, messages: prompts }, mode: :compat, symbol_keys: true)
+    end
+  end
+
+  # Send HTTP request
+  def send_request(uri, request)
+    Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 100) { |http| http.request(request) }
+  end
+
+  # Fetch environment variables from .env file
   def fetch_env_variable(key, default = nil)
     @env_vars ||= load_env_vars
     @env_vars.fetch(key, default)
   end
 
-  # Method to load environment variables into a hash
+  # Load environment variables into a hash
   def load_env_vars
     env_file = File.join(File.dirname(__FILE__), '.env')
     return {} unless File.exist?(env_file)
 
-    env_vars = {}
-    File.foreach(env_file) do |line|
+    File.foreach(env_file).with_object({}) do |line, env_vars|
       key, value = line.split('=')
       env_vars[key.strip] = value.strip if key && value
     end
-    env_vars
   end
 end
 
@@ -86,10 +93,8 @@ unless File.exist?(file_path)
 end
 
 code = File.read(file_path)
-
-additional_instructions = ARGV.length > 1 ? ARGV[1..-1].join(' ') : nil
+additional_instructions = ARGV[1..-1].join(' ') if ARGV.length > 1
 refactored_code = OpenAi.new.refactor(code, additional_instructions)
-
 refactored_code += "\n" if refactored_code[-1] != "\n"
 
 if code == refactored_code
