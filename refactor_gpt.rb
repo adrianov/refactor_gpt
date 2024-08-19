@@ -86,5 +86,12 @@ code = File.read(file_path)
 additional_instructions = ARGV.length > 1 ? ARGV[1..-1].join(' ') : nil
 refactored_code = OpenAi.new.refactor(code, additional_instructions)
 
-IO.binwrite(file_path, refactored_code + "\n")
+refactored_code += "\n" if refactored_code[-1] != "\n"
+
+if code == refactored_code
+  puts "No changes made."
+  exit
+end
+
+IO.binwrite(file_path, refactored_code)
 puts refactored_code
