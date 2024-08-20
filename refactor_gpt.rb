@@ -8,13 +8,15 @@ class OpenAi
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
     @model = 'gpt-4o'
+    @temperature = 0
   end
 
   # Send prompts to OpenAI API and get a response
   def ask(prompts)
     uri = URI("#{@api_base_url}/chat/completions")
     request = create_post_request(uri, prompts)
-    parse_response(send_request(uri, request))
+    response = send_request(uri, request)
+    parse_response(response)
   end
 
   # Refactor code using OpenAI
@@ -44,7 +46,7 @@ class OpenAi
     Net::HTTP::Post.new(uri, 
       'Content-Type' => 'application/json', 
       'Authorization' => "Bearer #{@api_key}").tap do |request|
-        request.body = Oj.dump({ model: @model, messages: prompts }, mode: :compat, symbol_keys: true)
+        request.body = Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, mode: :compat, symbol_keys: true)
       end
   end
 
@@ -58,9 +60,8 @@ class OpenAi
   # Parse the response and handle errors
   def parse_response(response)
     answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
-    return answer unless answer.nil? || answer.empty?
-    puts response.body
-    exit
+    handle_missing_answer(response) if answer.nil? || answer.empty?
+    answer
   end
 
   # Fetch environment variables from .env file
@@ -79,8 +80,15 @@ class OpenAi
       env_vars[key.strip] = value.strip if key && value
     end
   end
+
+  # Handle missing answer response
+  def handle_missing_answer(response)
+    puts response.body
+    exit
+  end
 end
 
+# Main execution block
 if ARGV.empty?
   puts "Please provide a file path as an argument."
   exit
@@ -103,7 +111,6 @@ if code == refactored_code
 end
 
 backup_file_path = "#{file_path}.bak"
-File.binwrite(backup_file_path, code) unless system('git rev-parse --is-inside-work-tree > /dev/null 2>&1')
-
+File.binwrite(backup_file_path, code) unless system('git rev-parse --is-inside-work-tree')
 File.binwrite(file_path, refactored_code)
 puts refactored_code
