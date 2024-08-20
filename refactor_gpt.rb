@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 require 'net/http'
 require 'oj'
+require 'shellwords'
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -90,7 +91,7 @@ end
 
 # Main execution block
 if ARGV.empty?
-  puts "Please provide a file path as an argument."
+  puts "Usage: #{File.basename($PROGRAM_NAME)} file_to_refactor.rb \"Additional instructions what to do.\""
   exit
 end
 
@@ -110,7 +111,14 @@ if code == refactored_code
   exit
 end
 
+is_git_repository = system('git rev-parse --is-inside-work-tree')
+
 backup_file_path = "#{file_path}.bak"
-File.binwrite(backup_file_path, code) unless system('git rev-parse --is-inside-work-tree')
+File.binwrite(backup_file_path, code) unless is_git_repository
 File.binwrite(file_path, refactored_code)
-puts refactored_code
+
+if is_git_repository
+  puts `git diff #{Shellwords.shellescape(file_path)}`
+else
+  puts refactored_code
+end
