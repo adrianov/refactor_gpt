@@ -15,8 +15,7 @@ class OpenAi
   # Method to send prompts to OpenAI and get a response
   def ask(prompts)
     uri = URI("#{@api_base_url}/chat/completions")
-    request = create_post_request(uri, prompts)
-    response = send_request(uri, request)
+    response = send_request(uri, prompts)
     parse_response(response)
   end
 
@@ -35,23 +34,23 @@ class OpenAi
     HEREDOC
 
     code = (user_instruction || default_user_instruction) + "\n```\n#{code}\n```"
-    ask([{ role: 'system', content: system_instruction }, { role: 'user', content: code }]).gsub(/^```.*\n?/, '')
+    ask([{ role: 'system', content: system_instruction }, { role: 'user', content: code }])
+      .gsub(/^```.*\n?/, '')
   end
 
   private
 
-  # Method to create a POST request
-  def create_post_request(uri, prompts)
-    Net::HTTP::Post.new(uri, 
-      'Content-Type' => 'application/json', 
-      'Authorization' => "Bearer #{@api_key}").tap do |request|
-        request.body = Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, mode: :compat, symbol_keys: true)
-      end
-  end
-
   # Method to send the HTTP request
-  def send_request(uri, request)
-    Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 100) do |http|
+  def send_request(uri, prompts)
+    request = Net::HTTP::Post.new(uri, 
+      'Content-Type' => 'application/json', 
+      'Authorization' => "Bearer #{@api_key}").tap do |req|
+        req.body = Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, 
+                            mode: :compat, symbol_keys: true)
+    end
+
+    Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', 
+                    read_timeout: 100) do |http|
       http.request(request)
     end
   end
