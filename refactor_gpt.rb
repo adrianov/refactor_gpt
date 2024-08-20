@@ -21,7 +21,7 @@ class OpenAi
 
   # Method to refactor code based on user instructions
   def refactor(code, user_instruction = nil)
-    system_instruction = "Return the complete refactored code block only."
+    system_instruction = "Return the complete refactored code module only."
     default_user_instruction = <<~HEREDOC
       1. Error Handling: Identify and fix any errors by rewriting the affected sections if necessary.
       2. Descriptive Naming: Use clear and descriptive variable names.
@@ -65,7 +65,7 @@ class OpenAi
   # Method to fetch environment variables
   def fetch_env(key, default = nil)
     @env_vars ||= load_env_vars
-    value = @env_vars.fetch(key, default)
+    value = @env_vars.fetch(key, ENV[key] || default)
     if value.nil?
       puts "Missing required environment variable: #{key}. Please add it to the .env file."
       exit
