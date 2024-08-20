@@ -108,12 +108,18 @@ end
 user_instruction = ARGV.join(' ')
 bash_command = OpenAi.new.bash_command(user_instruction)
 
-puts "Generated bash command:\n#{bash_command}"
-puts "Do you want to run this command? (y/n)"
-answer = STDIN.gets.chomp.downcase
+safe_commands = %w[grep ag ls df cat less head tail sed awk tr uniq wc cut]
 
-if answer == 'y'
+puts "Generated bash command:\n#{bash_command}"
+if safe_commands.any? { |cmd| bash_command.start_with?(cmd + ' ') || bash_command == cmd }
   system(bash_command)
 else
-  puts "Command not executed."
+  puts "Do you want to run this command? (y/n)"
+  answer = STDIN.gets.chomp.downcase
+
+  if answer == 'y'
+    system(bash_command)
+  else
+    puts "Command not executed."
+  end
 end
