@@ -113,7 +113,7 @@ if code == refactored_code
   exit
 end
 
-is_git_repository = `git rev-parse --is-inside-work-tree'`.strip == 'true'
+is_git_repository = `git rev-parse --is-inside-work-tree`.strip == 'true'
 
 backup_file_path = "#{file_path}.bak"
 File.binwrite(backup_file_path, code) unless is_git_repository
