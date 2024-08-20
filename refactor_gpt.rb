@@ -42,18 +42,10 @@ class OpenAi
       #{'Additional user instructions: ' + additional_instructions + '.' if additional_instructions}
     HEREDOC
 
-    ask(roles_with_content(instruction, code)).gsub(/^```.*\n?/, '')
+    ask([{ role: 'system', content: instruction }, { role: 'user', content: code }]).gsub(/^```.*\n?/, '')
   end
 
   private
-
-  # Helper method to create roles with content
-  def roles_with_content(instruction, code)
-    [
-      { role: 'system', content: instruction },
-      { role: 'user', content: code }
-    ]
-  end
 
   # Create a POST request
   def create_post_request(uri, prompts)
@@ -108,6 +100,9 @@ if code == refactored_code
   puts "No changes made."
   exit
 end
+
+backup_file_path = "#{file_path}.bak"
+File.write(backup_file_path, code) unless system('git rev-parse --is-inside-work-tree > /dev/null 2>&1')
 
 IO.binwrite(file_path, refactored_code)
 puts refactored_code
