@@ -121,5 +121,5 @@ File.binwrite(file_path, refactored_code)
 if is_git_repository
   system("git diff #{Shellwords.shellescape(file_path)}")
 else
-  puts refactored_code
+  system("diff -u --color #{Shellwords.shellescape(backup_file_path)} #{Shellwords.shellescape(file_path)}")
 end
