@@ -66,7 +66,12 @@ class OpenAi
   # Method to fetch environment variables
   def fetch_env(key, default = nil)
     @env_vars ||= load_env_vars
-    @env_vars.fetch(key, default)
+    value = @env_vars.fetch(key, default)
+    if value.nil?
+      puts "Missing required environment variable: #{key}. Please add it to the .env file."
+      exit
+    end
+    value
   end
 
   # Method to load environment variables from a file
@@ -108,7 +113,7 @@ if code == refactored_code
   exit
 end
 
-is_git_repository = system('git rev-parse --is-inside-work-tree')
+is_git_repository = `git rev-parse --is-inside-work-tree'`.strip == 'true'
 
 backup_file_path = "#{file_path}.bak"
 File.binwrite(backup_file_path, code) unless is_git_repository
