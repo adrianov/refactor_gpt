@@ -5,8 +5,8 @@ require 'oj'
 # Class to interact with OpenAI API
 class OpenAi
   def initialize
-    @api_base_url = fetch_env_variable('OPENAI_BASE_URL')
-    @api_key = fetch_env_variable('OPENAI_ACCESS_TOKEN')
+    @api_base_url = fetch_env('OPENAI_BASE_URL')
+    @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
     @model = 'gpt-4o'
   end
 
@@ -15,14 +15,6 @@ class OpenAi
     uri = URI("#{@api_base_url}/chat/completions")
     request = create_post_request(uri, prompts)
     parse_response(send_request(uri, request))
-  end
-
-  # Parse the response and handle errors
-  def parse_response(response)
-    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
-    return answer unless answer.nil? || answer.empty?
-    puts response.body
-    exit
   end
 
   # Refactor code using OpenAI
@@ -58,12 +50,21 @@ class OpenAi
 
   # Send HTTP request
   def send_request(uri, request)
-    Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', 
-      read_timeout: 100) { |http| http.request(request) }
+    Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 100) do |http|
+      http.request(request)
+    end
+  end
+
+  # Parse the response and handle errors
+  def parse_response(response)
+    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
+    return answer unless answer.nil? || answer.empty?
+    puts response.body
+    exit
   end
 
   # Fetch environment variables from .env file
-  def fetch_env_variable(key, default = nil)
+  def fetch_env(key, default = nil)
     @env_vars ||= load_env_vars
     @env_vars.fetch(key, default)
   end
@@ -91,7 +92,7 @@ unless File.exist?(file_path)
   exit
 end
 
-code = File.read(file_path)
+code = File.binread(file_path)
 additional_instructions = ARGV[1..-1].join(' ') if ARGV.length > 1
 refactored_code = OpenAi.new.refactor(code, additional_instructions)
 refactored_code += "\n" if refactored_code[-1] != "\n"
@@ -102,7 +103,7 @@ if code == refactored_code
 end
 
 backup_file_path = "#{file_path}.bak"
-File.write(backup_file_path, code) unless system('git rev-parse --is-inside-work-tree > /dev/null 2>&1')
+File.binwrite(backup_file_path, code) unless system('git rev-parse --is-inside-work-tree > /dev/null 2>&1')
 
-IO.binwrite(file_path, refactored_code)
+File.binwrite(file_path, refactored_code)
 puts refactored_code
