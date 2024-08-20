@@ -28,7 +28,7 @@ class OpenAi
       3. Function Length: Ensure all functions are shorter than 15 lines, and all lines are not longer than 80 characters.
       4. Inline Variables: If a variable used only once, replace it with its value.
       5. Simplify Logic: Reduce the number of assignments, branches, and conditions.
-      6. Comments: Add a brief comment before each class or function to explain its purpose. Leave existing comments as is.
+      6. Comments: Save existing comments as is. Add a brief comment before each class or function to explain its purpose.
       7. Preserve Logic: Maintain all existing business logic.
       8. Complete TODO
     HEREDOC
@@ -112,7 +112,7 @@ if code == refactored_code
   exit
 end
 
-is_git_repository = `git rev-parse --is-inside-work-tree`.strip == 'true'
+is_git_repository = system("git ls-files --error-unmatch #{Shellwords.shellescape(file_path)} > #{File::NULL} 2>&1")
 
 backup_file_path = "#{file_path}.bak"
 File.binwrite(backup_file_path, code) unless is_git_repository
