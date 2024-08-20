@@ -3,6 +3,7 @@ require 'net/http'
 require 'oj'
 require 'shellwords'
 
+# Class to interact with OpenAI API
 class OpenAi
   def initialize
     @api_base_url = fetch_env('OPENAI_BASE_URL')
@@ -11,6 +12,7 @@ class OpenAi
     @temperature = 0
   end
 
+  # Method to send prompts to OpenAI and get a response
   def ask(prompts)
     uri = URI("#{@api_base_url}/chat/completions")
     request = create_post_request(uri, prompts)
@@ -18,6 +20,7 @@ class OpenAi
     parse_response(response)
   end
 
+  # Method to refactor code based on user instructions
   def refactor(code, user_instruction = nil)
     system_instruction = "Return the complete refactored code block only without explanations."
     default_user_instruction = <<~HEREDOC
@@ -37,6 +40,7 @@ class OpenAi
 
   private
 
+  # Method to create a POST request
   def create_post_request(uri, prompts)
     Net::HTTP::Post.new(uri, 
       'Content-Type' => 'application/json', 
@@ -45,23 +49,27 @@ class OpenAi
       end
   end
 
+  # Method to send the HTTP request
   def send_request(uri, request)
     Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 100) do |http|
       http.request(request)
     end
   end
 
+  # Method to parse the response from OpenAI
   def parse_response(response)
     answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
     handle_missing_answer(response) if answer.nil? || answer.empty?
     answer
   end
 
+  # Method to fetch environment variables
   def fetch_env(key, default = nil)
     @env_vars ||= load_env_vars
     @env_vars.fetch(key, default)
   end
 
+  # Method to load environment variables from a file
   def load_env_vars
     env_file = File.join(File.dirname(__FILE__), '.env')
     return {} unless File.exist?(env_file)
@@ -72,6 +80,7 @@ class OpenAi
     end
   end
 
+  # Method to handle missing answers in the response
   def handle_missing_answer(response)
     puts response.body
     exit
