@@ -21,18 +21,23 @@ class OpenAi
 
   # Method to refactor code based on user instructions
   def bash_command(user_instruction)
-    ag_help = `ag --help`
-
     system_instruction = <<~HEREDOC
-      Generate a bash command for ag search through the code to accomplish the user's request.
-
-      search_regex: include many synonyms, gem and library names, use .*
-      file_search_regex: narrow down current directory contents.
+      Search through the software repository using the ag (The Silver Searcher) command to answer the user's request.
       
-      ag -G file_search_regex --ignore '*.min.*' search_regex .
-      Return the command only.
+      Current directory contents:
+      #{Dir.entries(Dir.pwd).join("\n")}
 
-      Current directory contents: #{`ls -a`}
+
+      Identify repository framework.
+      Try to narrow down files to search in.
+     
+      Identify many non-trivial variants of the source code in the given files that do what the user asks for.
+      Identify regexps that match these variants of code.
+      Join them into one variable search regex. Expand the regex with many synonyms and library names.
+      
+      ag --ignore '*.min.*' search_regex
+      
+      Reply with the ag command only.
     HEREDOC
 
     ask([{ role: 'system', content: system_instruction },
@@ -113,6 +118,7 @@ puts "Generated bash command:\n#{bash_command}"
 
 # Run the command automatically if it starts with 'ag'
 answer = if bash_command.start_with?('ag ')
+           puts ''
            'y'
          else
            puts "Do you want to run this command? (y/n)"
