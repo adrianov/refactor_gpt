@@ -14,17 +14,14 @@ class OpenAi
   def ask(prompts)
     uri = URI("#{@api_base_url}/chat/completions")
     request = create_post_request(uri, prompts)
-    response = send_request(uri, request)
-    parse_response(response)
+    parse_response(send_request(uri, request))
   end
 
   # Parse the response and handle errors
   def parse_response(response)
-    response_body = response.body.to_s
-    answer = Oj.load(response_body).dig('choices', 0, 'message', 'content') rescue {}
+    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
     return answer unless answer.nil? || answer.empty?
-
-    puts response_body
+    puts response.body
     exit
   end
 
@@ -35,31 +32,42 @@ class OpenAi
 
       1. Error Handling: Identify and fix any errors by rewriting the affected sections if necessary.
       2. Descriptive Naming: Use clear and descriptive variable names.
-      3. Function Length: Ensure all functions are shorter than 15 lines.
+      3. Function Length: Ensure all functions are shorter than 15 lines, and all lines are not longer than 80 characters.
       4. Inline Variables: If a variable used only once, replace it with its value.
       5. Simplify Logic: Reduce the number of assignments, branches, and conditions.
       6. Comments: Add a brief comment before each class or function to explain its purpose.
       7. Preserve Logic: Maintain all existing business logic.
       8. Complete TODO
 
-      #{additional_instructions ? 'Additional user instructions: ' + additional_instructions + '.' : ''}
+      #{'Additional user instructions: ' + additional_instructions + '.' if additional_instructions}
     HEREDOC
 
-    ask([{ role: 'system', content: instruction }, { role: 'user', content: code }]).gsub(/^```.*\n?/, '')
+    ask(roles_with_content(instruction, code)).gsub(/^```.*\n?/, '')
   end
 
   private
 
+  # Helper method to create roles with content
+  def roles_with_content(instruction, code)
+    [
+      { role: 'system', content: instruction },
+      { role: 'user', content: code }
+    ]
+  end
+
   # Create a POST request
   def create_post_request(uri, prompts)
-    Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json', 'Authorization' => "Bearer #{@api_key}").tap do |request|
-      request.body = Oj.dump({ model: @model, messages: prompts }, mode: :compat, symbol_keys: true)
-    end
+    Net::HTTP::Post.new(uri, 
+      'Content-Type' => 'application/json', 
+      'Authorization' => "Bearer #{@api_key}").tap do |request|
+        request.body = Oj.dump({ model: @model, messages: prompts }, mode: :compat, symbol_keys: true)
+      end
   end
 
   # Send HTTP request
   def send_request(uri, request)
-    Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', read_timeout: 100) { |http| http.request(request) }
+    Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', 
+      read_timeout: 100) { |http| http.request(request) }
   end
 
   # Fetch environment variables from .env file
@@ -86,7 +94,6 @@ if ARGV.empty?
 end
 
 file_path = ARGV[0]
-
 unless File.exist?(file_path)
   puts "File not found: #{file_path}"
   exit
