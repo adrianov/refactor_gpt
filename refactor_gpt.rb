@@ -22,14 +22,14 @@ class OpenAi
 
   # Method to refactor code based on user instructions
   def refactor(code, user_instruction = nil)
-    system_instruction = "Return the complete refactored code block only without explanations."
+    system_instruction = "Return the complete refactored code block only."
     default_user_instruction = <<~HEREDOC
       1. Error Handling: Identify and fix any errors by rewriting the affected sections if necessary.
       2. Descriptive Naming: Use clear and descriptive variable names.
       3. Function Length: Ensure all functions are shorter than 15 lines, and all lines are not longer than 80 characters.
       4. Inline Variables: If a variable used only once, replace it with its value.
       5. Simplify Logic: Reduce the number of assignments, branches, and conditions.
-      6. Comments: Add a brief comment before each class or function to explain its purpose. Don't remove existing comments.
+      6. Comments: Add a brief comment before each class or function to explain its purpose. Leave existing comments as is.
       7. Preserve Logic: Maintain all existing business logic.
       8. Complete TODO
     HEREDOC
