@@ -51,7 +51,7 @@ class OpenAi
       'Content-Type' => 'application/json', 
       'Authorization' => "Bearer #{@api_key}")
     request.body = Oj.dump({ model: @model, temperature: @temperature, 
-                             messages: prompts }, mode: :compat, symbol_keys: true)
+                             messages: prompts }, mode: :compat)
 
     Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', 
                     read_timeout: 100) do |http|
