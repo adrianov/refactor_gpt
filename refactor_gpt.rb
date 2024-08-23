@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-require 'net/http'
+require 'excon'
 require 'oj'
 require 'shellwords'
 
@@ -14,9 +14,18 @@ class OpenAi
 
   # Method to send prompts to OpenAI and get a response
   def ask(prompts)
-    uri = URI("#{@api_base_url}/chat/completions")
-    response = send_request(uri, prompts)
-    parse_response(response)
+    response = Excon.post(
+      "#{@api_base_url}/chat/completions",
+      headers: {
+        'Content-Type' => 'application/json',
+        'Authorization' => "Bearer #{@api_key}"
+      },
+      body: Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, mode: :compat),
+      read_timeout: 100
+    )
+    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
+    handle_missing_answer(response) if answer.nil? || answer.empty?
+    answer
   end
 
   # Method to refactor code based on user instructions
@@ -39,28 +48,6 @@ class OpenAi
   end
 
   private
-
-  # Method to send the HTTP request
-  def send_request(uri, prompts)
-    request = Net::HTTP::Post.new(uri, 
-      'Content-Type' => 'application/json', 
-      'Authorization' => "Bearer #{@api_key}").tap do |req|
-        req.body = Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, 
-                            mode: :compat, symbol_keys: true)
-    end
-
-    Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https', 
-                    read_timeout: 100) do |http|
-      http.request(request)
-    end
-  end
-
-  # Method to parse the response from OpenAI
-  def parse_response(response)
-    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
-    handle_missing_answer(response) if answer.nil? || answer.empty?
-    answer
-  end
 
   # Method to fetch environment variables
   def fetch_env(key, default = nil)
