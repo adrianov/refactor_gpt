@@ -28,7 +28,7 @@ class OpenAi
       3. Function Length: Ensure all functions are shorter than 15 lines, and all lines are not longer than 80 characters.
       4. Inline Variables: If a variable used only once, replace it with its value.
       5. Simplify Logic: Reduce the number of assignments, branches, and conditions.
-      6. Comments: Save existing comments as is. Add a brief comment before each class or function to explain its purpose.
+      6. Comments: Save existing comments as is. Add a brief comment before each non-trivial section.
       7. Preserve Logic: Maintain all existing business logic.
       8. Complete TODO
     HEREDOC
