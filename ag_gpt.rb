@@ -50,8 +50,8 @@ class OpenAi
           - Expand the regex including many synonyms in parentheses, language keywords and many library names.
 
       4. Command Formation:
-          - Use ag to search, ignoring minified files.
-            ag --ignore '*.min.*' search_regex
+          - Use ag to search, ignoring minified files. Add language specific flag.
+            ag --ignore '*.min.*' --ruby search_regex
 
       Return only the ag command ready to run in the terminal with nothing else.
     HEREDOC
