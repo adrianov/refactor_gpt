@@ -53,10 +53,8 @@ class OpenAi
           - Use ag to search, ignoring minified files.
             ag --ignore '*.min.*' search_regex
 
-      Provide only the ag command ready to run in the terminal.
+      Return only the ag command ready to run in the terminal with nothing else.
     HEREDOC
-
-    puts system_instruction
 
     ask([{ role: 'system', content: system_instruction },
          { role: 'user', content: user_instruction }])
