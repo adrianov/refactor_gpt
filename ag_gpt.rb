@@ -51,7 +51,7 @@ class OpenAi
 
       4. Command Formation:
          - Construct the `ag` command to search, excluding minified files, and add a language-specific flag:
-           ag --ignore '*.min.*' --ruby search_regex
+           ag --ignore '*.min.*' --ruby search_regex files
 
       5. Output: Provide only the complete ag command without any other text.
     HEREDOC
