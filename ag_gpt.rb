@@ -22,22 +22,25 @@ class OpenAi
   # Method to refactor code based on user instructions
   def bash_command(user_instruction)
     system_instruction = <<~HEREDOC
-      Search through the software repository using the ag (The Silver Searcher) command to answer the user's request.
+      Task: Search through the software repository using ag (The Silver Searcher) to answer the user's request.
       
-      Current directory contents:
-      #{Dir.entries(Dir.pwd).join("\n")}
-
-
-      Identify repository framework.
-      Try to narrow down files to search in.
-     
-      Identify many non-trivial variants of the source code in the given files that do what the user asks for.
-      Identify regexps that match these variants of code.
-      Join them into one variable search regex. Expand the regex with many synonyms and library names.
+      1. Current Directory Contents:
+         #{Dir.entries(Dir.pwd).join("\n")}
       
-      ag --ignore '*.min.*' search_regex
+      2. Steps:
+          - Identify the framework used in the repository.
+          - Narrow down the specific files that are likely to contain relevant code.
+          - Identify multiple non-trivial code variants that could address the user's request.
+          - Create regex patterns to match these code variants.
+          - Combine these patterns into a single search regex.
+          - Expand the regex with synonyms and many related library names for comprehensive search coverage.
       
-      Reply with the ag command only.
+      3. Command Formation:
+          - Use ag to search, ignoring minified files: 
+            ag --ignore '*.min.*' search_regex
+      
+      4. Output:
+          - Provide only the ag command.
     HEREDOC
 
     ask([{ role: 'system', content: system_instruction },
