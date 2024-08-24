@@ -21,7 +21,7 @@ class OpenAi
         'Authorization' => "Bearer #{@api_key}"
       },
       body: Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, mode: :compat),
-      read_timeout: 100
+      read_timeout: 20
     )
     answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
     handle_missing_answer(response) if answer.nil? || answer.empty?
