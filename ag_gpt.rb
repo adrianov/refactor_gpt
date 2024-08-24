@@ -40,13 +40,16 @@ class OpenAi
       1. Project Keywords:
          #{project_keywords}
 
-      2. Steps:
+      2. Last Commit Messages:
+         #{last_commit_messages}
+
+      3. Steps:
           - Identify the framework and programming language used in the repository.
           - Think how you would implement the user's request using this framework and language.
           - Translate implementation to a regex.
           - Expand the regex including many synonyms in parentheses, language keywords and many library names.
 
-      3. Command Formation:
+      4. Command Formation:
           - Use ag to search, ignoring minified files.
             ag --ignore '*.min.*' search_regex
 
@@ -56,6 +59,11 @@ class OpenAi
     ask([{ role: 'system', content: system_instruction },
          { role: 'user', content: user_instruction }])
       .gsub(/^```.*\n?/, '')
+  end
+
+  def last_commit_messages
+    return '' unless system("git --version > #{File::NULL} 2>&1")
+    `git log --oneline -n 30 --pretty=format:"%s"`
   end
 
   def list_code_file_keywords
