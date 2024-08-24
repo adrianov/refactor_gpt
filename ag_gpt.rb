@@ -32,25 +32,25 @@ class OpenAi
   def bash_command(user_instruction)
     project_keywords = list_code_file_keywords
     project_keywords = Dir.entries(Dir.pwd) if project_keywords.empty?
-    project_keywords = project_keywords.join(' ')
+    project_keywords = project_keywords.join(' ')[0..4096]
 
     system_instruction = <<~HEREDOC
       Task: Search through the software repository using ag (The Silver Searcher) to answer the user's request.
-      
+
       1. Project Keywords:
          #{project_keywords}
-      
+
       2. Steps:
           - Identify the framework used in the repository.
           - Identify multiple non-trivial code variants that could address the user's request.
           - Create regex patterns to match these code variants.
           - Combine these patterns into a single search regex, try to make keyword pairs like this: term1.*term2
           - Expand the regex with synonyms and many related library names for comprehensive search coverage.
-      
+
       3. Command Formation:
           - Use ag to search, ignoring minified files.
             ag --ignore '*.min.*' search_regex
-      
+            
       4. Output:
           - Provide only the ag command.
     HEREDOC
@@ -76,13 +76,12 @@ class OpenAi
 
     # Tokenize file names by words
     words = code_files.flat_map do |file|
-      file = file.tr('_', ' ').gsub(%r{\A.*/|\..*\z}, '')
-      file.scan(/\b\w+\b/)
+      file.scan(/[a-zA-Z]+/)
     end
 
     # Group the words by their count and get the first 100 words
     word_counts = words.tally.sort_by { |_, count| -count }
-    word_counts.first(300).map(&:first)
+    word_counts.map(&:first)
   end
 
   # Method to fetch environment variables
