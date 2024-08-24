@@ -8,7 +8,7 @@ class OpenAi
   def initialize
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = 'gpt-4o-mini'
+    @model = 'gpt-4o'
     @temperature = 0
   end
 
@@ -41,18 +41,16 @@ class OpenAi
          #{project_keywords}
 
       2. Steps:
-          - Identify the framework used in the repository.
-          - Identify multiple non-trivial code variants that could address the user's request.
-          - Create regex patterns to match these code variants.
-          - Combine these patterns into a single search regex, try to make keyword pairs like this: term1.*term2
-          - Expand the regex with synonyms and many related library names for comprehensive search coverage.
+          - Identify the framework and programming language used in the repository.
+          - Think how you would implement the user's request using this framework and language.
+          - Translate implementation to a regex.
+          - Expand the regex including many synonyms in parentheses, language keywords and many library names.
 
       3. Command Formation:
           - Use ag to search, ignoring minified files.
             ag --ignore '*.min.*' search_regex
-            
-      4. Output:
-          - Provide only the ag command.
+
+      Provide only the ag command ready to run in the terminal.
     HEREDOC
 
     ask([{ role: 'system', content: system_instruction },
