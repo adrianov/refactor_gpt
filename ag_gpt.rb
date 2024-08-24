@@ -30,18 +30,21 @@ class OpenAi
 
   # Method to refactor code based on user instructions
   def bash_command(user_instruction)
+    project_keywords = list_code_file_keywords
+    project_keywords = Dir.entries(Dir.pwd) if project_keywords.empty?
+    project_keywords = project_keywords.join(' ')
+
     system_instruction = <<~HEREDOC
       Task: Search through the software repository using ag (The Silver Searcher) to answer the user's request.
       
-      1. Current Directory Contents:
-         #{Dir.entries(Dir.pwd).join("\n")}
+      1. Project Keywords:
+         #{project_keywords}
       
       2. Steps:
           - Identify the framework used in the repository.
-          - Narrow down the specific files that are likely to contain relevant code.
           - Identify multiple non-trivial code variants that could address the user's request.
           - Create regex patterns to match these code variants.
-          - Combine these patterns into a single search regex.
+          - Combine these patterns into a single search regex, try to make keyword pairs like this: term1.*term2
           - Expand the regex with synonyms and many related library names for comprehensive search coverage.
       
       3. Command Formation:
@@ -55,6 +58,31 @@ class OpenAi
     ask([{ role: 'system', content: system_instruction },
          { role: 'user', content: user_instruction }])
       .gsub(/^```.*\n?/, '')
+  end
+
+  def list_code_file_keywords
+    return [] unless system("git --version > #{File::NULL} 2>&1")
+
+    # Get all files in the repository
+    files = `git ls-files`.split("\n")
+
+    # Define the extensions to include
+    extensions = %w[.rb .py .js .java .php .cpp .c .go .sh .html .css .yml .erb .slim .rs .ts .swift .kt .scala .pl .pm .r .jl]
+
+    # Filter files based on the extensions
+    code_files = files.select do |file|
+      extensions.any? { |ext| file.end_with?(ext) }
+    end
+
+    # Tokenize file names by words
+    words = code_files.flat_map do |file|
+      file = file.tr('_', ' ').gsub(%r{\A.*/|\..*\z}, '')
+      file.scan(/\b\w+\b/)
+    end
+
+    # Group the words by their count and get the first 100 words
+    word_counts = words.tally.sort_by { |_, count| -count }
+    word_counts.first(300).map(&:first)
   end
 
   # Method to fetch environment variables
