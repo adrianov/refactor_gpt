@@ -35,7 +35,7 @@ class OpenAi
     project_keywords = project_keywords.join(' ')[0..4096]
 
     system_instruction = <<~HEREDOC
-      Task: Search through the software repository using ag (The Silver Searcher) to answer the user's request.
+      Task: Use `ag` (The Silver Searcher) to search through the software repository and answer the user's request.
 
       1. Project Keywords:
          #{project_keywords}
@@ -44,16 +44,16 @@ class OpenAi
          #{last_commit_messages}
 
       3. Steps:
-          - Identify the framework and programming language used in the repository.
-          - Think how you would implement the user's request using this framework and language.
-          - Translate implementation to a regex.
-          - Expand the regex including many synonyms in parentheses, language keywords and many library names.
+         - Determine the framework and programming language used.
+         - Conceptualize how to implement the user's request with the identified framework and language.
+         - Convert this implementation into a regex pattern.
+         - Enhance the regex with synonyms, language keywords, and library names.
 
       4. Command Formation:
-          - Use ag to search, ignoring minified files. Add language specific flag.
-            ag --ignore '*.min.*' --ruby search_regex
+         - Construct the `ag` command to search, excluding minified files, and add a language-specific flag:
+           ag --ignore '*.min.*' --ruby search_regex
 
-      Return only the ag command ready to run in the terminal with nothing else.
+      5. Output: Provide only the complete ag command without any other text.
     HEREDOC
 
     ask([{ role: 'system', content: system_instruction },
