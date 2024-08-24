@@ -56,6 +56,8 @@ class OpenAi
       Provide only the ag command ready to run in the terminal.
     HEREDOC
 
+    puts system_instruction
+
     ask([{ role: 'system', content: system_instruction },
          { role: 'user', content: user_instruction }])
       .gsub(/^```.*\n?/, '')
@@ -63,7 +65,7 @@ class OpenAi
 
   def last_commit_messages
     return '' unless system("git --version > #{File::NULL} 2>&1")
-    `git log --oneline -n 30 --pretty=format:"%s"`
+    `git log --oneline -n 30 --pretty=format:"%s"`.split("\n").uniq.join("\n")
   end
 
   def list_code_file_keywords
