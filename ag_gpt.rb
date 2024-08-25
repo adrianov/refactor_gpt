@@ -42,7 +42,8 @@ class OpenAi
 
       2. Steps:
          - Determine the framework and programming language used.
-         - Select extensive list of project keywords for software implementation of the user's request.
+         - Think of many variants how the user's request could be implemented in the code.
+         - Select extensive list of project keywords for matching the implementation.
          - Create the search regex. Examples:
             \\b(user|session).*?(quit|close)
             \\b(waiting|list).*?(mail|deliver)
