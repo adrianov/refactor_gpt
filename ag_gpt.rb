@@ -73,7 +73,7 @@ class OpenAi
     # Filter files based on the extensions
     code_files = files.select do |file|
       extensions.any? { |ext| file.end_with?(ext) }
-    end
+    end.sort_by { |file| file.scan(/[^a-zA-Z]+/).length }
 
     # Tokenize file names by words
     code_files.flat_map do |file|
