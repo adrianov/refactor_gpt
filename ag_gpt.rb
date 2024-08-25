@@ -75,13 +75,9 @@ class OpenAi
     end
 
     # Tokenize file names by words
-    words = code_files.flat_map do |file|
+    code_files.flat_map do |file|
       file.scan(/[a-zA-Z]+/)
-    end
-
-    # Group the words by their count and get the first 100 words
-    word_counts = words.tally.sort_by { |_, count| -count }
-    word_counts.map(&:first)
+    end.uniq
   end
 
   # Method to fetch environment variables
