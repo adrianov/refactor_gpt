@@ -41,13 +41,10 @@ class OpenAi
          #{project_keywords}
 
       2. Steps:
-         - Determine the framework and programming language used.
-         - Think of many variants how the user's request could be implemented in the code.
-         - Select extensive list of project keywords for matching the implementation.
+         - Select list of project keywords matching code implementation of the user's request.
          - Create the search regex. Examples:
             \\b(user|session).*?(quit|close)
             \\b(waiting|list).*?(mail|deliver)
-         - Always expand the regex with synonyms, many library names, framework and language specific keywords.
 
       3. Command Formation:
          - Construct the `ag` command to search, excluding minified files.
