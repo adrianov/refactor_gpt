@@ -44,8 +44,8 @@ class OpenAi
          - Determine the framework and programming language used.
          - Select extensive list of project keywords for software implementation of the user's request.
          - Create the search regex. Examples:
-            \\b(user|session).*?\\b(quit|close)
-            \\b(waiting|list).*?\\b(mail|deliver)
+            \\b(user|session).*?(quit|close)
+            \\b(waiting|list).*?(mail|deliver)
          - Always expand the regex with synonyms, many library names, framework and language specific keywords.
 
       3. Command Formation:
