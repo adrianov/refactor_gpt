@@ -40,30 +40,24 @@ class OpenAi
       1. Project Keywords:
          #{project_keywords}
 
-      2. Last Commit Messages:
-         #{last_commit_messages}
-
-      3. Steps:
+      2. Steps:
          - Determine the framework and programming language used.
-         - Conceptualize how to implement the user's request with the identified framework and language.
-         - Convert this implementation into a regex pattern.
-         - Enhance the regex with synonyms, language keywords, and library names.
+         - Select extensive list of project keywords for software implementation of the user's request.
+         - Create the search regex. Examples:
+            \\b(user|session).*?(quit|close)\\b
+            \\b(waiting|list).*?(mail|deliver)\\b
+         - Always expand the regex with synonyms, many library names, framework and language specific keywords.
 
-      4. Command Formation:
-         - Construct the `ag` command to search, excluding minified files, and add a language-specific flag:
-           ag --ignore '*.min.*' --ruby search_regex files
+      3. Command Formation:
+         - Construct the `ag` command to search, excluding minified files.
+           ag --ignore '*.min.*' --ruby 'search_regex' Gemfile .
 
-      5. Output: Provide only the complete ag command without any other text.
+      4. Output: Provide only the complete ag command without any other text.
     HEREDOC
 
     ask([{ role: 'system', content: system_instruction },
          { role: 'user', content: user_instruction }])
       .gsub(/^```.*\n?/, '')
-  end
-
-  def last_commit_messages
-    return '' unless system("git --version > #{File::NULL} 2>&1")
-    `git log --oneline -n 30 --pretty=format:"%s"`.split("\n").uniq.join("\n")
   end
 
   def list_code_file_keywords
