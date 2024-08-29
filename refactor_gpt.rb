@@ -89,7 +89,7 @@ unless File.exist?(file_path)
   exit
 end
 
-code = File.binread(file_path)
+code = File.binread(file_path).force_encoding('UTF-8')
 user_instruction = ARGV[1..-1].join(' ') if ARGV.length > 1
 refactored_code = OpenAi.new.refactor(code, user_instruction)
 refactored_code += "\n" if refactored_code[-1] != "\n"
