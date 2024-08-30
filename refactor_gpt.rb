@@ -2,6 +2,8 @@
 require 'excon'
 require 'oj'
 require 'shellwords'
+require 'thread'
+require 'ruby-progressbar'
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -98,8 +100,44 @@ end
 
 code = File.binread(file_path).force_encoding('UTF-8')
 user_instruction = ARGV[1..-1].join(' ') if ARGV.length > 1
+
+start_time = Time.now
+
+# Initialize progress bar
+progressbar = ProgressBar.create(
+  title: "Refactoring",
+  total: code.size,
+  format: "%t: |%B| %p%% %e",
+  length: 60
+)
+
+# Start progress bar in a separate thread
+progress_thread = Thread.new do
+  loop do
+    elapsed_time = Time.now - start_time
+    progress = [(elapsed_time * 250).round, code.size].min
+    progressbar.progress = progress
+    sleep 0.1
+    break if progress >= code.size
+  end
+end
+
 refactored_code = OpenAi.new.refactor(code, user_instruction)
+end_time = Time.now
+
+# Stop progress bar thread
+progressbar.finish
+progress_thread.kill
+
 refactored_code += "\n" if refactored_code[-1] != "\n"
+
+code_size = refactored_code.size
+elapsed_time = end_time - start_time
+speed = code_size / elapsed_time
+
+puts "\nCode size: #{code_size} characters"
+puts "Elapsed time: #{elapsed_time.round(2)} seconds"
+puts "Speed: #{speed.round(2)} characters per second"
 
 if code == refactored_code
   puts "No changes made."
