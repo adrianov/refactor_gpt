@@ -30,15 +30,21 @@ class OpenAi
 
   # Method to refactor code based on user instructions
   def refactor(code, user_instruction = nil)
-    system_instruction = "Return the complete refactored code module only. " \
-      "Strictly preserve existing comments unless implemented TODOs or changed code fragment business logic, if not asked otherwise."
+    system_instruction = <<~HEREDOC
+      Return the complete refactored code module only. Strictly preserve existing
+      comments unless implemented TODOs or changed code fragment business logic,
+      if not asked otherwise.
+    HEREDOC
     default_user_instruction = <<~HEREDOC
-      1. Error Handling: Identify and fix any errors by rewriting the affected sections if necessary.
+      1. Error Handling: Identify and fix any errors by rewriting the affected
+         sections if necessary.
       2. Descriptive Naming: Use clear and descriptive variable names.
-      3. Function Length: Ensure all functions are shorter than 15 lines, and all lines are not longer than 80 characters.
+      3. Function Length: Ensure all functions are shorter than 15 lines, and all
+         lines are not longer than 80 characters.
       4. Inline Variables: If a variable used only once, replace it with its value.
       5. Simplify Logic: Reduce the number of assignments, branches, and conditions.
-      6. Comments: Save existing comments as is. Add a brief comment before each non-trivial section.
+      6. Comments: Save existing comments as is. Add a brief comment before each
+         non-trivial section.
       7. Preserve Logic: Maintain all existing business logic.
       8. Complete TODO
     HEREDOC
