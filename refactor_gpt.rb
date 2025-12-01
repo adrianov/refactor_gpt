@@ -51,7 +51,9 @@ class OpenAi
     system_instruction = <<~HEREDOC
       Return the complete refactored code module only. Strictly preserve existing
       comments unless implemented TODOs or changed code fragment business logic,
-      if not asked otherwise.
+      if not asked otherwise. When making bug fixes or applying specific requested
+      changes, keep the diff as small as reasonably possible in terms of changed
+      lines.
     HEREDOC
     default_user_instruction = <<~HEREDOC
       You are refactoring the following code. Apply these rules unless the user
@@ -84,7 +86,7 @@ class OpenAi
 
       6. Comments & Documentation
          - Preserve all existing comments verbatim unless they refer to code you
-           significantly change or a TODO you implement.
+         significantly change or a TODO you implement.
          - Do not add new comments unless the user explicitly asks for them.
 
       7. Behavior Preservation
@@ -134,7 +136,10 @@ class OpenAi
     return {} unless File.exist?(env_file_path)
 
     File.foreach(env_file_path).with_object({}) do |line, env_vars|
-      key, value = line.split('=')
+      line = line.strip
+      next if line.empty? || line.start_with?('#')
+
+      key, value = line.split('=', 2)
       next unless key && value
 
       env_vars[key.strip] = value.strip
@@ -180,7 +185,20 @@ user_instruction = ARGV[1..].join(' ') if ARGV.length > 1
 start_time = Time.now
 
 # Progress speed in characters per second
-PROGRESS_SPEED = 300
+PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt')
+
+def load_progress_speed
+  return 300 unless File.exist?(PROGRESS_SPEED_FILE)
+
+  value = File.read(PROGRESS_SPEED_FILE).to_f
+  return 300 if value <= 0
+
+  value
+rescue SystemCallError, ArgumentError
+  300
+end
+
+PROGRESS_SPEED = load_progress_speed
 
 # Initialize progress bar
 progressbar = ProgressBar.create(
@@ -196,24 +214,31 @@ progress_thread = Thread.new do
     elapsed_time = Time.now - start_time
     progress = [(elapsed_time * PROGRESS_SPEED).round, original_code.size].min
     progressbar.progress = progress
-    break if progress >= original_code.size
+    break if progress >= original_code.size || progressbar.finished?
 
     sleep 0.1
   end
 end
 
 refactored_code = OpenAi.new.refactor(original_code, user_instruction)
-end_time = Time.now
 
 # Stop progress bar thread
-progressbar.finish
+progressbar.finish unless progressbar.finished?
 progress_thread.join
+
+end_time = Time.now
 
 refactored_code += "\n" if refactored_code[-1] != "\n"
 
 code_size = refactored_code.size
 elapsed_time = end_time - start_time
 speed = code_size / elapsed_time
+
+begin
+  File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s)
+rescue SystemCallError
+  # ignore persistence errors
+end
 
 puts "\nCode size: #{code_size} characters"
 puts "Elapsed time: #{elapsed_time.round(2)} seconds"
