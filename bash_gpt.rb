@@ -8,8 +8,7 @@ class OpenAi
   def initialize
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = 'gpt-4o-mini'
-    @temperature = 0
+    @model = 'gpt-5-nano'
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -20,7 +19,7 @@ class OpenAi
         'Content-Type' => 'application/json',
         'Authorization' => "Bearer #{@api_key}"
       },
-      body: Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, mode: :compat),
+      body: Oj.dump({ model: @model, messages: prompts }, mode: :compat),
       read_timeout: 100
     )
     answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
