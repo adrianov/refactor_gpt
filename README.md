@@ -1,6 +1,6 @@
 # RefactorGPT Tools
 
-A collection of Ruby scripts that leverage GPT-4 to help with code refactoring, searching, and bash command generation.
+A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring, searching, and bash command generation.
 
 ## Prerequisites
 
@@ -48,6 +48,7 @@ To make the scripts easier to use from anywhere, you can add aliases to your `.z
    echo "alias refactor='$(pwd)/refactor_gpt.rb'" >> ~/.zshrc
    echo "alias agpt='$(pwd)/ag_gpt.rb'" >> ~/.zshrc
    echo "alias bashgpt='$(pwd)/bash_gpt.rb'" >> ~/.zshrc
+   echo "alias ask='$(pwd)/ask_gpt.rb'" >> ~/.zshrc
    ```
 
 3. Activate the aliases by either:
@@ -55,22 +56,19 @@ To make the scripts easier to use from anywhere, you can add aliases to your `.z
    - Running `source ~/.zshrc`
 
 Now you can use the commands directly from any directory:
-```bash
 refactor file.rb "make it more readable"
 agpt "find all database queries"
 bashgpt "list all files modified today"
-```
+ask "explain how Ruby blocks work"
 
 ## Available Scripts
 
 ### refactor_gpt.rb
 
-A tool for automated code refactoring using GPT-4. It analyzes your code and suggests improvements while maintaining existing functionality.
+A tool for automated code refactoring using GPT-5.1. It analyzes your code and suggests improvements while maintaining existing functionality.
 
 Usage:
-```bash
 ./refactor_gpt.rb <file_to_refactor.rb> ["Optional specific refactoring instructions"]
-```
 
 Features:
 - Preserves existing comments and business logic
@@ -86,9 +84,7 @@ Features:
 A natural language interface for searching through your codebase using The Silver Searcher (`ag`).
 
 Usage:
-```bash
 ./ag_gpt.rb "What to search for in natural language"
-```
 
 Features:
 - Converts natural language queries into optimized `ag` search commands
@@ -99,12 +95,10 @@ Features:
 
 ### bash_gpt.rb
 
-Generates and executes bash commands based on natural language descriptions.
+Generates and executes bash commands based on natural language descriptions using the `gpt-5-nano` model.
 
 Usage:
-```bash
 ./bash_gpt.rb "What you want to do"
-```
 
 Features:
 - Generates appropriate bash commands based on your request
@@ -112,6 +106,18 @@ Features:
 - Automatically executes safe commands (grep, ls, df, etc.)
 - Asks for confirmation before executing potentially dangerous commands
 - Supports common Unix commands and utilities
+
+### ask_gpt.rb
+
+A general-purpose GPT-5.1 assistant for asking questions, getting explanations, or brainstorming ideas from the terminal.
+
+Usage:
+./ask_gpt.rb "Your question or request here"
+
+Features:
+- Answers programming and non-programming questions
+- Can explain code snippets or concepts
+- Works as a quick terminal-based AI assistant
 
 ## Safety Features
 
