@@ -8,7 +8,7 @@ class OpenAi
   def initialize
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = 'gpt-4o'
+    @model = 'gpt-5.1'
     @temperature = 0
   end
 
@@ -20,10 +20,15 @@ class OpenAi
         'Content-Type' => 'application/json',
         'Authorization' => "Bearer #{@api_key}"
       },
-      body: Oj.dump({ model: @model, temperature: @temperature, messages: prompts }, mode: :compat),
+      body: Oj.dump(
+        { model: @model, temperature: @temperature, messages: prompts },
+        mode: :compat
+      ),
       read_timeout: 20
     )
-    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
+
+    parsed_body = parse_response_body(response)
+    answer = parsed_body.dig('choices', 0, 'message', 'content')
     handle_missing_answer(response) if answer.nil? || answer.empty?
     answer
   end
@@ -35,27 +40,83 @@ class OpenAi
     project_keywords = project_keywords.join(' ')[0..4096]
 
     system_instruction = <<~HEREDOC
-      Task: Use `ag` (The Silver Searcher) to search through the software repository and answer the user's request.
+      Task: Use `ag` (The Silver Searcher) to search through the software repository and answer the user's request by outputting a single shell command.
 
-      1. Project Keywords:
-         #{project_keywords}
+      High-level behavior:
+      - Construct a plain `ag` command that directly searches for the most relevant pattern(s) based on the user's request.
+      - Keep this `ag` usage simple and broad so you do not accidentally miss real results.
+      - Do NOT use any additional Unix text-processing tools (no awk/sed/cut/sort/uniq/tr/grep/etc.). Only `ag` is allowed.
 
-      2. Steps:
-         - Select list of project keywords matching code implementation of the user's request.
-         - Create the search regex. Examples:
-            \\b(user|session).*?(quit|close)
-            \\b(waiting|list).*?(mail|deliver)
+      1. Project Context:
+         - Keywords and file-name tokens (BFS-ordered by directory depth):
+           #{project_keywords}
 
-      3. Command Formation:
-         - Construct the `ag` command to search, excluding minified files.
-           ag --ignore '*.min.*' --ruby 'search_regex' Gemfile .
+      2. Repository Navigation Strategy:
+         - Prefer breadth-first traversal of directories (shallow paths first) when reasoning about where code might live.
+         - When the user asks for a specific module, class, or file by name (not by its text content):
+           * Infer likely file paths using common conventions (e.g. snake_case for Ruby, matching directory names, etc.).
+           * Use `ag -g` (file name search) with an appropriate pattern to locate candidate files.
+           * Example:
+             - User: "find UserService module"
+               Command: ag -g 'UserService' .
+             - User: "find user_service.rb"
+               Command: ag -g 'user_service\\.rb' .
 
-      4. Output: Provide only the complete ag command without any other text.
+      3. Content Search:
+         - Default behavior:
+           * Use a plain `ag` search that is likely to capture all relevant occurrences.
+           * Example:
+             - User: "List all widget types"
+               ag --ignore '*.min.*' 'widget' .
+           * This ensures you do not miss real results due to overly strict parsing.
+         - Do NOT append any pipelines or additional commands. Only a single `ag` invocation is allowed.
+
+      4. Command Formation:
+         - If the request is primarily about locating files/modules by name:
+           * Prefer `ag -g 'name_pattern' .`
+         - Otherwise (text/content based search):
+           * Construct the `ag` command to search, excluding minified files:
+             ag --ignore '*.min.*' 'search_regex' .
+         - Always:
+           * Escape regex metacharacters in literal file names where appropriate (e.g. `.` -> `\\.`).
+           * Keep the command on a single line.
+           * Use `.` as the search root unless the user clearly specifies another directory.
+
+      5. Output:
+         - Provide only the complete shell command without any other text.
+         - Do not wrap the command in backticks or quotes.
     HEREDOC
 
-    ask([{ role: 'system', content: system_instruction },
-         { role: 'user', content: user_instruction }])
-      .gsub(/^```.*\n?/, '')
+    ask([
+      { role: 'system', content: system_instruction },
+      { role: 'user', content: user_instruction }
+    ]).gsub(/^```.*\n?/, '')
+  end
+
+  def interpret_ag_output(user_instruction, ag_output)
+    interpretation_system_instruction = <<~HEREDOC
+      You are helping a developer understand the results of running `ag` (The Silver Searcher) on their codebase.
+
+      The user asked a question about their code. An `ag` search was run to find relevant matches.
+      You will be given:
+      - The user's original natural-language question.
+      - The raw `ag` output (file:line:matched text).
+
+      Your task:
+      - Interpret the `ag` results in the context of the user's question.
+      - Explain what in the codebase appears relevant to their question.
+      - Summarize key files, lines, and patterns that matter.
+      - If appropriate, infer how the code works or where they might need to look next.
+      - If the results seem incomplete or noisy, say so and explain why.
+
+      Be concise but specific. Refer to files and line numbers when helpful.
+    HEREDOC
+
+    ask([
+      { role: 'system', content: interpretation_system_instruction },
+      { role: 'user',
+        content: "User question:\n#{user_instruction}\n\nag output:\n#{ag_output}" }
+    ])
   end
 
   def list_code_file_keywords
@@ -65,12 +126,18 @@ class OpenAi
     files = `git ls-files`.split("\n")
 
     # Define the extensions to include
-    extensions = %w[.rb .py .js .java .php .cpp .c .go .sh .html .css .yml .erb .slim .rs .ts .swift .kt .scala .pl .pm .r .jl]
+    extensions = %w[
+      .rb .py .js .java .php .cpp .c .go .sh .html .css .yml .erb .slim .rs .ts
+      .swift .kt .scala .pl .pm .r .jl
+    ]
 
     # Filter files based on the extensions
     code_files = files.select do |file|
       extensions.any? { |ext| file.end_with?(ext) }
-    end.sort_by { |file| file.scan(/[^a-zA-Z]+/).length }
+    end
+
+    # Sort files using BFS-like directory traversal order (by path depth, then lexicographically)
+    code_files = code_files.sort_by { |file| [file.count('/'), file] }
 
     # Tokenize file names by words
     code_files.flat_map do |file|
@@ -83,8 +150,8 @@ class OpenAi
     @env_vars ||= load_env_vars
     value = @env_vars.fetch(key, ENV[key] || default)
     if value.nil?
-      puts "Missing required environment variable: #{key}. Please add it to the .env file."
-      exit
+      warn "Missing required environment variable: #{key}. Please add it to the .env file."
+      exit(1)
     end
     value
   end
@@ -95,15 +162,37 @@ class OpenAi
     return {} unless File.exist?(env_file)
 
     File.foreach(env_file).with_object({}) do |line, env_vars|
-      key, value = line.split('=')
-      env_vars[key.strip] = value.strip if key && value
+      next if line.strip.empty? || line.lstrip.start_with?('#')
+
+      key, value = line.split('=', 2)
+      next unless key && value
+
+      env_vars[key.strip] = value.strip
     end
   end
 
   # Method to handle missing answers in the response
   def handle_missing_answer(response)
-    puts response.body
-    exit
+    warn 'OpenAI API response did not contain an answer.'
+    warn "Status: #{response.status}"
+    warn "Body: #{response.body}"
+    exit(1)
+  end
+
+  private
+
+  def parse_response_body(response)
+    unless response.status.between?(200, 299)
+      warn "OpenAI API request failed with status #{response.status}"
+      warn "Body: #{response.body}"
+      exit(1)
+    end
+
+    Oj.load(response.body)
+  rescue Oj::ParseError => e
+    warn "Failed to parse OpenAI API response: #{e.message}"
+    warn "Raw body: #{response.body}"
+    exit(1)
   end
 end
 
@@ -113,18 +202,19 @@ def check_ag_installed
 end
 
 unless check_ag_installed
-  puts "'ag' (The Silver Searcher) is not installed. Please install it to proceed."
-  exit
+  warn "'ag' (The Silver Searcher) is not installed. Please install it to proceed."
+  exit(1)
 end
 
 if ARGV.empty?
   puts 'Search through your code with human language.'
   puts "Usage: #{File.basename($PROGRAM_NAME)} \"What to search in human language\""
-  exit
+  exit(0)
 end
 
 user_instruction = ARGV.join(' ')
-bash_command = OpenAi.new.bash_command(user_instruction)
+openai = OpenAi.new
+bash_command = openai.bash_command(user_instruction)
 
 puts "Generated bash command:\n#{bash_command}"
 
@@ -133,13 +223,25 @@ answer = if bash_command.start_with?('ag ')
            puts ''
            'y'
          else
-           puts "Do you want to run this command? (y/n)"
-           STDIN.gets.chomp.downcase
+           puts 'Do you want to run this command? (y/n)'
+           STDIN.gets.to_s.chomp.downcase
          end
 
 if answer == 'y'
-  system(bash_command)
+  ag_output = `#{bash_command}`
+  puts ag_output
   puts "\nFinished:\n#{bash_command}"
+
+  unless ag_output.strip.empty?
+    puts "\nInterpret results with OpenAI? (y/N)"
+    interpret_answer = STDIN.gets&.chomp&.downcase
+
+    if interpret_answer == 'y'
+      puts "\nInterpreting results with OpenAI..."
+      interpretation = openai.interpret_ag_output(user_instruction, ag_output)
+      puts "\nOpenAI interpretation:\n\n#{interpretation}"
+    end
+  end
 else
-  puts "Command not executed."
+  puts 'Command not executed.'
 end
