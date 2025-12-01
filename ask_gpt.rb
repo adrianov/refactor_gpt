@@ -47,6 +47,11 @@ class OpenAi
     system_instruction = <<~HEREDOC
       You are helping a Ruby programmer. Answer in clear, concise Ruby-focused
       terms, using idiomatic Ruby style, with code examples where appropriate.
+      Keep answers relatively short and not overly detailed.
+
+      When the user asks for word translations (in any language), also:
+      - Provide phonetic transcription (IPA if possible).
+      - Briefly mention the word origin/etymology.
     HEREDOC
 
     ask(
