@@ -137,4 +137,9 @@ unless file_snippets.empty?
 end
 
 answer = OpenAi.new.chat(question)
-puts answer
+
+if system('command -v glow >/dev/null 2>&1')
+  IO.popen(['glow', '-'], 'w') { |io| io.write(answer) }
+else
+  puts answer
+end

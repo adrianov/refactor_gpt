@@ -7,6 +7,7 @@ A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring
 - Ruby 2.7 or higher
 - The Silver Searcher (`ag`) for code searching functionality
 - OpenAI API access
+- Optional: [`glow`](https://github.com/charmbracelet/glow) for formatted Markdown output in `ask_gpt.rb`
 
 ## Installation
 
@@ -19,6 +20,10 @@ A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring
    - macOS: `brew install the_silver_searcher`
    - Ubuntu/Debian: `apt-get install silversearcher-ag`
    - Other systems: See [The Silver Searcher installation guide](https://github.com/ggreer/the_silver_searcher#installation)
+4. (Optional) Install `glow` for nicer formatted output in `ask_gpt.rb`:
+   - macOS: `brew install glow`
+   - Ubuntu (via snap): `sudo snap install glow`
+   - Other systems: See [glow installation guide](https://github.com/charmbracelet/glow#installation)
 
 ## Configuration
 
@@ -118,6 +123,7 @@ Features:
 - Answers programming and non-programming questions
 - Can explain code snippets or concepts
 - Works as a quick terminal-based AI assistant
+- Uses `glow` for nicely formatted Markdown output when `glow` is installed, falling back to plain text otherwise
 
 ## Safety Features
 
