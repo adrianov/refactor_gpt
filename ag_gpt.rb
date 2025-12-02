@@ -239,9 +239,14 @@ if answer == 'y'
     if interpret_answer == 'y'
       puts "\nInterpreting results with OpenAI..."
       interpretation = openai.interpret_ag_output(user_instruction, ag_output)
-      puts "\nOpenAI interpretation:\n\n#{interpretation}"
+      if system('command -v glow >/dev/null 2>&1')
+        IO.popen(['glow', '-'], 'w') { |io| io.write(interpretation) }
+      else
+        puts "\nOpenAI interpretation:\n\n#{interpretation}"
+      end
     end
   end
 else
   puts 'Command not executed.'
 end
+
