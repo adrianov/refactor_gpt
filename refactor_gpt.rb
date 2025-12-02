@@ -47,13 +47,24 @@ class OpenAi
   end
 
   # Method to refactor code based on user instructions
-  def refactor(code, user_instruction = nil)
+  def refactor(file_codes, user_instruction = nil)
     system_instruction = <<~HEREDOC
       Return the complete refactored code module only. Strictly preserve existing
       comments unless implemented TODOs or changed code fragment business logic,
       if not asked otherwise. When making bug fixes or applying specific requested
       changes, keep the diff as small as reasonably possible in terms of changed
       lines.
+
+      When multiple files are provided, respond with the full content for each
+      file in the following structure, in order:
+
+      === FILE: <relative-or-given-path-1>
+      <full file content 1>
+      === FILE: <relative-or-given-path-2>
+      <full file content 2>
+      ...
+
+      
     HEREDOC
     default_user_instruction = <<~HEREDOC
       You are refactoring the following code. Apply these rules unless the user
@@ -97,22 +108,28 @@ class OpenAi
 
       8. TODOs
          - Implement TODOs only if they are fully specified and safe to complete
-           without guessing about missing requirements.
+         without guessing about missing requirements.
          - If a TODO is ambiguous, leave it in place and do not invent behavior.
 
       9. Default Behavior
          - Do not change code behavior unless the user specifically asks for it
-           or a change is required to fix a clear bug.
+         or a change is required to fix a clear bug.
     HEREDOC
 
+    files_block = file_codes.map do |path, code|
+      "=== FILE: #{path}\n```\n#{code}\n```"
+    end.join("\n\n")
+
     prompt = (user_instruction || default_user_instruction) +
-             "\n```\n#{code}\n```"
+             "\n\nYou may use some files only as context and leave them unchanged.\n\n" +
+             files_block
+
     ask(
       [
         { role: 'system', content: system_instruction },
         { role: 'user', content: prompt }
       ]
-    ).gsub(/^```.*\n?/, '')
+    )
   end
 
   private
@@ -162,35 +179,53 @@ end
 
 if ARGV.empty?
   puts(
-    "Usage: #{File.basename($PROGRAM_NAME)} <file_to_refactor.rb> " \
+    "Usage: #{File.basename($PROGRAM_NAME)} <file1> [file2 ...] " \
     '["Instructions what to do."]'
   )
   exit 1
 end
 
-file_path = ARGV[0]
-unless File.exist?(file_path)
-  puts "File not found: #{file_path}"
+file_paths = []
+user_instruction_parts = []
+
+ARGV.each do |arg|
+  if File.exist?(arg)
+    file_paths << arg
+  else
+    user_instruction_parts << arg
+  end
+end
+
+if file_paths.empty?
+  puts 'No valid files provided.'
   exit 1
 end
 
-begin
-  original_code = File.binread(file_path).force_encoding('UTF-8')
-rescue SystemCallError => e
-  warn "Failed to read file #{file_path}: #{e.message}"
-  exit 1
+user_instruction = user_instruction_parts.join(' ') unless user_instruction_parts.empty?
+
+file_codes = {}
+total_size = 0
+
+file_paths.each do |file_path|
+  begin
+    code = File.binread(file_path).force_encoding('UTF-8')
+  rescue SystemCallError => e
+    warn "Failed to read file #{file_path}: #{e.message}"
+    exit 1
+  end
+  file_codes[file_path] = code
+  total_size += code.size
 end
 
-user_instruction = ARGV[1..].join(' ') if ARGV.length > 1
 start_time = Time.now
 
 # Progress speed in characters per second
 PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt')
 
-def load_progress_speed
-  return 300 unless File.exist?(PROGRESS_SPEED_FILE)
+def load_progress_speed(progress_speed_file)
+  return 300 unless File.exist?(progress_speed_file)
 
-  value = File.read(PROGRESS_SPEED_FILE).to_f
+  value = File.read(progress_speed_file).to_f
   return 300 if value <= 0
 
   value
@@ -198,12 +233,12 @@ rescue SystemCallError, ArgumentError
   300
 end
 
-PROGRESS_SPEED = load_progress_speed
+PROGRESS_SPEED = load_progress_speed(PROGRESS_SPEED_FILE)
 
 # Initialize progress bar
 progressbar = ProgressBar.create(
   title: 'Refactoring',
-  total: original_code.size,
+  total: total_size,
   format: '%t: |%B| %p%% %e',
   length: 60
 )
@@ -212,15 +247,15 @@ progressbar = ProgressBar.create(
 progress_thread = Thread.new do
   loop do
     elapsed_time = Time.now - start_time
-    progress = [(elapsed_time * PROGRESS_SPEED).round, original_code.size].min
+    progress = [(elapsed_time * PROGRESS_SPEED).round, total_size].min
     progressbar.progress = progress
-    break if progress >= original_code.size || progressbar.finished?
+    break if progress >= total_size || progressbar.finished?
 
     sleep 0.1
   end
 end
 
-refactored_code = OpenAi.new.refactor(original_code, user_instruction)
+raw_response = OpenAi.new.refactor(file_codes, user_instruction)
 
 # Stop progress bar thread
 progressbar.finish unless progressbar.finished?
@@ -228,56 +263,112 @@ progress_thread.join
 
 end_time = Time.now
 
-refactored_code += "\n" if refactored_code[-1] != "\n"
+def parse_files_from_response(response, expected_paths)
+  result = {}
+  current_path = nil
+  buffer = []
 
-code_size = refactored_code.size
-elapsed_time = end_time - start_time
-speed = code_size / elapsed_time
+  response.each_line do |line|
+    if line.start_with?('=== FILE: ')
+      if current_path
+        result[current_path] = buffer.join
+        buffer = []
+      end
+      current_path = line.sub('=== FILE: ', '').strip
+    else
+      buffer << line if current_path
+    end
+  end
 
-begin
-  File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s)
-rescue SystemCallError
-  # ignore persistence errors
+  result[current_path] = buffer.join if current_path
+
+  # Fallback: if structure not respected, treat whole response as single file
+  if result.empty? && expected_paths.size == 1
+    result[expected_paths.first] = response
+  end
+
+  result
 end
 
-puts "\nCode size: #{code_size} characters"
-puts "Elapsed time: #{elapsed_time.round(2)} seconds"
-puts "Speed: #{speed.round(2)} characters per second"
+def strip_edge_backticks(content)
+  lines = content.lines
+  return content if lines.empty?
 
-if original_code == refactored_code
-  puts 'No changes made.'
-  exit 0
+  first = lines.first
+  last = lines.last
+
+  first = nil if first.strip == '```' || first.strip.start_with?('```')
+  last = nil if last.strip == '```' || last.strip.start_with?('```')
+
+  stripped_lines = []
+  stripped_lines << first if first
+  stripped_lines.concat(lines[1..-2]) if lines.size > 2
+  stripped_lines << last if last && lines.size > 1
+
+  stripped_lines.join
 end
 
-is_git_repository = system(
-  "git ls-files --error-unmatch " \
-  "#{Shellwords.shellescape(file_path)} > #{File::NULL} 2>&1"
-)
+refactored_files = parse_files_from_response(raw_response, file_paths)
 
-backup_file_path = "#{file_path}.bak"
-unless is_git_repository
+refactored_files.each do |path, content|
+  next unless file_codes.key?(path)
+
+  content = strip_edge_backticks(content)
+  content += "\n" if !content.empty? && content[-1] != "\n"
+
+  original_code = file_codes[path]
+  refactored_code = content
+
+  code_size = refactored_code.size
+  elapsed_time = end_time - start_time
+  speed = code_size / elapsed_time
+
   begin
-    File.binwrite(backup_file_path, original_code)
+    File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s)
+  rescue SystemCallError
+    # ignore persistence errors
+  end
+
+  puts "\nFile: #{path}"
+  puts "Code size: #{code_size} characters"
+  puts "Elapsed time: #{elapsed_time.round(2)} seconds"
+  puts "Speed: #{speed.round(2)} characters per second"
+
+  if original_code == refactored_code
+    puts 'No changes made.'
+    next
+  end
+
+  is_git_repository = system(
+    "git ls-files --error-unmatch " \
+    "#{Shellwords.shellescape(path)} > #{File::NULL} 2>&1"
+  )
+
+  backup_file_path = "#{path}.bak"
+  unless is_git_repository
+    begin
+      File.binwrite(backup_file_path, original_code)
+    rescue SystemCallError => e
+      warn "Failed to write backup file #{backup_file_path}: #{e.message}"
+      exit 1
+    end
+  end
+
+  begin
+    File.binwrite(path, refactored_code)
   rescue SystemCallError => e
-    warn "Failed to write backup file #{backup_file_path}: #{e.message}"
+    warn "Failed to write refactored file #{path}: #{e.message}"
     exit 1
   end
-end
 
-begin
-  File.binwrite(file_path, refactored_code)
-rescue SystemCallError => e
-  warn "Failed to write refactored file #{file_path}: #{e.message}"
-  exit 1
-end
-
-if is_git_repository
-  system(
-    "git diff -w #{Shellwords.shellescape(file_path)}"
-  )
-else
-  system(
-    "diff -u --color #{Shellwords.shellescape(backup_file_path)} " \
-    "#{Shellwords.shellescape(file_path)}"
-  )
+  if is_git_repository
+    system(
+      "git diff -w #{Shellwords.shellescape(path)}"
+    )
+  else
+    system(
+      "diff -u --color #{Shellwords.shellescape(backup_file_path)} " \
+      "#{Shellwords.shellescape(path)}"
+    )
+  end
 end
