@@ -111,6 +111,30 @@ if ARGV.empty?
   exit 1
 end
 
-question = ARGV.join(' ')
+base_dir = Dir.pwd
+question_parts = []
+file_snippets = []
+
+ARGV.each do |arg|
+  path = File.expand_path(arg, base_dir)
+  if File.file?(path) && path.start_with?(base_dir + File::SEPARATOR)
+    rel = path.sub(base_dir + File::SEPARATOR, '')
+    content = File.read(path)
+    file_snippets << "File: #{rel}\n#{content}"
+  else
+    question_parts << arg
+  end
+end
+
+question = question_parts.join(' ')
+unless file_snippets.empty?
+  question = [
+    question,
+    '',
+    'Included files:',
+    file_snippets.join("\n\n---\n\n")
+  ].join("\n")
+end
+
 answer = OpenAi.new.chat(question)
 puts answer
