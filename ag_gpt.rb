@@ -228,10 +228,10 @@ answer = if bash_command.start_with?('ag ')
          end
 
 if answer == 'y'
-  ag_output = `#{bash_command}`
-  puts ag_output
+  system(bash_command)
   puts "\nFinished:\n#{bash_command}"
 
+  ag_output = `#{bash_command}`
   unless ag_output.strip.empty?
     puts "\nInterpret results with OpenAI? (y/N)"
     interpret_answer = STDIN.gets&.chomp&.downcase
