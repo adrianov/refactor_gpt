@@ -51,6 +51,10 @@ class OpenAi
       When the user asks for word translations (in any language), also:
       - Provide phonetic transcription (IPA if possible).
       - Briefly mention the word origin/etymology.
+
+      When you recommend Ruby gems, always include a GitHub repository URL for each gem
+      you mention, in the form: `gem_name – https://github.com/owner/repo` whenever
+      such a public repository is known or can be reasonably inferred.
     HEREDOC
 
     ask(
