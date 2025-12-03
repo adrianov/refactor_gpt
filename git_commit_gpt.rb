@@ -45,6 +45,11 @@ class OpenAi
       - Every changed file from the status output must appear in exactly one group.
       - Use only relative file paths exactly as they appear in the status output (after the status flags).
       - Prefer a small number of coherent commits over many tiny ones.
+      - Additionally, carefully review the provided diffs for potential errors or issues (such as obvious bugs, suspicious logic, or likely regressions).
+      - If you detect any potential error in a file or diff hunk, include a warning entry describing:
+        - the affected file path,
+        - a short description of the possible error,
+        - a probability (0.0–1.0) indicating how sure you are that this is a real issue.
 
       Output format (strict JSON):
       {
@@ -53,8 +58,17 @@ class OpenAi
             "message": "type: short description",
             "files": ["path/one.rb", "path/two.rb"]
           }
+        ],
+        "warnings": [
+          {
+            "file": "path/one.rb",
+            "description": "Possible off-by-one error in loop bounds",
+            "probability": 0.8
+          }
         ]
       }
+
+      If you do not see any likely errors, return "warnings": [].
 
       Do not include any text outside of the JSON.
     HEREDOC
@@ -90,7 +104,7 @@ class OpenAi
     value = @env_vars.fetch(key, ENV[key] || default)
     if value.nil?
       puts "Missing required environment variable: #{key}. Please add it to the .env file."
-      exit
+      exit 1
     end
     value
   end
@@ -101,15 +115,17 @@ class OpenAi
     return {} unless File.exist?(env_file)
 
     File.foreach(env_file).with_object({}) do |line, env_vars|
-      key, value = line.split('=')
-      env_vars[key.strip] = value.strip if key && value
+      key, value = line.split('=', 2)
+      next unless key && value
+
+      env_vars[key.strip] = value.strip
     end
   end
 
   # Method to handle missing answers in the response
   def handle_missing_answer(response)
     puts response.body
-    exit
+    exit 1
   end
 
   # Method to read system information
@@ -131,17 +147,30 @@ status_output = run_cmd('git status --porcelain')
 
 if status_output.strip.empty?
   puts 'No changes to commit.'
-  exit
+  exit 0
 end
 
 diff_output = run_cmd('git diff')
 
 plan = OpenAi.new.commit_plan(status_output, diff_output)
 commits = plan['commits'] || []
+warnings = plan['warnings'] || []
 
 if commits.empty?
   puts 'No commits suggested by the model.'
-  exit
+  exit 0
+end
+
+unless warnings.empty?
+  puts "Warnings:\n\n"
+  warnings.each do |warning|
+    file = warning['file'].to_s
+    description = warning['description'].to_s
+    probability = warning['probability']
+    probability_str = probability.nil? ? 'n/a' : probability.to_s
+    puts "Warning in #{file}: #{description} (probability: #{probability_str})"
+  end
+  puts
 end
 
 puts "Planned commits:\n\n"
@@ -156,9 +185,9 @@ end
 puts 'Do you want to run these git add/commit commands? (y/n)'
 answer = STDIN.gets.to_s.chomp.downcase
 
-if answer != 'y'
+unless answer == 'y'
   puts 'Commands not executed.'
-  exit
+  exit 0
 end
 
 commits.each do |commit|
