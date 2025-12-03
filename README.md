@@ -54,6 +54,7 @@ To make the scripts easier to use from anywhere, you can add aliases to your `.z
    echo "alias agpt='$(pwd)/ag_gpt.rb'" >> ~/.zshrc
    echo "alias bashgpt='$(pwd)/bash_gpt.rb'" >> ~/.zshrc
    echo "alias ask='$(pwd)/ask_gpt.rb'" >> ~/.zshrc
+   echo "alias gcommit='$(pwd)/git_commit_gpt.rb'" >> ~/.zshrc
    ```
 
 3. Activate the aliases by either:
@@ -65,6 +66,7 @@ refactor file.rb "make it more readable"
 agpt "find all database queries"
 bashgpt "list all files modified today"
 ask "explain how Ruby blocks work"
+gcommit "plan and create structured git commits"
 
 ## Available Scripts
 
@@ -135,4 +137,4 @@ Features:
 
 ## Contributing
 
-Feel free to submit issues and enhancement requests! 
+Feel free to submit issues and enhancement requests!
