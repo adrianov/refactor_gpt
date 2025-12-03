@@ -150,7 +150,7 @@ unless file_snippets.empty?
   ].join("\n")
 end
 
-total_size = [total_size, 1000].max
+total_size = [total_size, 2000].max
 
 start_time = Time.now
 
