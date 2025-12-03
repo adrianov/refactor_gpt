@@ -10,7 +10,7 @@ class OpenAi
   def initialize
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = 'gpt-5-mini'
+    @model = 'gpt-5.1'
   end
 
   # Method to send prompts to OpenAI and get a response
