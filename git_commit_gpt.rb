@@ -29,7 +29,7 @@ class OpenAi
   end
 
   # Method to generate grouped git add/commit commands based on git status and diff
-  def commit_plan(status_output, diff_output, cli_hint)
+  def commit_plan(status_output, diff_output, cli_hint, recent_commits, recent_commands)
     system_instruction = <<~HEREDOC
       You are a tool that groups changed files into meaningful git commits.
 
@@ -37,9 +37,12 @@ class OpenAi
       - `git status --porcelain` output (shows added, modified, deleted, renamed, untracked files)
       - unified git diff for all changes (including new files)
       - optional user-provided hints or preferences from the command line
+      - last 5 git commit one-line messages to help you match existing style
+      - last 5 shell commands from the user's terminal history to give you extra context
 
       Task:
       - Analyze the status and diff and infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
+      - Prefer commit messages that are consistent with the style of the provided recent commit messages.
       - Respect and incorporate the user-provided hints when choosing commit messages, grouping files, or prioritizing certain changes, as long as this does not conflict with the actual diffs.
       - For each group, produce:
         - a one-line, conventional-style commit message (no trailing period),
@@ -87,6 +90,14 @@ class OpenAi
       Here are optional hints or preferences from the user (may be empty):
 
       #{cli_hint}
+
+      Here are the last 5 git commit one-line messages (most recent first):
+
+      #{recent_commits}
+
+      Here are the last 5 shell commands from the user's terminal history (most recent last, if available):
+
+      #{recent_commands}
     HEREDOC
 
     raw = ask([
@@ -159,8 +170,18 @@ if status_output.strip.empty?
 end
 
 diff_output = run_cmd('git diff')
+recent_commits = run_cmd('git log -5 --pretty=%s')
+recent_commands = begin
+  history_file = ENV['HISTFILE'] || File.expand_path('~/.bash_history')
+  if File.exist?(history_file)
+    lines = File.readlines(history_file, chomp: true)
+    lines.last(5).join("\n")
+  else
+    ''
+  end
+end
 
-plan = OpenAi.new.commit_plan(status_output, diff_output, cli_hint)
+plan = OpenAi.new.commit_plan(status_output, diff_output, cli_hint, recent_commits, recent_commands)
 commits = plan['commits'] || []
 warnings = plan['warnings'] || []
 
