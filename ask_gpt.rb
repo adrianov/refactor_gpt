@@ -2,6 +2,7 @@
 require 'excon'
 require 'oj'
 require 'ruby-progressbar'
+require 'rbconfig'
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -42,20 +43,44 @@ class OpenAi
     exit 1
   end
 
-  def chat(question)
+  def chat(question, system_info: nil)
     system_instruction = <<~HEREDOC
-      You are helping a Ruby programmer. Answer in clear, concise Ruby-focused
-      terms, using idiomatic Ruby style, with code examples where appropriate.
-      Keep answers relatively short and not overly detailed.
+      You are a Ruby-focused assistant helping a Ruby programmer.
 
-      When the user asks for word translations (in any language), also:
-      - Provide phonetic transcription (IPA if possible).
-      - Briefly mention the word origin/etymology.
+      Style and format:
+      - Answer in clear, concise terms, prioritizing Ruby concepts and tooling.
+      - Prefer idiomatic Ruby style in all code examples.
+      - Use Markdown formatting (headings, lists, fenced code blocks) where helpful.
+      - Default code fences to Ruby unless another language is clearly required.
 
-      When you recommend Ruby gems, always include a GitHub repository URL for each gem
-      you mention, in the form: `gem_name – https://github.com/owner/repo` whenever
-      such a public repository is known or can be reasonably inferred.
+      Answer length:
+      - Be succinct and avoid unnecessary theory.
+      - Include just enough detail and examples to make the solution directly usable.
+
+      Code and explanations:
+      - When showing code, make it copy-pastable and minimal.
+      - Briefly explain non-obvious parts of the code.
+      - If there are multiple reasonable approaches, mention the most common one first.
+
+      Translations:
+      - When the user asks for word translations (in any language), also:
+        - Provide phonetic transcription (IPA if possible).
+        - Briefly mention the word origin/etymology.
+
+      Ruby gems:
+      - When you recommend Ruby gems, always include a GitHub repository URL for each gem
+        you mention, in the form: `gem_name – https://github.com/owner/repo`
+        whenever such a public repository is known or can be reasonably inferred.
     HEREDOC
+
+    if system_info && !system_info.empty?
+      system_instruction = [
+        system_instruction.strip,
+        '',
+        "User environment:",
+        system_info
+      ].join("\n")
+    end
 
     ask(
       [
@@ -105,6 +130,58 @@ class OpenAi
     warn response.body
     exit 1
   end
+end
+
+def detect_system_info
+  host_os = RbConfig::CONFIG['host_os'].downcase
+  platform =
+    case host_os
+    when /darwin/
+      'macOS'
+    when /linux/
+      if File.exist?('/etc/os-release')
+        os_release = File.read('/etc/os-release')
+        if os_release =~ /^NAME="?Ubuntu"?/i
+          'Ubuntu'
+        else
+          'Linux'
+        end
+      else
+        'Linux'
+      end
+    when /mswin|mingw|cygwin/
+      'Windows'
+    else
+      host_os
+    end
+
+  version =
+    case platform
+    when 'macOS'
+      `sw_vers -productVersion 2>/dev/null`.strip
+    when 'Ubuntu'
+      if File.exist?('/etc/os-release')
+        os_release = File.read('/etc/os-release')
+        if os_release =~ /^VERSION="?([^"\n]+)"?/
+          Regexp.last_match(1).strip
+        else
+          ''
+        end
+      else
+        ''
+      end
+    when 'Windows'
+      `wmic os get Version /value 2>NUL`.split('=').last.to_s.strip
+    else
+      ''
+    end
+
+  parts = []
+  parts << "OS: #{platform}"
+  parts << "Version: #{version}" unless version.empty?
+  parts.join(', ')
+rescue StandardError
+  ''
 end
 
 base_dir = Dir.pwd
@@ -188,7 +265,8 @@ progress_thread = Thread.new do
 end
 
 model_name = search_mode ? 'gpt-4o-search-preview' : 'gpt-5.1'
-answer = OpenAi.new(model: model_name).chat(question)
+system_info = detect_system_info
+answer = OpenAi.new(model: model_name).chat(question, system_info: system_info)
 
 progressbar.finish unless progressbar.finished?
 progress_thread.join
