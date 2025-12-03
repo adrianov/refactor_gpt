@@ -205,7 +205,7 @@ rescue SystemCallError
 end
 
 if system('command -v glow >/dev/null 2>&1')
-  IO.popen(['glow', '--style', 'dark', '--width', '0', '-'], 'w') { |io| io.write(answer) }
+  IO.popen(['glow', '--width', '100', '-'], 'w') { |io| io.write(answer) }
 else
   puts answer
 end
