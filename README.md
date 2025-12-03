@@ -127,6 +127,21 @@ Features:
 - Works as a quick terminal-based AI assistant
 - Uses `glow` for nicely formatted Markdown output when `glow` is installed, falling back to plain text otherwise
 
+### git_commit_gpt.rb
+
+An assistant for planning and creating structured git commits based on your current working tree.
+
+Usage:
+./git_commit_gpt.rb
+
+Features:
+- Reads `git status --porcelain` and `git diff` for the current repository
+- Groups changed files into a small number of coherent commits (by feature, refactor, docs, tests, etc.)
+- Generates conventional-style one-line commit messages
+- Ensures every changed file is included in exactly one suggested commit
+- Prints a clear commit plan and asks for confirmation before running any `git add`/`git commit` commands
+- Reviews diffs for potential issues and prints warnings with a probability score
+
 ## Safety Features
 
 - All scripts require explicit confirmation for potentially dangerous operations
