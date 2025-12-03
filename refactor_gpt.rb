@@ -305,7 +305,7 @@ def strip_edge_backticks(content)
   stripped_lines.concat(lines[1..-2]) if lines.size > 2
   stripped_lines << last if last && lines.size > 1
 
-  stripped_lines.join
+  stripped_lines.join.rstrip
 end
 
 refactored_files = parse_files_from_response(raw_response, file_paths)
