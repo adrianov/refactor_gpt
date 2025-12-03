@@ -104,13 +104,6 @@ class OpenAi
   end
 end
 
-if ARGV.empty?
-  puts(
-    "Usage: #{File.basename($PROGRAM_NAME)} \"Your question about Ruby or code\""
-  )
-  exit 1
-end
-
 base_dir = Dir.pwd
 question_parts = []
 file_snippets = []
@@ -124,6 +117,16 @@ ARGV.each do |arg|
   else
     question_parts << arg
   end
+end
+
+if question_parts.empty?
+  puts 'Enter your question (finish with EOF / Ctrl-D on a new line):'
+  input = $stdin.read
+  if input.nil? || input.strip.empty?
+    warn 'No question provided. Exiting.'
+    exit 1
+  end
+  question_parts << input.strip
 end
 
 question = question_parts.join(' ')
