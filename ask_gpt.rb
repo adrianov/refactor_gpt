@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 require 'excon'
 require 'oj'
+require 'ruby-progressbar'
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -107,6 +108,7 @@ end
 base_dir = Dir.pwd
 question_parts = []
 file_snippets = []
+total_size = 0
 
 ARGV.each do |arg|
   path = File.expand_path(arg, base_dir)
@@ -114,6 +116,7 @@ ARGV.each do |arg|
     rel = path.sub(base_dir + File::SEPARATOR, '')
     content = File.read(path)
     file_snippets << "File: #{rel}\n#{content}"
+    total_size += content.bytesize
   else
     question_parts << arg
   end
@@ -139,7 +142,58 @@ unless file_snippets.empty?
   ].join("\n")
 end
 
+total_size = [total_size, 1000].max
+
+start_time = Time.now
+
+PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt')
+
+def load_progress_speed(progress_speed_file)
+  return 300 unless File.exist?(progress_speed_file)
+
+  value = File.read(progress_speed_file).to_f
+  return 300 if value <= 0
+
+  value
+rescue SystemCallError, ArgumentError
+  300
+end
+
+PROGRESS_SPEED = load_progress_speed(PROGRESS_SPEED_FILE)
+
+progressbar = ProgressBar.create(
+  title: 'Thinking',
+  total: total_size,
+  format: '%t: |%B| %p%% %e',
+  length: 60
+)
+
+progress_thread = Thread.new do
+  loop do
+    elapsed_time = Time.now - start_time
+    progress = [(elapsed_time * PROGRESS_SPEED).round, total_size].min
+    progressbar.progress = progress
+    break if progress >= total_size || progressbar.finished?
+
+    sleep 0.1
+  end
+end
+
 answer = OpenAi.new.chat(question)
+
+progressbar.finish unless progressbar.finished?
+progress_thread.join
+
+end_time = Time.now
+elapsed_time = end_time - start_time
+answer_size = answer.to_s.bytesize
+speed = answer_size.positive? && elapsed_time.positive? ? answer_size / elapsed_time : 0
+
+begin
+  File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s) if speed.positive?
+rescue SystemCallError
+  # ignore persistence errors
+end
 
 if system('command -v glow >/dev/null 2>&1')
   IO.popen(['glow', '-'], 'w') { |io| io.write(answer) }
