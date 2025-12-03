@@ -5,11 +5,10 @@ require 'ruby-progressbar'
 
 # Class to interact with OpenAI API
 class OpenAi
-  def initialize
+  def initialize(model: 'gpt-5.1')
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = 'gpt-5.1'
-    @temperature = 0
+    @model = model
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -23,7 +22,6 @@ class OpenAi
       body: Oj.dump(
         {
           model: @model,
-          temperature: @temperature,
           messages: prompts
         },
         mode: :compat
@@ -109,8 +107,14 @@ base_dir = Dir.pwd
 question_parts = []
 file_snippets = []
 total_size = 0
+search_mode = false
 
 ARGV.each do |arg|
+  if arg == '--search'
+    search_mode = true
+    next
+  end
+
   path = File.expand_path(arg, base_dir)
   if File.file?(path) && path.start_with?(base_dir + File::SEPARATOR)
     rel = path.sub(base_dir + File::SEPARATOR, '')
@@ -179,7 +183,8 @@ progress_thread = Thread.new do
   end
 end
 
-answer = OpenAi.new.chat(question)
+model_name = search_mode ? 'gpt-4o-search-preview' : 'gpt-5.1'
+answer = OpenAi.new(model: model_name).chat(question)
 
 progressbar.finish unless progressbar.finished?
 progress_thread.join

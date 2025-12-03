@@ -29,16 +29,18 @@ class OpenAi
   end
 
   # Method to generate grouped git add/commit commands based on git status and diff
-  def commit_plan(status_output, diff_output)
+  def commit_plan(status_output, diff_output, cli_hint)
     system_instruction = <<~HEREDOC
       You are a tool that groups changed files into meaningful git commits.
 
       Input:
       - `git status --porcelain` output (shows added, modified, deleted, renamed, untracked files)
       - unified git diff for all changes (including new files)
+      - optional user-provided hints or preferences from the command line
 
       Task:
       - Analyze the status and diff and infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
+      - Respect and incorporate the user-provided hints when choosing commit messages, grouping files, or prioritizing certain changes, as long as this does not conflict with the actual diffs.
       - For each group, produce:
         - a one-line, conventional-style commit message (no trailing period),
         - a list of file paths to include in that commit.
@@ -81,6 +83,10 @@ class OpenAi
       Here is the git diff for all changes:
 
       #{diff_output}
+
+      Here are optional hints or preferences from the user (may be empty):
+
+      #{cli_hint}
     HEREDOC
 
     raw = ask([
@@ -143,6 +149,8 @@ def run_cmd(cmd)
   output
 end
 
+cli_hint = ARGV.join(' ').to_s.strip
+
 status_output = run_cmd('git status --porcelain')
 
 if status_output.strip.empty?
@@ -152,7 +160,7 @@ end
 
 diff_output = run_cmd('git diff')
 
-plan = OpenAi.new.commit_plan(status_output, diff_output)
+plan = OpenAi.new.commit_plan(status_output, diff_output, cli_hint)
 commits = plan['commits'] || []
 warnings = plan['warnings'] || []
 
