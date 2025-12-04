@@ -162,8 +162,11 @@ class OpenAi
 end
 
 def detect_desktop_environment
-  return ENV['XDG_CURRENT_DESKTOP'] if ENV['XDG_CURRENT_DESKTOP'] && !ENV['XDG_CURRENT_DESKTOP'].empty?
-  return ENV['DESKTOP_SESSION'] if ENV['DESKTOP_SESSION'] && !ENV['DESKTOP_SESSION'].empty?
+  xdg_desktop = ENV['XDG_CURRENT_DESKTOP'].to_s
+  return xdg_desktop unless xdg_desktop.empty?
+
+  desktop_session = ENV['DESKTOP_SESSION'].to_s
+  return desktop_session unless desktop_session.empty?
 
   if ENV['GNOME_DESKTOP_SESSION_ID']
     'GNOME'
@@ -230,7 +233,7 @@ rescue StandardError
   ''
 end
 
-def load_history_context
+def load_history_context(current_question)
   candidates = []
 
   # zsh extended history (with timestamps etc.)
@@ -250,17 +253,29 @@ def load_history_context
 
     begin
       # Read file contents as UTF-8, replace invalid bytes
-      File.open(history_file, "r:bom|utf-8") do |f|
+      File.open(history_file, 'r:bom|utf-8') do |f|
         f.each_line(chomp: true) do |line|
           begin
             safe_line = line.dup
             unless safe_line.valid_encoding?
-              safe_line = safe_line.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+              safe_line = safe_line.encode(
+                'UTF-8',
+                invalid: :replace,
+                undef: :replace,
+                replace: '?'
+              )
             end
             # Ensure final string is valid UTF-8
-            safe_line = safe_line.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+            safe_line = safe_line.encode(
+              'UTF-8',
+              invalid: :replace,
+              undef: :replace,
+              replace: '?'
+            )
             history_lines << safe_line
-          rescue Encoding::InvalidByteSequenceError, Encoding::UndefinedConversionError, ArgumentError
+          rescue Encoding::InvalidByteSequenceError,
+                 Encoding::UndefinedConversionError,
+                 ArgumentError
             # Skip lines that are still invalid after attempted fixes
             next
           end
@@ -273,7 +288,15 @@ def load_history_context
 
   return '' if history_lines.empty?
 
-  ask_lines = history_lines.grep(/ask/).last(5)
+  ask_lines = history_lines.grep(/ask/)
+
+  if current_question && !current_question.strip.empty?
+    ask_lines = ask_lines.reject do |line|
+      line.include?(current_question.strip)
+    end
+  end
+
+  ask_lines = ask_lines.last(5)
   return '' if ask_lines.empty?
 
   [
@@ -327,7 +350,7 @@ if question_parts.empty?
 end
 
 question = question_parts.join(' ')
-history_context = load_history_context
+history_context = load_history_context(question)
 unless history_context.empty?
   question = [
     question,
