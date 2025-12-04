@@ -43,7 +43,7 @@ class OpenAi
     exit 1
   end
 
-  def chat(question, system_info: nil)
+  def chat(question, system_info: nil, style: nil, brevity: nil)
     system_instruction = <<~HEREDOC
       You are a Ruby-focused assistant helping a Ruby programmer.
 
@@ -73,11 +73,29 @@ class OpenAi
         whenever such a public repository is known or can be reasonably inferred.
     HEREDOC
 
+    if style == :eldritch
+      system_instruction = [
+        system_instruction.strip,
+        '',
+        'Additional style override:',
+        'Answer in a Lovecraftian, eldritch horror tone while remaining clear and technically accurate.'
+      ].join("\n")
+    end
+
+    if brevity == :short
+      system_instruction = [
+        system_instruction.strip,
+        '',
+        'Brevity override:',
+        'Answer as briefly as reasonably possible while still being correct and useful.'
+      ].join("\n")
+    end
+
     if system_info && !system_info.empty?
       system_instruction = [
         system_instruction.strip,
         '',
-        "User environment:",
+        'User environment:',
         system_info
       ].join("\n")
     end
@@ -206,10 +224,19 @@ question_parts = []
 file_snippets = []
 total_size = 0
 search_mode = false
+eldritch_mode = false
+short_mode = false
 
 ARGV.each do |arg|
-  if arg == '--search'
+  case arg
+  when '--search'
     search_mode = true
+    next
+  when '--eldritch'
+    eldritch_mode = true
+    next
+  when '--short'
+    short_mode = true
     next
   end
 
@@ -283,7 +310,9 @@ end
 
 model_name = search_mode ? 'gpt-4o-search-preview' : 'gpt-5.1'
 system_info = detect_system_info
-answer = OpenAi.new(model: model_name).chat(question, system_info: system_info)
+style = eldritch_mode ? :eldritch : nil
+brevity = short_mode ? :short : nil
+answer = OpenAi.new(model: model_name).chat(question, system_info: system_info, style: style, brevity: brevity)
 
 progressbar.finish unless progressbar.finished?
 progress_thread.join
