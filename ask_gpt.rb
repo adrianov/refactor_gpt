@@ -132,6 +132,19 @@ class OpenAi
   end
 end
 
+def detect_desktop_environment
+  return ENV['XDG_CURRENT_DESKTOP'] if ENV['XDG_CURRENT_DESKTOP'] && !ENV['XDG_CURRENT_DESKTOP'].empty?
+  return ENV['DESKTOP_SESSION'] if ENV['DESKTOP_SESSION'] && !ENV['DESKTOP_SESSION'].empty?
+
+  if ENV['GNOME_DESKTOP_SESSION_ID']
+    'GNOME'
+  elsif ENV['KDE_FULL_SESSION'] == 'true'
+    'KDE'
+  else
+    ''
+  end
+end
+
 def detect_system_info
   host_os = RbConfig::CONFIG['host_os'].downcase
   platform =
@@ -179,6 +192,10 @@ def detect_system_info
   parts = []
   parts << "OS: #{platform}"
   parts << "Version: #{version}" unless version.empty?
+
+  desktop_env = detect_desktop_environment
+  parts << "Desktop: #{desktop_env}" unless desktop_env.empty?
+
   parts.join(', ')
 rescue StandardError
   ''
