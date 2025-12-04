@@ -4,44 +4,38 @@ require 'oj'
 require 'ruby-progressbar'
 require 'rbconfig'
 
-# Module for system information detection
-module SystemInfo
-  def self.detect_desktop_environment
-    xdg = ENV['XDG_CURRENT_DESKTOP'].to_s
-    return xdg unless xdg.empty?
-    
-    session = ENV['DESKTOP_SESSION'].to_s
-    return session unless session.empty?
-    
-    return 'GNOME' if ENV['GNOME_DESKTOP_SESSION_ID']
-    return 'KDE' if ENV['KDE_FULL_SESSION'] == 'true'
-    
-    ''
-  end
+# Simple system information detection with memoization
+class SystemInfo
+  def self.to_s
+    @system_info ||= begin
+      platform = case RbConfig::CONFIG['host_os'].downcase
+                 when /darwin/ then 'macOS'
+                 when /linux/ then File.exist?('/etc/os-release') && File.read('/etc/os-release') =~ /^NAME="?Ubuntu"?/i ? 'Ubuntu' : 'Linux'
+                 when /mswin|mingw|cygwin/ then 'Windows'
+                 else RbConfig::CONFIG['host_os']
+                 end
 
-  def self.detect_system_info
-    host_os = RbConfig::CONFIG['host_os'].downcase
-    platform = case host_os
-               when /darwin/ then 'macOS'
-               when /linux/ then File.exist?('/etc/os-release') && File.read('/etc/os-release') =~ /^NAME="?Ubuntu"?/i ? 'Ubuntu' : 'Linux'
-               when /mswin|mingw|cygwin/ then 'Windows'
-               else host_os
-               end
+      version = case platform
+                when 'macOS' then `sw_vers -productVersion 2>/dev/null`.strip
+                when 'Ubuntu' then File.exist?('/etc/os-release') && File.read('/etc/os-release') =~ /^VERSION="?([^"\n]+)"?/ ? Regexp.last_match(1).strip : ''
+                when 'Windows' then `wmic os get Version /value 2>NUL`.split('=').last.to_s.strip
+                else ''
+                end
 
-    parts = ["OS: #{platform}"]
-    
-    version = case platform
-              when 'macOS' then `sw_vers -productVersion 2>/dev/null`.strip
-              when 'Ubuntu' then File.exist?('/etc/os-release') && File.read('/etc/os-release') =~ /^VERSION="?([^"\n]+)"?/ ? Regexp.last_match(1).strip : ''
-              when 'Windows' then `wmic os get Version /value 2>NUL`.split('=').last.to_s.strip
-              else ''
-              end
-    parts << "Version: #{version}" unless version.empty?
-    
-    parts << "Desktop: #{detect_desktop_environment}" unless detect_desktop_environment.empty?
-    parts.join(', ')
-  rescue StandardError
-    ''
+      desktop = case
+                when !ENV['XDG_CURRENT_DESKTOP'].to_s.empty? then ENV['XDG_CURRENT_DESKTOP'].to_s
+                when !ENV['DESKTOP_SESSION'].to_s.empty? then ENV['DESKTOP_SESSION'].to_s
+                when ENV['GNOME_DESKTOP_SESSION_ID'] then 'GNOME'
+                when ENV['KDE_FULL_SESSION'] == 'true' then 'KDE'
+                else ''
+                end
+
+      "OS: #{platform}" + 
+        (version.empty? ? "" : ", Version: #{version}") + 
+        (desktop.empty? ? "" : ", Desktop: #{desktop}")
+    rescue StandardError
+      ''
+    end
   end
 end
 
@@ -103,6 +97,7 @@ end
 # Class to manage progress bar display
 class ProgressManager
   PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt')
+  DEFAULT_PROGRESS_SPEED = 300
 
   def initialize(total_size)
     @total_size = total_size
@@ -145,11 +140,9 @@ class ProgressManager
   private
 
   def load_progress_speed
-    return 300 unless File.exist?(PROGRESS_SPEED_FILE)
-    value = File.read(PROGRESS_SPEED_FILE).to_f
-    value <= 0 ? 300 : value
-  rescue SystemCallError, ArgumentError
-    300
+    File.read(PROGRESS_SPEED_FILE).to_f
+  rescue
+    DEFAULT_PROGRESS_SPEED
   end
 end
 
@@ -198,7 +191,7 @@ class OpenAi
     exit 1
   end
 
-  def chat(question, system_info: nil, style: nil, brevity: nil)
+  def chat(question, style: nil, brevity: nil)
     style_instruction = case style
       when :eldritch then 'Answer in a Lovecraftian, eldritch horror tone'
       else <<~HEREDOC
@@ -218,6 +211,7 @@ class OpenAi
       HEREDOC
     end
 
+    system_info = SystemInfo.to_s
     system_instruction = <<~HEREDOC
       You are a Ruby-focused assistant helping a Ruby programmer.
 
@@ -248,7 +242,7 @@ class OpenAi
         whenever such a public repository is known or can be reasonably inferred.
     HEREDOC
 
-    if system_info && !system_info.empty?
+    unless system_info.empty?
       system_instruction = [system_instruction.strip, '', 'User environment:', system_info].join("\n")
     end
 
@@ -304,7 +298,6 @@ def main
     debug: args[:debug_mode]
   ).chat(
     Utility.build_question(args[:question_parts], args[:file_snippets]),
-    system_info: SystemInfo.detect_system_info,
     style: args[:eldritch_mode] ? :eldritch : nil,
     brevity: args[:short_mode] ? :short : nil
   )
