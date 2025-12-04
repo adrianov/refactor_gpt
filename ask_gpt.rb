@@ -56,6 +56,7 @@ class OpenAi
       - Prefer idiomatic Ruby style in all code examples.
       - Use Markdown formatting (headings, lists, fenced code blocks) where helpful.
       - Default code fences to Ruby unless another language is clearly required.
+      - Always respond using Markdown formatting, even for very short answers.
 
       Answer length:
       - Be succinct and avoid unnecessary theory.
