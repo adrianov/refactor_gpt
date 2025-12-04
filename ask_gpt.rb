@@ -60,6 +60,10 @@ class OpenAi
       Answer length:
       - Be succinct and avoid unnecessary theory.
       - Include just enough detail and examples to make the solution directly usable.
+      - If the user asks a short, direct question and does not explicitly request detail,
+        respond with a short, direct answer (1–3 short sentences or bullet points) by default.
+      - If the user’s question can be fully answered with a single word (e.g., “yes”, “no”, a name, a number),
+        respond with exactly that one word unless they explicitly ask for explanation.
 
       Code and explanations:
       - When showing code, make it copy-pastable and minimal.
@@ -92,7 +96,8 @@ class OpenAi
         '',
         'Brevity override:',
         'Answer in 1–2 short, direct phrases; be as brief as possible while still being correct and useful.',
-        'Avoid lists, headings, or multi-sentence paragraphs unless absolutely necessary.'
+        'Avoid lists, headings, or multi-sentence paragraphs unless absolutely necessary.',
+        'If a one-word answer would be fully correct and sufficient, answer with that single word.'
       ].join("\n")
     end
 
