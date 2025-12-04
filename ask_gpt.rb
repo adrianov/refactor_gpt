@@ -300,7 +300,11 @@ rescue SystemCallError
 end
 
 if system('command -v glow >/dev/null 2>&1')
-  IO.popen(['glow', '--width', '100', '-'], 'w') { |io| io.write(answer) }
+  IO.popen(['glow', '--width', '100', '-'], 'w') do |io|
+    answer.each_line do |line|
+      io.write(line.sub(/ +$/, ''))
+    end
+  end
 else
   puts answer
 end
