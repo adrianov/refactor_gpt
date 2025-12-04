@@ -6,14 +6,21 @@ require 'rbconfig'
 
 # Class to interact with OpenAI API
 class OpenAi
-  def initialize(model: 'gpt-5.1')
+  def initialize(model: 'gpt-5.1', max_completion_tokens: nil)
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
     @model = model
+    @max_completion_tokens = max_completion_tokens
   end
 
   # Method to send prompts to OpenAI and get a response
   def ask(prompts)
+    body_hash = {
+      model: @model,
+      messages: prompts
+    }
+    body_hash[:max_completion_tokens] = @max_completion_tokens if @max_completion_tokens
+
     response = Excon.post(
       "#{@api_base_url}/chat/completions",
       headers: {
@@ -21,10 +28,7 @@ class OpenAi
         'Authorization' => "Bearer #{@api_key}"
       },
       body: Oj.dump(
-        {
-          model: @model,
-          messages: prompts
-        },
+        body_hash,
         mode: :compat
       ),
       read_timeout: 100
@@ -87,7 +91,8 @@ class OpenAi
         system_instruction.strip,
         '',
         'Brevity override:',
-        'Answer as briefly as reasonably possible while still being correct and useful.'
+        'Answer in 1–2 short, direct phrases; be as brief as possible while still being correct and useful.',
+        'Avoid lists, headings, or multi-sentence paragraphs unless absolutely necessary.'
       ].join("\n")
     end
 
@@ -312,7 +317,13 @@ model_name = search_mode ? 'gpt-4o-search-preview' : 'gpt-5.1'
 system_info = detect_system_info
 style = eldritch_mode ? :eldritch : nil
 brevity = short_mode ? :short : nil
-answer = OpenAi.new(model: model_name).chat(question, system_info: system_info, style: style, brevity: brevity)
+max_completion_tokens = short_mode ? 500 : nil
+answer = OpenAi.new(model: model_name, max_completion_tokens: max_completion_tokens).chat(
+  question,
+  system_info: system_info,
+  style: style,
+  brevity: brevity
+)
 
 progressbar.finish unless progressbar.finished?
 progress_thread.join
