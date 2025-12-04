@@ -255,43 +255,6 @@ rescue StandardError
   ''
 end
 
-def load_history_context(_current_question)
-  history_files = [
-    File.join(Dir.home, '.zsh_history'),
-    File.join(Dir.home, '.bash_history')
-  ]
-
-  history_file = history_files.find { |f| File.file?(f) && File.readable?(f) }
-  return '' unless history_file
-
-  lines = File.readlines(history_file, chomp: true)
-  return '' if lines.empty?
-
-  ask_lines =
-    if history_file.end_with?('.zsh_history')
-      lines.map { |l| l.sub(/^\s*:[^;]*;/, '') }
-           .grep(/ask/)
-    else
-      lines.grep(/ask/)
-    end
-
-  return '' if ask_lines.empty?
-
-  # Get last 6 matching commands and drop the very last one
-  ask_lines = ask_lines.last(6)
-  ask_lines.pop
-  return '' if ask_lines.empty?
-
-  ask_lines = ask_lines.last(5)
-
-  [
-    'Recent ask-related shell history (from bash/zsh history):',
-    ask_lines.map { |l| "- #{l}" }.join("\n")
-  ].join("\n")
-rescue StandardError
-  ''
-end
-
 base_dir = Dir.pwd
 question_parts = []
 file_snippets = []
@@ -339,14 +302,6 @@ if question_parts.empty?
 end
 
 question = question_parts.join(' ')
-history_context = load_history_context(question)
-unless history_context.empty?
-  question = [
-    question,
-    '',
-    history_context
-  ].join("\n")
-end
 
 unless file_snippets.empty?
   question = [
