@@ -49,7 +49,7 @@ class OpenAi
       You are a tool that groups changed files into meaningful git commits.
 
       Input:
-      - `git status --porcelain` output (shows added, modified, deleted, renamed, untracked files)
+      - `git status` output (shows current branch name, added, modified, deleted, renamed, untracked files)
       - unified git diff for all changes (including new files)
       - optional user-provided hints or preferences from the command line
       - last 5 git commit one-line messages to help you match existing style
@@ -59,6 +59,8 @@ class OpenAi
       - Analyze the status and diff and infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
       - Prefer commit messages that are consistent with the style of the provided recent commit messages.
       - Respect and incorporate the user-provided hints when choosing commit messages, grouping files, or prioritizing certain changes, as long as this does not conflict with the actual diffs.
+      - Check the current branch name (available in git status output) and recent commit messages for JIRA task references (patterns like PT-4668, ABC-123, etc.).
+      - If a JIRA task reference is found in the branch name or recent commits, use the same reference format at the beginning of commit messages (e.g., "[PT-4668] type: short description").
       - For each group, produce:
         - a one-line, conventional-style commit message (no trailing period),
         - a list of file paths to include in that commit.
@@ -94,7 +96,7 @@ class OpenAi
     HEREDOC
 
     user_content = <<~HEREDOC
-      Here is the git status (porcelain format):
+      Here is the git status:
 
       #{status_output}
 
@@ -184,7 +186,7 @@ end
 
 cli_hint = ARGV.join(' ').to_s.strip
 
-status_output = run_cmd('git status --porcelain')
+status_output = run_cmd('git status')
 
 if status_output.strip.empty?
   puts 'No changes to commit.'
