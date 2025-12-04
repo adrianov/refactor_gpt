@@ -70,15 +70,33 @@ class OpenAi
   end
 
   def chat(question, system_info: nil, style: nil, brevity: nil)
+
+    style_instruction = case style
+      when :eldritch
+        'Answer in a Lovecraftian, eldritch horror tone'
+      else
+        <<~HEREDOC
+          - Answer in clear, concise terms, prioritizing Ruby concepts and tooling.
+          - Prefer idiomatic Ruby style in all code examples.
+          - Use Markdown formatting (headings, lists, fenced code blocks) where helpful.
+          - Default code fences to Ruby unless another language is clearly required.
+          - Always respond using Markdown formatting, even for very short answers.
+        HEREDOC
+    end
+
+    if brevity == :short
+      style_instruction += <<~HEREDOC
+        Answer in 1–2 short, direct phrases; be as brief as possible while still being correct and useful.
+        Avoid lists, headings, or multi-sentence paragraphs unless absolutely necessary.
+        If a one-word answer would be fully correct and sufficient, answer with that single word.
+      HEREDOC
+    end
+
     system_instruction = <<~HEREDOC
       You are a Ruby-focused assistant helping a Ruby programmer.
 
       Style and format:
-      - Answer in clear, concise terms, prioritizing Ruby concepts and tooling.
-      - Prefer idiomatic Ruby style in all code examples.
-      - Use Markdown formatting (headings, lists, fenced code blocks) where helpful.
-      - Default code fences to Ruby unless another language is clearly required.
-      - Always respond using Markdown formatting, even for very short answers.
+      #{style_instruction}
 
       Answer length:
       - Be succinct and avoid unnecessary theory.
@@ -103,26 +121,6 @@ class OpenAi
         you mention, in the form: `gem_name – https://github.com/owner/repo`
         whenever such a public repository is known or can be reasonably inferred.
     HEREDOC
-
-    if style == :eldritch
-      system_instruction = [
-        system_instruction.strip,
-        '',
-        'Additional style override:',
-        'Answer in a Lovecraftian, eldritch horror tone while remaining clear and technically accurate.'
-      ].join("\n")
-    end
-
-    if brevity == :short
-      system_instruction = [
-        system_instruction.strip,
-        '',
-        'Brevity override:',
-        'Answer in 1–2 short, direct phrases; be as brief as possible while still being correct and useful.',
-        'Avoid lists, headings, or multi-sentence paragraphs unless absolutely necessary.',
-        'If a one-word answer would be fully correct and sufficient, answer with that single word.'
-      ].join("\n")
-    end
 
     if system_info && !system_info.empty?
       system_instruction = [
