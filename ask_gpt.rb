@@ -255,31 +255,37 @@ rescue StandardError
   ''
 end
 
-def load_history_context(current_question)
-  history_cmd =
-    if ENV['SHELL'].to_s.end_with?('zsh')
-      'history -n 1'
+def load_history_context(_current_question)
+  history_files = [
+    File.join(Dir.home, '.zsh_history'),
+    File.join(Dir.home, '.bash_history')
+  ]
+
+  history_file = history_files.find { |f| File.file?(f) && File.readable?(f) }
+  return '' unless history_file
+
+  lines = File.readlines(history_file, chomp: true)
+  return '' if lines.empty?
+
+  ask_lines =
+    if history_file.end_with?('.zsh_history')
+      lines.map { |l| l.sub(/^\s*:[^;]*;/, '') }
+           .grep(/ask/)
     else
-      'history 1'
+      lines.grep(/ask/)
     end
 
-  history_output = `#{history_cmd} 2>/dev/null`
-  return '' if history_output.nil? || history_output.empty?
-
-  lines = history_output.lines.map(&:chomp)
-  ask_lines = lines.grep(/ask/)
-
-  if current_question && !current_question.strip.empty?
-    ask_lines = ask_lines.reject do |line|
-      line.include?(current_question.strip)
-    end
-  end
-
-  ask_lines = ask_lines.last(5)
   return '' if ask_lines.empty?
 
+  # Get last 6 matching commands and drop the very last one
+  ask_lines = ask_lines.last(6)
+  ask_lines.pop
+  return '' if ask_lines.empty?
+
+  ask_lines = ask_lines.last(5)
+
   [
-    'Recent ask-related shell history (approximation of `history | grep ask | tail -n 5`):',
+    'Recent ask-related shell history (from bash/zsh history):',
     ask_lines.map { |l| "- #{l}" }.join("\n")
   ].join("\n")
 rescue StandardError
