@@ -6,11 +6,12 @@ require 'rbconfig'
 
 # Class to interact with OpenAI API
 class OpenAi
-  def initialize(model: 'gpt-5.1', max_completion_tokens: nil)
+  def initialize(model: 'gpt-5.1', max_completion_tokens: nil, debug: false)
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
     @model = model
     @max_completion_tokens = max_completion_tokens
+    @debug = debug
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -21,16 +22,37 @@ class OpenAi
     }
     body_hash[:max_completion_tokens] = @max_completion_tokens if @max_completion_tokens
 
+    body_json = Oj.dump(
+      body_hash,
+      mode: :compat
+    )
+
+    if @debug
+      warn '--- OpenAI request payload (Ruby hash) ---'
+      pretty_messages = body_hash[:messages].map do |msg|
+        if msg[:role] == 'system' && msg[:content].is_a?(String)
+          {
+            role: msg[:role],
+            content_lines: msg[:content].split("\n")
+          }
+        else
+          msg
+        end
+      end
+
+      pretty_hash = body_hash.merge(messages: pretty_messages)
+
+      warn Oj.dump(pretty_hash, mode: :compat, indent: 2)
+      warn '--- end payload ---'
+    end
+
     response = Excon.post(
       "#{@api_base_url}/chat/completions",
       headers: {
         'Content-Type' => 'application/json',
         'Authorization' => "Bearer #{@api_key}"
       },
-      body: Oj.dump(
-        body_hash,
-        mode: :compat
-      ),
+      body: body_json,
       read_timeout: 100
     )
     handle_http_error(response) unless response.status == 200
@@ -234,61 +256,18 @@ rescue StandardError
 end
 
 def load_history_context(current_question)
-  candidates = []
-
-  # zsh extended history (with timestamps etc.)
-  zsh_histfile = ENV['HISTFILE'] || File.join(Dir.home, '.zsh_history')
-  candidates << zsh_histfile if zsh_histfile && !zsh_histfile.empty?
-
-  # bash history
-  bash_histfile = ENV['HISTFILE'] || File.join(Dir.home, '.bash_history')
-  candidates << bash_histfile if bash_histfile && !bash_histfile.empty?
-
-  candidates.uniq!
-
-  history_lines = []
-
-  candidates.each do |history_file|
-    next unless File.file?(history_file)
-
-    begin
-      # Read file contents as UTF-8, replace invalid bytes
-      File.open(history_file, 'r:bom|utf-8') do |f|
-        f.each_line(chomp: true) do |line|
-          begin
-            safe_line = line.dup
-            unless safe_line.valid_encoding?
-              safe_line = safe_line.encode(
-                'UTF-8',
-                invalid: :replace,
-                undef: :replace,
-                replace: '?'
-              )
-            end
-            # Ensure final string is valid UTF-8
-            safe_line = safe_line.encode(
-              'UTF-8',
-              invalid: :replace,
-              undef: :replace,
-              replace: '?'
-            )
-            history_lines << safe_line
-          rescue Encoding::InvalidByteSequenceError,
-                 Encoding::UndefinedConversionError,
-                 ArgumentError
-            # Skip lines that are still invalid after attempted fixes
-            next
-          end
-        end
-      end
-    rescue SystemCallError
-      next
+  history_cmd =
+    if ENV['SHELL'].to_s.end_with?('zsh')
+      'history -n 1'
+    else
+      'history 1'
     end
-  end
 
-  return '' if history_lines.empty?
+  history_output = `#{history_cmd} 2>/dev/null`
+  return '' if history_output.nil? || history_output.empty?
 
-  ask_lines = history_lines.grep(/ask/)
+  lines = history_output.lines.map(&:chomp)
+  ask_lines = lines.grep(/ask/)
 
   if current_question && !current_question.strip.empty?
     ask_lines = ask_lines.reject do |line|
@@ -303,7 +282,7 @@ def load_history_context(current_question)
     'Recent ask-related shell history (approximation of `history | grep ask | tail -n 5`):',
     ask_lines.map { |l| "- #{l}" }.join("\n")
   ].join("\n")
-rescue SystemCallError
+rescue StandardError
   ''
 end
 
@@ -314,6 +293,7 @@ total_size = 0
 search_mode = false
 eldritch_mode = false
 short_mode = false
+debug_mode = false
 
 ARGV.each do |arg|
   case arg
@@ -325,6 +305,9 @@ ARGV.each do |arg|
     next
   when '--short'
     short_mode = true
+    next
+  when '--debug'
+    debug_mode = true
     next
   end
 
@@ -410,7 +393,11 @@ system_info = detect_system_info
 style = eldritch_mode ? :eldritch : nil
 brevity = short_mode ? :short : nil
 max_completion_tokens = short_mode ? 500 : nil
-answer = OpenAi.new(model: model_name, max_completion_tokens: max_completion_tokens).chat(
+answer = OpenAi.new(
+  model: model_name,
+  max_completion_tokens: max_completion_tokens,
+  debug: debug_mode
+).chat(
   question,
   system_info: system_info,
   style: style,
