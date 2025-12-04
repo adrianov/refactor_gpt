@@ -140,7 +140,7 @@ class OpenAi
     return {} unless File.exist?(env_file_path)
 
     File.foreach(env_file_path).with_object({}) do |line, env_vars|
-      key, value = line.split('=')
+      key, value = line.split('=', 2)
       next unless key && value
 
       env_vars[key.strip] = value.strip
@@ -230,6 +230,60 @@ rescue StandardError
   ''
 end
 
+def load_history_context
+  candidates = []
+
+  # zsh extended history (with timestamps etc.)
+  zsh_histfile = ENV['HISTFILE'] || File.join(Dir.home, '.zsh_history')
+  candidates << zsh_histfile if zsh_histfile && !zsh_histfile.empty?
+
+  # bash history
+  bash_histfile = ENV['HISTFILE'] || File.join(Dir.home, '.bash_history')
+  candidates << bash_histfile if bash_histfile && !bash_histfile.empty?
+
+  candidates.uniq!
+
+  history_lines = []
+
+  candidates.each do |history_file|
+    next unless File.file?(history_file)
+
+    begin
+      # Read file contents as UTF-8, replace invalid bytes
+      File.open(history_file, "r:bom|utf-8") do |f|
+        f.each_line(chomp: true) do |line|
+          begin
+            safe_line = line.dup
+            unless safe_line.valid_encoding?
+              safe_line = safe_line.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+            end
+            # Ensure final string is valid UTF-8
+            safe_line = safe_line.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+            history_lines << safe_line
+          rescue Encoding::InvalidByteSequenceError, Encoding::UndefinedConversionError, ArgumentError
+            # Skip lines that are still invalid after attempted fixes
+            next
+          end
+        end
+      end
+    rescue SystemCallError
+      next
+    end
+  end
+
+  return '' if history_lines.empty?
+
+  ask_lines = history_lines.grep(/ask/).last(5)
+  return '' if ask_lines.empty?
+
+  [
+    'Recent ask-related shell history (approximation of `history | grep ask | tail -n 5`):',
+    ask_lines.map { |l| "- #{l}" }.join("\n")
+  ].join("\n")
+rescue SystemCallError
+  ''
+end
+
 base_dir = Dir.pwd
 question_parts = []
 file_snippets = []
@@ -273,6 +327,15 @@ if question_parts.empty?
 end
 
 question = question_parts.join(' ')
+history_context = load_history_context
+unless history_context.empty?
+  question = [
+    question,
+    '',
+    history_context
+  ].join("\n")
+end
+
 unless file_snippets.empty?
   question = [
     question,
