@@ -7,10 +7,10 @@ require 'ruby-progressbar'
 
 # Class to interact with OpenAI API
 class OpenAi
-  def initialize
+  def initialize(model: 'gpt-5.1')
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = 'gpt-5.1'
+    @model = model
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -21,12 +21,27 @@ class OpenAi
         'Content-Type' => 'application/json',
         'Authorization' => "Bearer #{@api_key}"
       },
-      body: Oj.dump({ model: @model, messages: prompts }, mode: :compat),
+      body: Oj.dump(
+        {
+          model: @model,
+          messages: prompts
+        },
+        mode: :compat
+      ),
       read_timeout: 100
     )
-    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
+    handle_http_error(response) unless response.status == 200
+    answer = Oj.load(response.body)
+               .dig('choices', 0, 'message', 'content')
     handle_missing_answer(response) if answer.nil? || answer.empty?
     answer
+  rescue Excon::Error => e
+    warn "HTTP request failed: #{e.class} - #{e.message}"
+    exit 1
+  rescue Oj::ParseError => e
+    warn "Failed to parse JSON response: #{e.message}"
+    warn response.body if defined?(response) && response&.body
+    exit 1
   end
 
   # Method to generate grouped git add/commit commands based on git status and diff
@@ -102,9 +117,9 @@ class OpenAi
     HEREDOC
 
     raw = ask([
-      { role: 'system', content: system_instruction },
-      { role: 'user', content: user_content }
-    ])
+                { role: 'system', content: system_instruction },
+                { role: 'user', content: user_content }
+              ])
 
     # Strip possible markdown fences before parsing JSON
     json_str = raw.gsub(/^```.*\n?/, '').gsub(/```$/, '').strip
@@ -120,19 +135,24 @@ class OpenAi
   def fetch_env(key, default = nil)
     @env_vars ||= load_env_vars
     value = @env_vars.fetch(key, ENV[key] || default)
-    if value.nil?
-      puts "Missing required environment variable: #{key}. Please add it to the .env file."
-      exit 1
-    end
-    value
+    return value unless value.nil?
+
+    warn(
+      "Missing required environment variable: #{key}. " \
+      'Please add it to the .env file.'
+    )
+    exit 1
   end
 
   # Method to load environment variables from a file
   def load_env_vars
-    env_file = File.join(File.dirname(__FILE__), '.env')
-    return {} unless File.exist?(env_file)
+    env_file_path = File.join(File.dirname(__FILE__), '.env')
+    return {} unless File.exist?(env_file_path)
 
-    File.foreach(env_file).with_object({}) do |line, env_vars|
+    File.foreach(env_file_path).with_object({}) do |line, env_vars|
+      line = line.strip
+      next if line.empty? || line.start_with?('#')
+
       key, value = line.split('=', 2)
       next unless key && value
 
@@ -142,20 +162,22 @@ class OpenAi
 
   # Method to handle missing answers in the response
   def handle_missing_answer(response)
-    puts response.body
+    warn 'No answer returned from OpenAI API. Full response body:'
+    warn response.body
     exit 1
   end
 
-  # Method to read system information
-  def read_system_info
-    File.exist?('/etc/os-release') ? File.read('/etc/os-release') : ''
+  def handle_http_error(response)
+    warn "OpenAI API request failed with status #{response.status}"
+    warn response.body
+    exit 1
   end
 end
 
 def run_cmd(cmd)
   output = `#{cmd}`
   unless $CHILD_STATUS&.success?
-    puts "Command failed: #{cmd}"
+    warn "Command failed: #{cmd}"
     exit 1
   end
   output
