@@ -303,7 +303,7 @@ commits.each_with_index do |commit, idx|
   puts
 end
 
-puts 'Do you want to run these git add/commit commands? (y/n)'
+puts 'Do you want to run these git add/commit commands? (y/N)'
 answer = STDIN.gets.to_s.chomp.downcase
 
 unless answer == 'y'
@@ -325,4 +325,14 @@ commits.each do |commit|
   commit_cmd = "git commit -m #{Shellwords.escape(commit_msg)}"
   puts "Running: #{commit_cmd}"
   system(commit_cmd)
+end
+
+puts 'Do you want to push? (y/N)'
+push_answer = STDIN.gets.to_s.chomp.downcase
+
+if push_answer == 'y'
+  puts 'Running: git push'
+  system('git push')
+else
+  puts 'Changes committed but not pushed.'
 end
