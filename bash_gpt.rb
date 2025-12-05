@@ -57,10 +57,10 @@ end
 
 # Class to interact with OpenAI API
 class OpenAi
-  def initialize(debug: false)
+  def initialize(model: 'gpt-5.1', debug: false)
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = 'gpt-5.1'
+    @model = model
     @debug = debug
   end
 
@@ -156,25 +156,29 @@ class OpenAi
   end
 end
 
-# Parse arguments for debug mode
+# Parse arguments for debug and search modes
 debug_mode = false
+search_mode = false
 user_instruction_parts = []
 
 ARGV.each do |arg|
   case arg
   when '--debug' then debug_mode = true
                       next
+  when '--search' then search_mode = true
+                       next
   end
   user_instruction_parts << arg
 end
 
 if user_instruction_parts.empty?
-  puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] \"What to do\""
+  puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] [--search] \"What to do\""
   exit
 end
 
 user_instruction = user_instruction_parts.join(' ')
-bash_command = OpenAi.new(debug: debug_mode).bash_command(user_instruction)
+model = search_mode ? 'gpt-4o-search-preview' : 'gpt-5.1'
+bash_command = OpenAi.new(model: model, debug: debug_mode).bash_command(user_instruction)
 
 safe_commands = %w[grep ag ls df cat less head tail sed awk tr uniq wc cut]
 
