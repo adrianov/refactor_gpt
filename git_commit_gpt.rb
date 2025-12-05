@@ -3,6 +3,7 @@ require 'excon'
 require 'oj'
 require 'shellwords'
 require 'ruby-progressbar'
+require 'colorize'
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -35,10 +36,10 @@ class OpenAi
     handle_missing_answer(response) if answer.nil? || answer.empty?
     answer
   rescue Excon::Error => e
-    warn "HTTP request failed: #{e.class} - #{e.message}"
+    warn "HTTP request failed: #{e.class} - #{e.message}".red
     exit 1
   rescue Oj::ParseError => e
-    warn "Failed to parse JSON response: #{e.message}"
+    warn "Failed to parse JSON response: #{e.message}".red
     warn response.body if defined?(response) && response&.body
     exit 1
   end
@@ -126,7 +127,7 @@ class OpenAi
     json_str = raw.gsub(/^```.*\n?/, '').gsub(/```$/, '').strip
     Oj.load(json_str)
   rescue Oj::ParseError
-    puts "Failed to parse model response as JSON. Raw response:\n#{raw}"
+    puts "Failed to parse model response as JSON. Raw response:\n#{raw}".red
     exit 1
   end
 
@@ -140,7 +141,7 @@ class OpenAi
 
     warn(
       "Missing required environment variable: #{key}. " \
-      'Please add it to the .env file.'
+      'Please add it to the .env file.'.red
     )
     exit 1
   end
@@ -163,13 +164,13 @@ class OpenAi
 
   # Method to handle missing answers in the response
   def handle_missing_answer(response)
-    warn 'No answer returned from OpenAI API. Full response body:'
+    warn 'No answer returned from OpenAI API. Full response body:'.red
     warn response.body
     exit 1
   end
 
   def handle_http_error(response)
-    warn "OpenAI API request failed with status #{response.status}"
+    warn "OpenAI API request failed with status #{response.status}".red
     warn response.body
     exit 1
   end
@@ -178,7 +179,7 @@ end
 def run_cmd(cmd)
   output = `#{cmd}`
   unless $?.success?
-    warn "Command failed: #{cmd}"
+    warn "Command failed: #{cmd}".red
     exit 1
   end
   output
@@ -189,7 +190,7 @@ cli_hint = ARGV.join(' ').to_s.strip
 status_output = run_cmd('git status')
 
 if status_output.strip.empty?
-  puts 'No changes to commit.'
+  puts 'No changes to commit.'.yellow
   exit 0
 end
 
@@ -232,7 +233,7 @@ end
 PROGRESS_SPEED = load_progress_speed(PROGRESS_SPEED_FILE)
 
 progressbar = ProgressBar.create(
-  title: 'Planning commits',
+  title: 'Planning commits'.blue,
   total: total_size,
   format: '%t: |%B| %p%% %e',
   length: 60
@@ -279,36 +280,36 @@ commits = plan['commits'] || []
 warnings = plan['warnings'] || []
 
 if commits.empty?
-  puts 'No commits suggested by the model.'
+  puts 'No commits suggested by the model.'.yellow
   exit 0
 end
 
 unless warnings.empty?
-  puts "Warnings:\n\n"
+  puts "Warnings:\n\n".yellow
   warnings.each do |warning|
     file = warning['file'].to_s
     description = warning['description'].to_s
     probability = warning['probability']
     probability_str = probability.nil? ? 'n/a' : probability.to_s
-    puts "Warning in #{file}: #{description} (probability: #{probability_str})"
+    puts "Warning in #{file}: #{description} (probability: #{probability_str})".yellow
   end
   puts
 end
 
-puts "Planned commits:\n\n"
+puts "Planned commits:\n\n".green
 commits.each_with_index do |commit, idx|
-  puts "Commit ##{idx + 1}: #{commit['message']}"
+  puts "Commit ##{idx + 1}: #{commit['message']}".cyan
   Array(commit['files']).each do |file|
-    puts "  - #{file}"
+    puts "  - #{file}".light_blue
   end
   puts
 end
 
-puts 'Do you want to run these git add/commit commands? (y/N)'
+puts 'Do you want to run these git add/commit commands? (y/N)'.magenta
 answer = STDIN.gets.to_s.chomp.downcase
 
 unless answer == 'y'
-  puts 'Commands not executed.'
+  puts 'Commands not executed.'.yellow
   exit 0
 end
 
@@ -317,23 +318,23 @@ commits.each do |commit|
   next if files.empty?
 
   add_cmd = ['git', 'add', *files].map { |p| Shellwords.escape(p) }.join(' ')
-  puts "Running: #{add_cmd}"
+  puts "Running: #{add_cmd}".green
   system(add_cmd)
 
   commit_msg = commit['message'].to_s.strip
   next if commit_msg.empty?
 
   commit_cmd = "git commit -m #{Shellwords.escape(commit_msg)}"
-  puts "Running: #{commit_cmd}"
+  puts "Running: #{commit_cmd}".green
   system(commit_cmd)
 end
 
-puts 'Do you want to push? (y/N)'
+puts 'Do you want to push? (y/N)'.magenta
 push_answer = STDIN.gets.to_s.chomp.downcase
 
 if push_answer == 'y'
-  puts 'Running: git push'
+  puts 'Running: git push'.green
   system('git push')
 else
-  puts 'Changes committed but not pushed.'
+  puts 'Changes committed but not pushed.'.yellow
 end
