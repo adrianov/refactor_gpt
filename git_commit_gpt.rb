@@ -2,7 +2,6 @@
 require 'excon'
 require 'oj'
 require 'shellwords'
-require 'English'
 require 'ruby-progressbar'
 
 # Class to interact with OpenAI API
@@ -176,7 +175,7 @@ end
 
 def run_cmd(cmd)
   output = `#{cmd}`
-  unless $CHILD_STATUS&.success?
+  unless $?.success?
     warn "Command failed: #{cmd}"
     exit 1
   end
