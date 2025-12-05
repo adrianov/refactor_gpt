@@ -101,6 +101,11 @@ class OpenAi
     system_info = SystemInfo.to_s
     current_directory = Dir.pwd
 
+    # Get directory listing, limit to 50 entries with '...' if more
+    entries = Dir.entries(current_directory)
+    entries = entries[0..48] + ['...'] if entries.length > 50
+    directory_listing = entries.join("\n")
+
     system_instruction = <<~HEREDOC
       Generate a bash command to accomplish the user's request.
       Return the command only.
@@ -112,7 +117,7 @@ class OpenAi
       #{current_directory}
 
       Directory listing:
-      #{Dir.entries(current_directory)}
+      #{directory_listing}
     HEREDOC
 
     ask([{ role: 'system', content: system_instruction },
