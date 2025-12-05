@@ -233,7 +233,7 @@ end
 PROGRESS_SPEED = load_progress_speed(PROGRESS_SPEED_FILE)
 
 progressbar = ProgressBar.create(
-  title: 'Planning commits'.blue,
+  title: 'Planning commits'.white.bold,
   total: total_size,
   format: '%t: |%B| %p%% %e',
   length: 60
@@ -298,14 +298,14 @@ end
 
 puts "Planned commits:\n\n".green
 commits.each_with_index do |commit, idx|
-  puts "Commit ##{idx + 1}: #{commit['message']}".cyan
+  puts "Commit ##{idx + 1}: #{commit['message']}".white.bold
   Array(commit['files']).each do |file|
-    puts "  - #{file}".light_blue
+    puts "  - #{file}".white.bold
   end
   puts
 end
 
-puts 'Do you want to run these git add/commit commands? (y/N)'.magenta
+puts 'Do you want to run these git add/commit commands? (y/N)'.white.bold
 answer = STDIN.gets.to_s.chomp.downcase
 
 unless answer == 'y'
@@ -329,7 +329,7 @@ commits.each do |commit|
   system(commit_cmd)
 end
 
-puts 'Do you want to push? (y/N)'.magenta
+puts 'Do you want to push? (y/N)'.white.bold
 push_answer = STDIN.gets.to_s.chomp.downcase
 
 if push_answer == 'y'
