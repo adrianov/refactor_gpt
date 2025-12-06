@@ -22,17 +22,21 @@ class SystemInfo
                 else ''
                 end
 
-      desktop = case
-                when !ENV['XDG_CURRENT_DESKTOP'].to_s.empty? then ENV['XDG_CURRENT_DESKTOP'].to_s
-                when !ENV['DESKTOP_SESSION'].to_s.empty? then ENV['DESKTOP_SESSION'].to_s
-                when ENV['GNOME_DESKTOP_SESSION_ID'] then 'GNOME'
-                when ENV['KDE_FULL_SESSION'] == 'true' then 'KDE'
-                else ''
+      desktop = if !ENV['XDG_CURRENT_DESKTOP'].to_s.empty?
+                  ENV['XDG_CURRENT_DESKTOP'].to_s
+                elsif !ENV['DESKTOP_SESSION'].to_s.empty?
+                  ENV['DESKTOP_SESSION'].to_s
+                elsif ENV['GNOME_DESKTOP_SESSION_ID']
+                  'GNOME'
+                elsif ENV['KDE_FULL_SESSION'] == 'true'
+                  'KDE'
+                else
+                  ''
                 end
 
-      "OS: #{platform}" + 
-        (version.empty? ? "" : ", Version: #{version}") + 
-        (desktop.empty? ? "" : ", Desktop: #{desktop}")
+      "OS: #{platform}" +
+        (version.empty? ? '' : ", Version: #{version}") +
+        (desktop.empty? ? '' : ", Desktop: #{desktop}")
     rescue StandardError
       ''
     end
@@ -42,15 +46,23 @@ end
 # Utility module for common operations
 module Utility
   def self.parse_arguments(base_dir)
-    question_parts, file_snippets = [], []
-    search_mode, eldritch_mode, short_mode, debug_mode = false, false, false, false
+    question_parts = []
+    file_snippets = []
+    search_mode = false
+    eldritch_mode = false
+    short_mode = false
+    debug_mode = false
 
     ARGV.each do |arg|
       case arg
-      when '--search' then search_mode = true; next
-      when '--eldritch' then eldritch_mode = true; next
-      when '--short' then short_mode = true; next
-      when '--debug' then debug_mode = true; next
+      when '--search' then search_mode = true
+                           next
+      when '--eldritch' then eldritch_mode = true
+                             next
+      when '--short' then short_mode = true
+                          next
+      when '--debug' then debug_mode = true
+                          next
       end
 
       path = File.expand_path(arg, base_dir)
@@ -73,12 +85,13 @@ module Utility
       question_parts << input.strip
     end
 
-    { question_parts: question_parts, file_snippets: file_snippets, search_mode: search_mode, 
+    { question_parts: question_parts, file_snippets: file_snippets, search_mode: search_mode,
       eldritch_mode: eldritch_mode, short_mode: short_mode, debug_mode: debug_mode }
   end
 
   def self.build_question(question_parts, file_snippets)
     return question_parts.join(' ') if file_snippets.empty?
+
     [question_parts.join(' '), '', 'Included files:', file_snippets.join("\n\n---\n\n")].join("\n")
   end
 
@@ -88,7 +101,12 @@ module Utility
 
   def self.display_answer(answer)
     return puts answer unless system('command -v glow >/dev/null 2>&1')
-    IO.popen(['glow', '--width', '100', '-'], 'w') do |io|
+
+    # Check if answer contains URLs
+    has_urls = answer.match?(%r{https?://[^\s]+})
+    width = has_urls ? '0' : '100'
+
+    IO.popen(['glow', '--width', width, '-'], 'w') do |io|
       answer.each_line { |line| io.write(line.sub(/ +$/, '')) }
     end
   end
@@ -119,6 +137,7 @@ class ProgressManager
         progress = [(elapsed_time * @progress_speed).round, @total_size].min
         @progressbar.progress = progress
         break if progress >= @total_size || @progressbar.finished?
+
         sleep 0.1
       end
     end
@@ -132,6 +151,7 @@ class ProgressManager
   def save_speed(answer_size, elapsed_time)
     speed = answer_size.positive? && elapsed_time.positive? ? answer_size / elapsed_time : 0
     return unless speed.positive?
+
     File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s)
   rescue SystemCallError
     # ignore persistence errors
@@ -141,7 +161,7 @@ class ProgressManager
 
   def load_progress_speed
     File.read(PROGRESS_SPEED_FILE).to_f
-  rescue
+  rescue StandardError
     DEFAULT_PROGRESS_SPEED
   end
 end
@@ -165,8 +185,11 @@ class OpenAi
     if @debug
       warn '--- OpenAI request payload (Ruby hash) ---'
       pretty_messages = body_hash[:messages].map do |msg|
-        msg[:role] == 'system' && msg[:content].is_a?(String) ? 
-          { role: msg[:role], content_lines: msg[:content].split("\n") } : msg
+        if msg[:role] == 'system' && msg[:content].is_a?(String)
+          { role: msg[:role], content_lines: msg[:content].split("\n") }
+        else
+          msg
+        end
       end
       warn Oj.dump(body_hash.merge(messages: pretty_messages), mode: :compat, indent: 2)
       warn '--- end payload ---'
@@ -193,15 +216,15 @@ class OpenAi
 
   def chat(question, style: nil, brevity: nil)
     style_instruction = case style
-      when :eldritch then 'Answer in a Lovecraftian, eldritch horror tone'
-      else <<~HEREDOC
-        - Answer in clear, concise terms, prioritizing Ruby concepts and tooling.
-        - Prefer idiomatic Ruby style in all code examples.
-        - Use Markdown formatting (headings, lists, fenced code blocks) where helpful.
-        - Default code fences to Ruby unless another language is clearly required.
-        - Always respond using Markdown formatting, even for very short answers.
-      HEREDOC
-    end
+                        when :eldritch then 'Answer in a Lovecraftian, eldritch horror tone'
+                        else <<~HEREDOC
+                          - Answer in clear, concise terms, prioritizing Ruby concepts and tooling.
+                          - Prefer idiomatic Ruby style in all code examples.
+                          - Use Markdown formatting (headings, lists, fenced code blocks) where helpful.
+                          - Default code fences to Ruby unless another language is clearly required.
+                          - Always respond using Markdown formatting, even for very short answers.
+                        HEREDOC
+                        end
 
     if brevity == :short
       style_instruction += <<~HEREDOC
@@ -267,6 +290,7 @@ class OpenAi
     File.foreach(env_file_path).with_object({}) do |line, env_vars|
       key, value = line.split('=', 2)
       next unless key && value
+
       env_vars[key.strip] = value.strip
     end
   end
@@ -287,10 +311,10 @@ end
 # Main execution logic
 def main
   args = Utility.parse_arguments(Dir.pwd)
-  
+
   progress_manager = ProgressManager.new(Utility.calculate_total_size(args[:file_snippets]))
   progress_manager.start
-  
+
   start_time = Time.now
   answer = OpenAi.new(
     model: args[:search_mode] ? 'gpt-4o-search-preview' : 'gpt-5.1',
@@ -301,7 +325,7 @@ def main
     style: args[:eldritch_mode] ? :eldritch : nil,
     brevity: args[:short_mode] ? :short : nil
   )
-  
+
   progress_manager.finish
   progress_manager.save_speed(answer.to_s.bytesize, Time.now - start_time)
   Utility.display_answer(answer)
