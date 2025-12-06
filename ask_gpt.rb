@@ -255,9 +255,18 @@ class OpenAi
       - If there are multiple reasonable approaches, mention the most common one first.
 
       Translations:
-      - When the user asks for word translations (in any language), also:
-        - Provide phonetic transcription (IPA if possible).
-        - Briefly mention the word origin/etymology.
+      - Default directions:
+        - Russian → English
+        - English → Russian
+      - If direction is not specified, detect source language and use the defaults above.
+      - If the user specifies another target language or direction, follow that instead.
+      - For word or short-phrase translations:
+        - Give translation.
+        - Add phonetic transcription (IPA if possible).
+        - Briefly note origin/etymology when it is well-known or easy to provide.
+      - If the user asks for "both" or "all" between Russian and English, give:
+        - Russian → English
+        - English → Russian
 
       Ruby gems:
       - When you recommend Ruby gems, always include a GitHub repository URL for each gem
