@@ -7,27 +7,38 @@ require 'colorize'
 
 # Class to interact with OpenAI API
 class OpenAi
-  def initialize(model: 'gpt-5.1')
+  def initialize(model: 'gpt-5.1', debug: false)
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
     @model = model
+    @debug = debug
   end
 
   # Method to send prompts to OpenAI and get a response
   def ask(prompts)
+    body_hash = { model: @model, messages: prompts }
+    body_json = Oj.dump(body_hash, mode: :compat)
+
+    if @debug
+      warn '--- OpenAI request payload (Ruby hash) ---'
+      pretty_messages = body_hash[:messages].map do |msg|
+        if msg[:content].is_a?(String)
+          { role: msg[:role], content_lines: msg[:content].split("\n") }
+        else
+          msg
+        end
+      end
+      warn Oj.dump(body_hash.merge(messages: pretty_messages), mode: :compat, indent: 2)
+      warn '--- end payload ---'
+    end
+
     response = Excon.post(
       "#{@api_base_url}/chat/completions",
       headers: {
         'Content-Type' => 'application/json',
         'Authorization' => "Bearer #{@api_key}"
       },
-      body: Oj.dump(
-        {
-          model: @model,
-          messages: prompts
-        },
-        mode: :compat
-      ),
+      body: body_json,
       read_timeout: 100
     )
     handle_http_error(response) unless response.status == 200
@@ -96,27 +107,21 @@ class OpenAi
       Do not include any text outside of the JSON.
     HEREDOC
 
-    user_content = <<~HEREDOC
-      Here is the git status:
+    user_content_parts = []
 
-      #{status_output}
+    user_content_parts << "Here are hints or preferences from the user:\n\n#{cli_hint}\n" unless cli_hint.empty?
 
-      Here is the git diff for all changes:
+    user_content_parts += [
+      "Here is the git status:\n\n#{status_output}\n",
+      "Here is the git diff for all changes:\n\n#{diff_output}\n",
+      "Here are the last 5 git commit one-line messages (most recent first):\n\n#{recent_commits}\n"
+    ]
 
-      #{diff_output}
+    unless recent_commands.empty?
+      user_content_parts << "Here are the last 5 shell commands from the user's terminal history (most recent last):\n\n#{recent_commands}"
+    end
 
-      Here are optional hints or preferences from the user (may be empty):
-
-      #{cli_hint}
-
-      Here are the last 5 git commit one-line messages (most recent first):
-
-      #{recent_commits}
-
-      Here are the last 5 shell commands from the user's terminal history (most recent last, if available):
-
-      #{recent_commands}
-    HEREDOC
+    user_content = user_content_parts.join("\n")
 
     raw = ask([
                 { role: 'system', content: system_instruction },
@@ -185,7 +190,19 @@ def run_cmd(cmd)
   output
 end
 
-cli_hint = ARGV.join(' ').to_s.strip
+# Parse arguments for debug mode
+debug_mode = false
+cli_hint_parts = []
+
+ARGV.each do |arg|
+  case arg
+  when '--debug' then debug_mode = true
+                      next
+  end
+  cli_hint_parts << arg
+end
+
+cli_hint = cli_hint_parts.join(' ').to_s.strip
 
 status_output = run_cmd('git status')
 
@@ -252,7 +269,7 @@ end
 
 plan_raw = nil
 begin
-  plan_raw = OpenAi.new.commit_plan(
+  plan_raw = OpenAi.new(debug: debug_mode).commit_plan(
     status_output,
     diff_output,
     cli_hint,
