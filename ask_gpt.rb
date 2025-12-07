@@ -307,7 +307,7 @@ class OpenAiClient
       - If there are multiple reasonable approaches, mention the most common one first.
 
       Translations:
-      - Provide translations to Russian, English, French, German, and Spanish
+      - Provide translations to Russian, English, French, German, Spanish, and Italian
       - Follow user-specified language pairs when provided
       - For short phrases: include translation, phonetics, and brief etymology when relevant
 
