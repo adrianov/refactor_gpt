@@ -102,12 +102,16 @@ module Utility
   def self.display_answer(answer)
     return puts answer unless system('command -v glow >/dev/null 2>&1')
 
-    # Check if answer contains URLs
-    has_urls = answer.match?(%r{https?://[^\s]+})
-    width = has_urls ? '0' : '100'
+    # Find all URLs with markdown formatting and calculate width
+    urls = answer.scan(%r{\[.*?\]\(https?://[^)]+\)|https?://[^\s)]+})
+    width = urls.empty? ? '100' : [urls.map(&:length).max + 2, 100].max.to_s
+
+    # Clean up URLs and add newlines before markdown links
+    formatted_answer = answer.gsub(%r{\(\s*\n\s*(https?://[^)]+)\)}, '(\\1)').gsub(%r{(\[.*?\]\(https?://[^)]+\))},
+                                                                                   "\n\n\\1")
 
     IO.popen(['glow', '--width', width, '-'], 'w') do |io|
-      answer.each_line { |line| io.write(line.sub(/ +$/, '')) }
+      formatted_answer.each_line { |line| io.write(line.sub(/ +$/, '')) }
     end
   end
 end
