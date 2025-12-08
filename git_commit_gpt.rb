@@ -5,47 +5,25 @@ require 'shellwords'
 require 'ruby-progressbar'
 require 'colorize'
 
-# Class to interact with OpenAI API
 class OpenAi
-  def initialize(model: 'gpt-5.1', debug: false)
+  DEFAULT_MODEL = 'gpt-5.1'
+  REQUEST_TIMEOUT = 100
+  ENV_FILE_PATH = File.join(__dir__, '.env')
+
+  def initialize(model: DEFAULT_MODEL, debug: false)
     @api_base_url = fetch_env('OPENAI_BASE_URL')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
     @model = model
     @debug = debug
   end
 
-  # Method to send prompts to OpenAI and get a response
   def ask(prompts)
-    body_hash = { model: @model, messages: prompts }
-    body_json = Oj.dump(body_hash, mode: :compat)
+    body = build_request_body(prompts)
+    debug_request(body) if @debug
 
-    if @debug
-      warn '--- OpenAI request payload (Ruby hash) ---'
-      pretty_messages = body_hash[:messages].map do |msg|
-        if msg[:content].is_a?(String)
-          { role: msg[:role], content_lines: msg[:content].split("\n") }
-        else
-          msg
-        end
-      end
-      warn Oj.dump(body_hash.merge(messages: pretty_messages), mode: :compat, indent: 2)
-      warn '--- end payload ---'
-    end
-
-    response = Excon.post(
-      "#{@api_base_url}/chat/completions",
-      headers: {
-        'Content-Type' => 'application/json',
-        'Authorization' => "Bearer #{@api_key}"
-      },
-      body: body_json,
-      read_timeout: 100
-    )
-    handle_http_error(response) unless response.status == 200
-    answer = Oj.load(response.body)
-               .dig('choices', 0, 'message', 'content')
-    handle_missing_answer(response) if answer.nil? || answer.empty?
-    answer
+    response = make_api_request(body)
+    handle_response_errors(response)
+    extract_answer(response)
   rescue Excon::Error => e
     warn "HTTP request failed: #{e.class} - #{e.message}".red
     exit 1
@@ -55,9 +33,100 @@ class OpenAi
     exit 1
   end
 
-  # Method to generate grouped git add/commit commands based on git status and diff
   def commit_plan(status_output, diff_output, cli_hint, recent_commits, recent_commands)
-    system_instruction = <<~HEREDOC
+    user_content = build_user_content(status_output, diff_output, cli_hint, recent_commits, recent_commands)
+    raw_response = ask([
+                         { role: 'system', content: system_instruction },
+                         { role: 'user', content: user_content }
+                       ])
+    parse_commit_plan_response(raw_response)
+  end
+
+  private
+
+  def build_request_body(messages)
+    { model: @model, messages: messages }
+  end
+
+  def debug_request(body)
+    warn '--- OpenAI request payload (Ruby hash) ---'
+    pretty_messages = body[:messages].map do |msg|
+      if msg[:role] == 'system' && msg[:content].is_a?(String)
+        { role: msg[:role], content_lines: msg[:content].split("\n") }
+      else
+        msg
+      end
+    end
+    warn Oj.dump(body.merge(messages: pretty_messages), mode: :compat, indent: 2)
+    warn '--- end payload ---'
+  end
+
+  def make_api_request(body)
+    Excon.post(
+      "#{@api_base_url}/chat/completions",
+      headers: { 'Content-Type' => 'application/json', 'Authorization' => "Bearer #{@api_key}" },
+      body: Oj.dump(body, mode: :compat),
+      read_timeout: REQUEST_TIMEOUT
+    )
+  end
+
+  def handle_response_errors(response)
+    return if response.status == 200
+
+    warn "OpenAI API request failed with status #{response.status}".red
+    warn response.body
+    exit 1
+  end
+
+  def extract_answer(response)
+    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
+    return answer unless answer.nil? || answer.empty?
+
+    warn 'No answer returned from OpenAI API. Full response body:'.red
+    warn response.body
+    exit 1
+  end
+
+  def build_user_content(status_output, diff_output, cli_hint, recent_commits, recent_commands)
+    content_parts = []
+
+    content_parts << "Here are hints or preferences from the user:\n\n#{cli_hint}\n" unless cli_hint.empty?
+
+    content_parts.concat([
+                           "Here is the git status:\n\n#{status_output}\n",
+                           "Here is the git diff for all changes:\n\n#{diff_output}\n",
+                           "Here are the last 5 git commit one-line messages (most recent first):\n\n#{recent_commits}\n"
+                         ])
+
+    unless recent_commands.empty?
+      content_parts << "Here are the last 5 shell commands from the user's terminal history (most recent last):\n\n#{recent_commands}"
+    end
+
+    content_parts.join("\n")
+  end
+
+  def parse_commit_plan_response(raw_response)
+    json_str = raw_response.gsub(/^```.*\n?/, '').gsub(/```$/, '').strip
+    Oj.load(json_str)
+  rescue Oj::ParseError
+    puts "Failed to parse model response as JSON. Raw response:\n#{raw_response}".red
+    exit 1
+  end
+
+  def load_agents_file
+    agents_file = File.join(Dir.pwd, 'AGENTS.md')
+    return '' unless File.exist?(agents_file)
+
+    File.read(agents_file)
+  rescue SystemCallError
+    ''
+  end
+
+  def system_instruction
+    agents_content = load_agents_file
+    has_agents = !agents_content.empty?
+
+    base_instruction = <<~HEREDOC
       You are a tool that groups changed files into meaningful git commits.
 
       Input:
@@ -66,6 +135,11 @@ class OpenAi
       - optional user-provided hints or preferences from the command line
       - last 5 git commit one-line messages to help you match existing style
       - last 5 shell commands from the user's terminal history to give you extra context
+    HEREDOC
+
+    base_instruction << "- Ruby development guidelines from AGENTS.md\n" if has_agents
+
+    base_instruction << <<~HEREDOC
 
       Task:
       - Analyze the status and diff and infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
@@ -79,11 +153,22 @@ class OpenAi
       - Every changed file from the status output must appear in exactly one group.
       - Use only relative file paths exactly as they appear in the status output (after the status flags).
       - Prefer a small number of coherent commits over many tiny ones.
-      - Additionally, carefully review the provided diffs for potential errors or issues (such as obvious bugs, suspicious logic, or likely regressions).
+      - Additionally, carefully review the provided diffs for potential errors or issues (such as obvious bugs, suspicious logic, or likely regressions)#{has_agents ? ' based on the development guidelines provided in AGENTS.md' : ''}.
       - If you detect any potential error in a file or diff hunk, include a warning entry describing:
         - the affected file path,
         - a short description of the possible error,
         - a probability (0.0–1.0) indicating how sure you are that this is a real issue.
+    HEREDOC
+
+    if has_agents
+      base_instruction << <<~HEREDOC
+
+        AGENTS.md content (development guidelines to follow):
+        #{agents_content}
+      HEREDOC
+    end
+
+    base_instruction << <<~HEREDOC
 
       Output format (strict JSON):
       {
@@ -107,56 +192,22 @@ class OpenAi
       Do not include any text outside of the JSON.
     HEREDOC
 
-    user_content_parts = []
-
-    user_content_parts << "Here are hints or preferences from the user:\n\n#{cli_hint}\n" unless cli_hint.empty?
-
-    user_content_parts += [
-      "Here is the git status:\n\n#{status_output}\n",
-      "Here is the git diff for all changes:\n\n#{diff_output}\n",
-      "Here are the last 5 git commit one-line messages (most recent first):\n\n#{recent_commits}\n"
-    ]
-
-    unless recent_commands.empty?
-      user_content_parts << "Here are the last 5 shell commands from the user's terminal history (most recent last):\n\n#{recent_commands}"
-    end
-
-    user_content = user_content_parts.join("\n")
-
-    raw = ask([
-                { role: 'system', content: system_instruction },
-                { role: 'user', content: user_content }
-              ])
-
-    # Strip possible markdown fences before parsing JSON
-    json_str = raw.gsub(/^```.*\n?/, '').gsub(/```$/, '').strip
-    Oj.load(json_str)
-  rescue Oj::ParseError
-    puts "Failed to parse model response as JSON. Raw response:\n#{raw}".red
-    exit 1
+    base_instruction
   end
 
-  private
-
-  # Method to fetch environment variables
   def fetch_env(key, default = nil)
     @env_vars ||= load_env_vars
     value = @env_vars.fetch(key, ENV[key] || default)
     return value unless value.nil?
 
-    warn(
-      "Missing required environment variable: #{key}. " \
-      'Please add it to the .env file.'.red
-    )
+    warn("Missing required environment variable: #{key}. Please add it to the .env file.".red)
     exit 1
   end
 
-  # Method to load environment variables from a file
   def load_env_vars
-    env_file_path = File.join(File.dirname(__FILE__), '.env')
-    return {} unless File.exist?(env_file_path)
+    return {} unless File.exist?(ENV_FILE_PATH)
 
-    File.foreach(env_file_path).with_object({}) do |line, env_vars|
+    File.foreach(ENV_FILE_PATH).with_object({}) do |line, env_vars|
       line = line.strip
       next if line.empty? || line.start_with?('#')
 
@@ -165,19 +216,6 @@ class OpenAi
 
       env_vars[key.strip] = value.strip
     end
-  end
-
-  # Method to handle missing answers in the response
-  def handle_missing_answer(response)
-    warn 'No answer returned from OpenAI API. Full response body:'.red
-    warn response.body
-    exit 1
-  end
-
-  def handle_http_error(response)
-    warn "OpenAI API request failed with status #{response.status}".red
-    warn response.body
-    exit 1
   end
 end
 
