@@ -282,7 +282,7 @@ recent_commands = begin
 end
 
 # Check if last command was git diff to avoid showing it twice
-last_command_was_git_diff = recent_commands.lines.last&.strip&.start_with?('git diff')
+last_command_was_git_diff = recent_commands.lines.last&.include?('git diff')
 
 unless last_command_was_git_diff
   puts "\nCurrent changes:\n".cyan
