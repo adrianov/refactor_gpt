@@ -148,7 +148,20 @@ class OpenAi
       - Check the current branch name (available in git status output) and recent commit messages for JIRA task references (patterns like PT-4668, ABC-123, etc.).
       - If a JIRA task reference is found in the branch name or recent commits, use the same reference format at the beginning of commit messages (e.g., "[PT-4668] type: short description").
       - For each group, produce:
-        - a one-line, conventional-style commit message (no trailing period),
+        - a one-line, conventional-style commit message (no trailing period) that describes the specific atomic change,
+        - For English: Focus on concrete actions: "add X", "fix Y", "remove Z", "update A", "refactor B", "extract C", "move D"
+        - For Russian: Use отглагольные существительные (verbal nouns) instead of infinitive verbs
+        - Instead of "добавить X" → "добавление X"
+        - Instead of "исправить Y" → "исправление Y"#{' '}
+        - Instead of "удалить Z" → "удаление Z"
+        - Instead of "обновить A" → "обновление A"
+        - Instead of "рефакторить B" → "рефакторинг B"
+        - Instead of "извлечь C" → "извлечение C"
+        - Instead of "переместить D" → "перемещение D"
+        - Avoid vague phrases like "стабилизация", "оптимизация", "улучшение", "обновление", "исправление проблем"
+        - Instead of "стабилизировать виджет" → "фиксация рендеринга виджета при прокрутке"
+        - Instead of "исправить время" → "фиксация расчета времени в тесте"
+        - Be specific about what changed and why
         - a list of file paths to include in that commit.
       - Every changed file from the status output must appear in exactly one group.
       - Use only relative file paths exactly as they appear in the status output (after the status flags).
@@ -219,13 +232,21 @@ class OpenAi
   end
 end
 
-def run_cmd(cmd)
-  output = `#{cmd}`
-  unless $?.success?
-    warn "Command failed: #{cmd}".red
-    exit 1
+def run_cmd(cmd, capture_output: true)
+  if capture_output
+    output = `#{cmd}`
+    unless $?.success?
+      warn "Command failed: #{cmd}".red
+      exit 1
+    end
+    output
+  else
+    system(cmd)
+    unless $?.success?
+      warn "Command failed: #{cmd}".red
+      exit 1
+    end
   end
-  output
 end
 
 # Parse arguments for debug mode
@@ -249,7 +270,16 @@ if status_output.strip.empty? || status_output.include?('nothing to commit') || 
   exit 0
 end
 
-diff_output = run_cmd('git diff')
+puts "\nCurrent changes:\n".cyan
+run_cmd('git diff', capture_output: false)
+puts "\n"
+
+# Capture diff output for OpenAI analysis
+diff_output = `git diff`
+unless $?.success?
+  warn 'Failed to capture diff for analysis'.red
+  exit 1
+end
 recent_commits = run_cmd('git log -5 --pretty=%s')
 recent_commands = begin
   history_file = ENV['HISTFILE'] || File.expand_path('~/.bash_history')
