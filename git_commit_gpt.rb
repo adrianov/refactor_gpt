@@ -244,7 +244,7 @@ cli_hint = cli_hint_parts.join(' ').to_s.strip
 
 status_output = run_cmd('git status')
 
-if status_output.strip.empty?
+if status_output.strip.empty? || status_output.include?('nothing to commit') || status_output.include?('working tree clean')
   puts 'No changes to commit.'.yellow
   exit 0
 end
