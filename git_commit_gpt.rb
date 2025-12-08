@@ -270,16 +270,6 @@ if status_output.strip.empty? || status_output.include?('nothing to commit') || 
   exit 0
 end
 
-puts "\nCurrent changes:\n".cyan
-run_cmd('git diff', capture_output: false)
-puts "\n"
-
-# Capture diff output for OpenAI analysis
-diff_output = `git diff`
-unless $?.success?
-  warn 'Failed to capture diff for analysis'.red
-  exit 1
-end
 recent_commits = run_cmd('git log -5 --pretty=%s')
 recent_commands = begin
   history_file = ENV['HISTFILE'] || File.expand_path('~/.bash_history')
@@ -289,6 +279,22 @@ recent_commands = begin
   else
     ''
   end
+end
+
+# Check if last command was git diff to avoid showing it twice
+last_command_was_git_diff = recent_commands.lines.last&.strip&.start_with?('git diff')
+
+unless last_command_was_git_diff
+  puts "\nCurrent changes:\n".cyan
+  run_cmd('git diff', capture_output: false)
+  puts "\n"
+end
+
+# Capture diff output for OpenAI analysis
+diff_output = `git diff`
+unless $?.success?
+  warn 'Failed to capture diff for analysis'.red
+  exit 1
 end
 
 combined_input = [
