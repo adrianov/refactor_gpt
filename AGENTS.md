@@ -118,8 +118,9 @@ When analyzing pull requests and fixing warnings, follow this systematic approac
 - **Performance issues**: Eliminate unnecessary process calls and optimize algorithms
 - **Logic errors**: Fix incorrect conditionals, loop bounds, and data handling
 - **Style issues**: Apply consistent formatting and naming conventions
-- **Single-use variables**: Inline variables that are used only once in changed code blocks to improve readability
+- **Single-use variables**: Inline variables used only once in changed code blocks to improve readability
 - **Long functions**: If a changed function exceeds 15 lines, consider breaking it into smaller functions when it makes the code easier to understand and follow
+- **Unnecessary operations**: Remove redundant method calls and operations when they don't affect the business logic
 
 ### Safety Considerations
 
