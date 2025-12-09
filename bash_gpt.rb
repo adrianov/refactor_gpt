@@ -4,6 +4,7 @@
 require_relative 'lib/openai_client'
 require 'shellwords'
 require 'rbconfig'
+require 'colorize'
 
 # Simple system information detection with memoization
 class SystemInfo
@@ -58,7 +59,7 @@ end
 # Class to interact with OpenAI API
 class OpenAi
   def initialize(model: 'gpt-5.1', debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug)
+    @client = OpenAiClient.new(model: model, debug: debug, progress_title: 'Generating command')
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -113,7 +114,7 @@ ARGV.each do |arg|
 end
 
 if user_instruction_parts.empty?
-  puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] [--search] \"What to do\""
+  puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] [--search] \"What to do\"".cyan
   exit
 end
 
@@ -123,16 +124,20 @@ bash_command = OpenAi.new(model: model, debug: debug_mode).bash_command(user_ins
 
 safe_commands = %w[grep ag ls df cat less head tail sed awk tr uniq wc cut]
 
-puts "Generated bash command:\n#{bash_command}"
+puts "Generated bash command:\n".cyan
+puts bash_command.green
+
 if safe_commands.any? { |cmd| bash_command.start_with?(cmd + ' ') || bash_command == cmd }
+  puts "Running: #{bash_command}".green
   system(bash_command)
 else
-  puts 'Do you want to run this command? (y/n)'
+  puts 'Do you want to run this command? (y/N)'.white
   answer = STDIN.gets.chomp.downcase
 
   if answer == 'y'
+    puts "Running: #{bash_command}".green
     system(bash_command)
   else
-    puts 'Command not executed.'
+    puts 'Command not executed.'.yellow
   end
 end
