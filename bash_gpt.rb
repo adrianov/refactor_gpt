@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
-require 'excon'
-require 'oj'
+# frozen_string_literal: true
+
+require_relative 'openai_client'
 require 'shellwords'
 require 'rbconfig'
 
@@ -58,42 +59,12 @@ end
 # Class to interact with OpenAI API
 class OpenAi
   def initialize(model: 'gpt-5.1', debug: false)
-    @api_base_url = fetch_env('OPENAI_BASE_URL')
-    @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = model
-    @debug = debug
+    @client = OpenAiClient.new(model: model, debug: debug)
   end
 
   # Method to send prompts to OpenAI and get a response
   def ask(prompts)
-    body_hash = { model: @model, messages: prompts }
-    body_json = Oj.dump(body_hash, mode: :compat)
-
-    if @debug
-      warn '--- OpenAI request payload (Ruby hash) ---'
-      pretty_messages = body_hash[:messages].map do |msg|
-        if msg[:role] == 'system' && msg[:content].is_a?(String)
-          { role: msg[:role], content_lines: msg[:content].split("\n") }
-        else
-          msg
-        end
-      end
-      warn Oj.dump(body_hash.merge(messages: pretty_messages), mode: :compat, indent: 2)
-      warn '--- end payload ---'
-    end
-
-    response = Excon.post(
-      "#{@api_base_url}/chat/completions",
-      headers: {
-        'Content-Type' => 'application/json',
-        'Authorization' => "Bearer #{@api_key}"
-      },
-      body: body_json,
-      read_timeout: 100
-    )
-    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
-    handle_missing_answer(response) if answer.nil? || answer.empty?
-    answer
+    @client.ask(prompts)
   end
 
   # Method to refactor code based on user instructions
@@ -123,36 +94,6 @@ class OpenAi
     ask([{ role: 'system', content: system_instruction },
          { role: 'user', content: user_instruction }])
       .gsub(/^```.*\n?/, '')
-  end
-
-  private
-
-  # Method to fetch environment variables
-  def fetch_env(key, default = nil)
-    @env_vars ||= load_env_vars
-    value = @env_vars.fetch(key, ENV[key] || default)
-    if value.nil?
-      puts "Missing required environment variable: #{key}. Please add it to the .env file."
-      exit
-    end
-    value
-  end
-
-  # Method to load environment variables from a file
-  def load_env_vars
-    env_file = File.join(File.dirname(__FILE__), '.env')
-    return {} unless File.exist?(env_file)
-
-    File.foreach(env_file).with_object({}) do |line, env_vars|
-      key, value = line.split('=')
-      env_vars[key.strip] = value.strip if key && value
-    end
-  end
-
-  # Method to handle missing answers in the response
-  def handle_missing_answer(response)
-    puts response.body
-    exit
   end
 end
 

@@ -1,49 +1,19 @@
 #!/usr/bin/env ruby
-require 'excon'
-require 'oj'
+# frozen_string_literal: true
+
+require_relative 'openai_client'
 require 'shellwords'
-require 'thread'
 require 'ruby-progressbar'
 
 # Class to interact with OpenAI API
 class OpenAi
   def initialize
-    @api_base_url = fetch_env('OPENAI_BASE_URL')
-    @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = 'gpt-5.1'
-    @temperature = 0
+    @client = OpenAiClient.new
   end
 
   # Method to send prompts to OpenAI and get a response
   def ask(prompts)
-    response = Excon.post(
-      "#{@api_base_url}/chat/completions",
-      headers: {
-        'Content-Type' => 'application/json',
-        'Authorization' => "Bearer #{@api_key}"
-      },
-      body: Oj.dump(
-        {
-          model: @model,
-          temperature: @temperature,
-          messages: prompts
-        },
-        mode: :compat
-      ),
-      read_timeout: 100
-    )
-    handle_http_error(response) unless response.status == 200
-    answer = Oj.load(response.body)
-               .dig('choices', 0, 'message', 'content')
-    handle_missing_answer(response) if answer.nil? || answer.empty?
-    answer
-  rescue Excon::Error => e
-    warn "HTTP request failed: #{e.class} - #{e.message}"
-    exit 1
-  rescue Oj::ParseError => e
-    warn "Failed to parse JSON response: #{e.message}"
-    warn response.body if defined?(response) && response&.body
-    exit 1
+    @client.ask(prompts)
   end
 
   # Method to refactor code based on user instructions
@@ -64,7 +34,7 @@ class OpenAi
       <full file content 2>
       ...
 
-      
+
     HEREDOC
     default_user_instruction = <<~HEREDOC
       You are refactoring the following code. Apply these rules unless the user
@@ -130,50 +100,6 @@ class OpenAi
         { role: 'user', content: prompt }
       ]
     )
-  end
-
-  private
-
-  # Method to fetch environment variables
-  def fetch_env(key, default = nil)
-    @env_vars ||= load_env_vars
-    value = @env_vars.fetch(key, ENV[key] || default)
-    return value unless value.nil?
-
-    warn(
-      "Missing required environment variable: #{key}. " \
-      'Please add it to the .env file.'
-    )
-    exit 1
-  end
-
-  # Method to load environment variables from a file
-  def load_env_vars
-    env_file_path = File.join(File.dirname(__FILE__), '.env')
-    return {} unless File.exist?(env_file_path)
-
-    File.foreach(env_file_path).with_object({}) do |line, env_vars|
-      line = line.strip
-      next if line.empty? || line.start_with?('#')
-
-      key, value = line.split('=', 2)
-      next unless key && value
-
-      env_vars[key.strip] = value.strip
-    end
-  end
-
-  # Method to handle missing answers in the response
-  def handle_missing_answer(response)
-    warn 'No answer returned from OpenAI API. Full response body:'
-    warn response.body
-    exit 1
-  end
-
-  def handle_http_error(response)
-    warn "OpenAI API request failed with status #{response.status}"
-    warn response.body
-    exit 1
   end
 end
 
@@ -275,17 +201,15 @@ def parse_files_from_response(response, expected_paths)
         buffer = []
       end
       current_path = line.sub('=== FILE: ', '').strip
-    else
-      buffer << line if current_path
+    elsif current_path
+      buffer << line
     end
   end
 
   result[current_path] = buffer.join if current_path
 
   # Fallback: if structure not respected, treat whole response as single file
-  if result.empty? && expected_paths.size == 1
-    result[expected_paths.first] = response
-  end
+  result[expected_paths.first] = response if result.empty? && expected_paths.size == 1
 
   result
 end
@@ -340,7 +264,7 @@ refactored_files.each do |path, content|
   end
 
   is_git_repository = system(
-    "git ls-files --error-unmatch " \
+    'git ls-files --error-unmatch ' \
     "#{Shellwords.shellescape(path)} > #{File::NULL} 2>&1"
   )
 

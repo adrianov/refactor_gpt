@@ -1,36 +1,20 @@
 #!/usr/bin/env ruby
-require 'excon'
-require 'oj'
+# frozen_string_literal: true
+
+require_relative 'openai_client'
 require 'shellwords'
 require 'ruby-progressbar'
 require 'colorize'
 
 class OpenAi
   DEFAULT_MODEL = 'gpt-5.1'
-  REQUEST_TIMEOUT = 100
-  ENV_FILE_PATH = File.join(__dir__, '.env')
 
   def initialize(model: DEFAULT_MODEL, debug: false)
-    @api_base_url = fetch_env('OPENAI_BASE_URL')
-    @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = model
-    @debug = debug
+    @client = OpenAiClient.new(model: model, debug: debug)
   end
 
   def ask(prompts)
-    body = build_request_body(prompts)
-    debug_request(body) if @debug
-
-    response = make_api_request(body)
-    handle_response_errors(response)
-    extract_answer(response)
-  rescue Excon::Error => e
-    warn "HTTP request failed: #{e.class} - #{e.message}".red
-    exit 1
-  rescue Oj::ParseError => e
-    warn "Failed to parse JSON response: #{e.message}".red
-    warn response.body if defined?(response) && response&.body
-    exit 1
+    @client.ask(prompts)
   end
 
   def commit_plan(status_output, diff_output, cli_hint, recent_commits, recent_commands)
@@ -43,49 +27,6 @@ class OpenAi
   end
 
   private
-
-  def build_request_body(messages)
-    { model: @model, messages: messages }
-  end
-
-  def debug_request(body)
-    warn '--- OpenAI request payload (Ruby hash) ---'
-    pretty_messages = body[:messages].map do |msg|
-      if msg[:role] == 'system' && msg[:content].is_a?(String)
-        { role: msg[:role], content_lines: msg[:content].split("\n") }
-      else
-        msg
-      end
-    end
-    warn Oj.dump(body.merge(messages: pretty_messages), mode: :compat, indent: 2)
-    warn '--- end payload ---'
-  end
-
-  def make_api_request(body)
-    Excon.post(
-      "#{@api_base_url}/chat/completions",
-      headers: { 'Content-Type' => 'application/json', 'Authorization' => "Bearer #{@api_key}" },
-      body: Oj.dump(body, mode: :compat),
-      read_timeout: REQUEST_TIMEOUT
-    )
-  end
-
-  def handle_response_errors(response)
-    return if response.status == 200
-
-    warn "OpenAI API request failed with status #{response.status}".red
-    warn response.body
-    exit 1
-  end
-
-  def extract_answer(response)
-    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
-    return answer unless answer.nil? || answer.empty?
-
-    warn 'No answer returned from OpenAI API. Full response body:'.red
-    warn response.body
-    exit 1
-  end
 
   def build_user_content(status_output, diff_output, cli_hint, recent_commits, recent_commands)
     content_parts = []
@@ -126,7 +67,9 @@ class OpenAi
     agents_content = load_agents_file
     has_agents = !agents_content.empty?
 
-    base_instruction = <<~HEREDOC
+    instruction_parts = []
+
+    instruction_parts << <<~HEREDOC
       You are a tool that groups changed files into meaningful git commits.
 
       Input:
@@ -137,14 +80,14 @@ class OpenAi
       - last 5 shell commands from the user's terminal history to give you extra context
     HEREDOC
 
-    base_instruction << "- Ruby development guidelines from AGENTS.md\n" if has_agents
+    instruction_parts << "- Ruby development guidelines from AGENTS.md\n" if has_agents
 
-    base_instruction << <<~HEREDOC
+    instruction_parts << <<~HEREDOC
 
       Task:
       - Analyze the status and diff and infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
       - Prefer commit messages that are consistent with the style of the provided recent commit messages.
-      - Respect and incorporate the user-provided hints when choosing commit messages, grouping files, or prioritizing certain changes, as long as this does not conflict with the actual diffs.
+      - Respect and incorporate user-provided hints when choosing commit messages, grouping files, or prioritizing certain changes, as long as this does not conflict with the actual diffs.
       - Check the current branch name (available in git status output) and recent commit messages for JIRA task references (patterns like PT-4668, ABC-123, etc.).
       - If a JIRA task reference is found in the branch name or recent commits, use the same reference format at the beginning of commit messages (e.g., "[PT-4668] type: short description").
       - For each group, produce:
@@ -174,14 +117,14 @@ class OpenAi
     HEREDOC
 
     if has_agents
-      base_instruction << <<~HEREDOC
+      instruction_parts << <<~HEREDOC
 
         AGENTS.md content (development guidelines to follow):
         #{agents_content}
       HEREDOC
     end
 
-    base_instruction << <<~HEREDOC
+    instruction_parts << <<~HEREDOC
 
       Output format (strict JSON):
       {
@@ -205,30 +148,7 @@ class OpenAi
       Do not include any text outside of the JSON.
     HEREDOC
 
-    base_instruction
-  end
-
-  def fetch_env(key, default = nil)
-    @env_vars ||= load_env_vars
-    value = @env_vars.fetch(key, ENV[key] || default)
-    return value unless value.nil?
-
-    warn("Missing required environment variable: #{key}. Please add it to the .env file.".red)
-    exit 1
-  end
-
-  def load_env_vars
-    return {} unless File.exist?(ENV_FILE_PATH)
-
-    File.foreach(ENV_FILE_PATH).with_object({}) do |line, env_vars|
-      line = line.strip
-      next if line.empty? || line.start_with?('#')
-
-      key, value = line.split('=', 2)
-      next unless key && value
-
-      env_vars[key.strip] = value.strip
-    end
+    instruction_parts.join
   end
 end
 

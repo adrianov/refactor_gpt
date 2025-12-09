@@ -1,36 +1,18 @@
 #!/usr/bin/env ruby
-require 'excon'
-require 'oj'
+# frozen_string_literal: true
+
+require_relative 'openai_client'
 require 'shellwords'
 
 # Class to interact with OpenAI API
 class OpenAi
   def initialize
-    @api_base_url = fetch_env('OPENAI_BASE_URL')
-    @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @model = 'gpt-5.1'
-    @temperature = 0
+    @client = OpenAiClient.new
   end
 
   # Method to send prompts to OpenAI and get a response
   def ask(prompts)
-    response = Excon.post(
-      "#{@api_base_url}/chat/completions",
-      headers: {
-        'Content-Type' => 'application/json',
-        'Authorization' => "Bearer #{@api_key}"
-      },
-      body: Oj.dump(
-        { model: @model, temperature: @temperature, messages: prompts },
-        mode: :compat
-      ),
-      read_timeout: 20
-    )
-
-    parsed_body = parse_response_body(response)
-    answer = parsed_body.dig('choices', 0, 'message', 'content')
-    handle_missing_answer(response) if answer.nil? || answer.empty?
-    answer
+    @client.ask(prompts)
   end
 
   # Method to refactor code based on user instructions
@@ -88,9 +70,9 @@ class OpenAi
     HEREDOC
 
     ask([
-      { role: 'system', content: system_instruction },
-      { role: 'user', content: user_instruction }
-    ]).gsub(/^```.*\n?/, '')
+          { role: 'system', content: system_instruction },
+          { role: 'user', content: user_instruction }
+        ]).gsub(/^```.*\n?/, '')
   end
 
   def interpret_ag_output(user_instruction, ag_output)
@@ -113,10 +95,10 @@ class OpenAi
     HEREDOC
 
     ask([
-      { role: 'system', content: interpretation_system_instruction },
-      { role: 'user',
-        content: "User question:\n#{user_instruction}\n\nag output:\n#{ag_output}" }
-    ])
+          { role: 'system', content: interpretation_system_instruction },
+          { role: 'user',
+            content: "User question:\n#{user_instruction}\n\nag output:\n#{ag_output}" }
+        ])
   end
 
   def list_code_file_keywords
@@ -143,56 +125,6 @@ class OpenAi
     code_files.flat_map do |file|
       file.scan(/[a-zA-Z]+/)
     end.uniq
-  end
-
-  # Method to fetch environment variables
-  def fetch_env(key, default = nil)
-    @env_vars ||= load_env_vars
-    value = @env_vars.fetch(key, ENV[key] || default)
-    if value.nil?
-      warn "Missing required environment variable: #{key}. Please add it to the .env file."
-      exit(1)
-    end
-    value
-  end
-
-  # Method to load environment variables from a file
-  def load_env_vars
-    env_file = File.join(File.dirname(__FILE__), '.env')
-    return {} unless File.exist?(env_file)
-
-    File.foreach(env_file).with_object({}) do |line, env_vars|
-      next if line.strip.empty? || line.lstrip.start_with?('#')
-
-      key, value = line.split('=', 2)
-      next unless key && value
-
-      env_vars[key.strip] = value.strip
-    end
-  end
-
-  # Method to handle missing answers in the response
-  def handle_missing_answer(response)
-    warn 'OpenAI API response did not contain an answer.'
-    warn "Status: #{response.status}"
-    warn "Body: #{response.body}"
-    exit(1)
-  end
-
-  private
-
-  def parse_response_body(response)
-    unless response.status.between?(200, 299)
-      warn "OpenAI API request failed with status #{response.status}"
-      warn "Body: #{response.body}"
-      exit(1)
-    end
-
-    Oj.load(response.body)
-  rescue Oj::ParseError => e
-    warn "Failed to parse OpenAI API response: #{e.message}"
-    warn "Raw body: #{response.body}"
-    exit(1)
   end
 end
 
@@ -249,4 +181,3 @@ if answer == 'y'
 else
   puts 'Command not executed.'
 end
-
