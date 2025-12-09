@@ -92,7 +92,12 @@ class OpenAiClient
   end
 
   def extract_answer(response)
-    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
+    parsed_response = Oj.load(response.body)
+    answer = parsed_response.dig('choices', 0, 'message', 'content')
+
+    # If content is empty or nil, try reasoning_content
+    answer = parsed_response.dig('choices', 0, 'message', 'reasoning_content') if answer.nil? || answer.empty?
+
     return answer unless answer.nil? || answer.empty?
 
     warn 'No answer returned from OpenAI API. Full response body:'
@@ -119,7 +124,7 @@ class OpenAiClient
     progress_speed = load_progress_speed
 
     # Calculate estimated time based on historical speed
-    estimated_time = progress_speed.positive? ? total_size / progress_speed : 30
+    progress_speed.positive? ? total_size / progress_speed : 30
 
     progressbar = ProgressBar.create(
       title: @progress_title,
@@ -163,24 +168,11 @@ class OpenAiClient
       progress_thread.kill
       progressbar.finish
 
-      # Save speed for next time with adjustment based on real vs estimated time
+      # Save speed for next time
       elapsed_time = Time.now - start_time
-      answer_size = answer.to_s.bytesize
-      current_speed = answer_size.positive? && elapsed_time.positive? ? answer_size / elapsed_time : 0
-
-      if current_speed.positive?
-        if estimated_time.positive?
-          # Use exponential moving average to smooth speed changes
-          # Weight the new speed more if it was more accurate (closer to estimated)
-          accuracy_ratio = [elapsed_time / estimated_time, estimated_time / elapsed_time].min
-          weight = accuracy_ratio.clamp(0.1, 0.9) # Higher weight for more accurate estimates
-          old_speed = load_progress_speed
-          new_speed = (old_speed * (1 - weight)) + (current_speed * weight)
-          save_progress_speed(new_speed)
-        else
-          # No estimate available, use current speed directly
-          save_progress_speed(current_speed)
-        end
+      if elapsed_time.positive?
+        real_speed = total_size / elapsed_time
+        save_progress_speed(real_speed)
       end
     end
 
