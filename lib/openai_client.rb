@@ -120,7 +120,7 @@ class OpenAiClient
   end
 
   def ask_with_progress(messages)
-    total_size = [messages.to_s.bytesize, 1000].max
+    total_size = [messages.to_s.bytesize, 6000].max
     progress_speed = load_progress_speed
 
     # Calculate estimated time based on historical speed
