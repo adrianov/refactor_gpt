@@ -189,7 +189,7 @@ end
 PROGRESS_SPEED = load_progress_speed(PROGRESS_SPEED_FILE)
 
 # Initialize progress bar
-progressbar = ProgressBar.create(
+ProgressBar.create(
   title: 'Refactoring',
   total: total_size,
   format: '%t: |%B| %p%% %e',
@@ -210,9 +210,8 @@ end
 
 raw_response = OpenAi.new.refactor(file_codes, user_instruction).to_s
 
-# Stop progress bar thread
-progressbar.finish unless progressbar.finished?
-progress_thread.join
+progress_thread.kill
+progressbar.finish
 
 end_time = Time.now
 
