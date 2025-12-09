@@ -7,15 +7,15 @@ require 'ruby-progressbar'
 
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
-  DEFAULT_MODEL = 'gpt-5.1'
+  DEFAULT_MODEL = 'glm-4.6'
   REQUEST_TIMEOUT = 100
   PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt').freeze
 
-  def initialize(model: DEFAULT_MODEL, debug: false, max_completion_tokens: nil, progress_title: nil)
+  def initialize(model: nil, debug: false, max_completion_tokens: nil, progress_title: nil)
     @api_base_url = fetch_env('OPENAI_BASE_URL', 'https://api.openai.com/v1')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
     @proxy_url = fetch_env('PROXY_URL', nil)
-    @model = model
+    @model = model || fetch_env('DEFAULT_MODEL', DEFAULT_MODEL)
     @debug = debug
     @max_completion_tokens = max_completion_tokens
     @progress_title = progress_title

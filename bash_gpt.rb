@@ -58,7 +58,7 @@ end
 
 # Class to interact with OpenAI API
 class OpenAi
-  def initialize(model: 'gpt-5.1', debug: false)
+  def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug, progress_title: 'Generating command')
   end
 

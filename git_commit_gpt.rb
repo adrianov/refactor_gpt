@@ -10,9 +10,7 @@ require 'colorize'
 class OpenAi
   include AgentsFileHandler
 
-  DEFAULT_MODEL = 'gpt-5.1'
-
-  def initialize(model: DEFAULT_MODEL, debug: false)
+  def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug, progress_title: 'Planning commits'.cyan)
   end
 

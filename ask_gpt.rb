@@ -131,10 +131,9 @@ end
 
 # OpenAI API client wrapper
 class AskGptClient
-  DEFAULT_MODEL = 'gpt-5.1'
   SEARCH_MODEL = 'gpt-4o-search-preview'
 
-  def initialize(model: DEFAULT_MODEL, max_completion_tokens: nil, debug: false)
+  def initialize(model: nil, max_completion_tokens: nil, debug: false)
     @model = model
     @max_completion_tokens = max_completion_tokens
     @debug = debug
@@ -233,7 +232,7 @@ class AskGptClient
   end
 
   def disable_search_mode
-    change_model(DEFAULT_MODEL)
+    change_model(nil)
   end
 
   def chat(question, style: nil, brevity: nil)
@@ -257,7 +256,7 @@ def main
   end
 
   client = AskGptClient.new(
-    model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : AskGptClient::DEFAULT_MODEL,
+    model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : nil,
     max_completion_tokens: args[:short_mode] ? 500 : nil,
     debug: args[:debug_mode]
   )
