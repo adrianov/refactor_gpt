@@ -10,7 +10,7 @@ class OpenAiClient
   REQUEST_TIMEOUT = 100
 
   def initialize(model: DEFAULT_MODEL, debug: false, max_completion_tokens: nil)
-    @api_base_url = fetch_env('OPENAI_BASE_URL')
+    @api_base_url = fetch_env('OPENAI_BASE_URL', 'https://api.openai.com/v1')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
     @proxy_url = fetch_env('PROXY_URL', nil)
     @model = model
@@ -100,12 +100,22 @@ class OpenAiClient
     value = @env_vars.fetch(key, ENV[key] || default)
     return value unless value.nil?
 
-    warn("Missing required environment variable: #{key}. Please add it to the .env file.")
-    exit 1
+    # Only require certain variables, make others optional
+    required_vars = ['OPENAI_ACCESS_TOKEN']
+    if required_vars.include?(key)
+      warn("Missing required environment variable: #{key}. Please add it to the .env file.")
+      exit 1
+    end
+    default
   end
 
   def load_env_vars
-    env_file_path = File.join(File.dirname(__FILE__), '.env')
+    # First try project root (one level up from lib/)
+    env_file_path = File.join(File.dirname(__dir__), '.env')
+
+    # Fallback to current directory if not found
+    env_file_path = File.join(Dir.pwd, '.env') unless File.exist?(env_file_path)
+
     return {} unless File.exist?(env_file_path)
 
     File.foreach(env_file_path).with_object({}) do |line, h|

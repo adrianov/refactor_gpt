@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative 'openai_client'
+require_relative 'lib/openai_client'
 require 'shellwords'
 
 # Class to interact with OpenAI API

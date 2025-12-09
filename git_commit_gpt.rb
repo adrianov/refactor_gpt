@@ -1,8 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative 'openai_client'
-require_relative 'agents_file_handler'
+require_relative 'lib/openai_client'
+require_relative 'lib/agents_file_handler'
 require 'shellwords'
 require 'ruby-progressbar'
 require 'colorize'
@@ -220,12 +220,12 @@ last_command_was_git_diff = recent_commands.lines.last&.include?('git diff')
 
 unless last_command_was_git_diff
   puts "\nCurrent changes:\n".cyan
-  run_cmd('git diff', capture_output: false)
+  run_cmd('git diff --cached', capture_output: false)
   puts "\n"
 end
 
 # Capture diff output for OpenAI analysis
-diff_output = `git diff`
+diff_output = `git diff --cached`
 unless $?.success?
   warn 'Failed to capture diff for analysis'.red
   exit 1

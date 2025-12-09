@@ -1,8 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative 'openai_client'
-require_relative 'agents_file_handler'
+require_relative 'lib/openai_client'
+require_relative 'lib/agents_file_handler'
 require 'shellwords'
 require 'ruby-progressbar'
 
