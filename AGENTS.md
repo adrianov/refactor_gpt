@@ -27,6 +27,7 @@ When working with this codebase, follow these refactoring principles:
 - Use shebang `#!/usr/bin/env ruby` at the top
 - Keep dependencies minimal
 - Follow existing error handling patterns
+- Prefer HEREDOC for multiline strings over string concatenation
 
 ### Comments
 - Preserve existing comments unless they refer to changed code
