@@ -132,19 +132,14 @@ end
 # OpenAI API client wrapper
 class AskGptClient
   DEFAULT_MODEL = 'gpt-5.1'
+  SEARCH_MODEL = 'gpt-4o-search-preview'
 
   def initialize(model: DEFAULT_MODEL, max_completion_tokens: nil, debug: false)
+    @model = model
+    @max_completion_tokens = max_completion_tokens
+    @debug = debug
     @client = OpenAiClient.new(model: model, max_completion_tokens: max_completion_tokens, debug: debug,
                                progress_title: 'Thinking')
-  end
-
-  def chat(question, style: nil, brevity: nil)
-    system_instr = build_system_instruction(style, brevity)
-    ask([{ role: 'system', content: system_instr }, { role: 'user', content: question }])
-  end
-
-  def ask(messages)
-    @client.ask(messages)
   end
 
   def build_system_message(style, brevity)
@@ -185,7 +180,7 @@ class AskGptClient
     <<~HEREDOC
       Answer in 1–2 short, direct phrases; be as brief as possible while still being correct and useful.
       Avoid lists, headings, or multi-sentence paragraphs unless absolutely necessary.
-      If a one-word answer would be fully correct and sufficient, answer with that single word.
+      If a one-word answer would be fully correct and sufficient, answer with that one word.
     HEREDOC
   end
 
@@ -220,6 +215,35 @@ class AskGptClient
         whenever such a public repository is known or can be reasonably inferred.
     HEREDOC
   end
+
+  def change_model(new_model)
+    return if @model == new_model
+
+    @model = new_model
+    @client = OpenAiClient.new(model: @model, max_completion_tokens: @max_completion_tokens, debug: @debug,
+                               progress_title: 'Thinking')
+  end
+
+  def search_mode?
+    @model == SEARCH_MODEL
+  end
+
+  def enable_search_mode
+    change_model(SEARCH_MODEL)
+  end
+
+  def disable_search_mode
+    change_model(DEFAULT_MODEL)
+  end
+
+  def chat(question, style: nil, brevity: nil)
+    system_instr = build_system_instruction(style, brevity)
+    ask([{ role: 'system', content: system_instr }, { role: 'user', content: question }])
+  end
+
+  def ask(messages)
+    @client.ask(messages)
+  end
 end
 
 # Main application
@@ -227,10 +251,13 @@ def main
   args = Utility.parse_args(Dir.pwd)
 
   # If no arguments and not piped input, show usage and start interactive mode
-  puts 'Enter your questions (empty line to exit):' if args[:question_parts].empty? && $stdin.tty?
+  if args[:question_parts].empty? && $stdin.tty?
+    puts 'Enter your questions (empty line to exit):'
+    puts 'Available commands: --search, --no-search'
+  end
 
   client = AskGptClient.new(
-    model: args[:search_mode] ? 'gpt-4o-search-preview' : 'gpt-5.1',
+    model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : AskGptClient::DEFAULT_MODEL,
     max_completion_tokens: args[:short_mode] ? 500 : nil,
     debug: args[:debug_mode]
   )
@@ -248,7 +275,17 @@ def main
       input = input.strip
       break if input.empty?
 
-      question = input
+      # Check for mode switches in dialog
+      if input == '--search'
+        client.enable_search_mode
+        question = '--search'
+      elsif input == '--no-search'
+        client.disable_search_mode
+        puts 'Switched to normal mode'
+        next
+      else
+        question = input
+      end
     else
       question = Utility.build_question(args[:question_parts], args[:file_snippets])
     end
