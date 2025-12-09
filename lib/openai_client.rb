@@ -118,6 +118,9 @@ class OpenAiClient
     total_size = [messages.to_s.bytesize, 1000].max
     progress_speed = load_progress_speed
 
+    # Calculate estimated time based on historical speed
+    estimated_time = progress_speed.positive? ? total_size / progress_speed : 30
+
     progressbar = ProgressBar.create(
       title: @progress_title,
       total: total_size,
@@ -129,9 +132,21 @@ class OpenAiClient
     progress_thread = Thread.new do
       loop do
         elapsed_time = Time.now - start_time
-        progress = [(elapsed_time * progress_speed).round, total_size].min
-        progressbar.progress = progress
-        break if progress >= total_size || progressbar.finished?
+        progress = (elapsed_time * progress_speed).round
+
+        # Allow progress to continue beyond 100%
+        if progress <= total_size
+          progressbar.progress = progress
+        else
+          # After reaching 100%, continue showing progress by cycling
+          cycles = (progress / total_size).to_i
+          remaining = progress % total_size
+          progressbar.progress = remaining
+          # Update title to show cycles
+          progressbar.title = "#{@progress_title} (#{cycles}x)"
+        end
+
+        break if progressbar.finished? && progress <= total_size
 
         sleep 0.1
       end
@@ -148,11 +163,19 @@ class OpenAiClient
       progress_thread.kill
       progressbar.finish
 
-      # Save speed for next time
+      # Save speed for next time with adjustment based on real vs estimated time
       elapsed_time = Time.now - start_time
       answer_size = answer.to_s.bytesize
       speed = answer_size.positive? && elapsed_time.positive? ? answer_size / elapsed_time : 0
-      save_progress_speed(speed) if speed.positive?
+
+      if speed.positive? && estimated_time.positive?
+        # Adjust speed by multiplying by real time / estimated time ratio
+        adjustment_factor = elapsed_time / estimated_time
+        adjusted_speed = speed * adjustment_factor
+        save_progress_speed(adjusted_speed)
+      elsif speed.positive?
+        save_progress_speed(speed)
+      end
     end
 
     answer
