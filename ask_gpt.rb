@@ -93,7 +93,12 @@ module Utility
   def self.build_question(parts, snippets)
     return parts.join(' ') if snippets.empty?
 
-    [parts.join(' '), '', 'Included files:', snippets.join("\n\n---\n\n")].join("\n")
+    <<~HEREDOC
+      #{parts.join(' ')}
+
+      Included files:
+      #{snippets.join("\n\n---\n\n")}
+    HEREDOC
   end
 
   def self.total_size(snippets)
@@ -198,7 +203,16 @@ class AskGptClient
 
     system_instr = base_instruction(style_instr)
     system_info = SystemInfo.to_s
-    system_info.empty? ? system_instr : [system_instr.strip, '', 'User environment:', system_info].join("\n")
+    if system_info.empty?
+      system_instr
+    else
+      <<~HEREDOC
+        #{system_instr.strip}
+
+        User environment:
+        #{system_info}
+      HEREDOC
+    end
   end
 
   def build_style_instruction(style)

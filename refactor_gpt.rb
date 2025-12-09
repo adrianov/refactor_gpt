@@ -26,25 +26,36 @@ class OpenAi
 
     system_instruction_parts = []
 
-    system_instruction_parts << "Return the complete refactored code module only. Strictly preserve existing\n" \
-      "comments unless implemented TODOs or changed code fragment business logic,\n" \
-      "if not asked otherwise. When making bug fixes or applying specific requested\n" \
-      "changes, keep the diff as small as reasonably possible in terms of changed\n" \
-      'lines.'
+    system_instruction_parts << <<~HEREDOC
+      Return the complete refactored code module only. Strictly preserve existing
+      comments unless implemented TODOs or changed code fragment business logic,
+      if not asked otherwise. When making bug fixes or applying specific requested
+      changes, keep the diff as small as reasonably possible in terms of changed
+      lines.
+    HEREDOC
 
     system_instruction_parts << 'Follow Ruby development guidelines from AGENTS.md.' if has_agents
 
-    system_instruction_parts << "\nWhen multiple files are provided, respond with the full content for each\n" \
-      "file in the following structure, in order:\n\n" \
-      "=== FILE: <relative-or-given-path-1>\n" \
-      "<full file content 1>\n" \
-      "=== FILE: <relative-or-given-path-2>\n" \
-      "<full file content 2>\n" \
-      "...\n\n"
+    system_instruction_parts << <<~HEREDOC
+
+      When multiple files are provided, respond with the full content for each
+      file in the following structure, in order:
+
+      === FILE: <relative-or-given-path-1>
+      <full file content 1>
+      === FILE: <relative-or-given-path-2>
+      <full file content 2>
+      ...
+
+    HEREDOC
 
     if has_agents
-      system_instruction_parts << "\nAGENTS.md content (development guidelines to follow):\n" \
-        "#{agents_content}\n\n"
+      system_instruction_parts << <<~HEREDOC
+
+        AGENTS.md content (development guidelines to follow):
+        #{agents_content}
+
+      HEREDOC
     end
 
     system_instruction = system_instruction_parts.join
@@ -102,9 +113,13 @@ class OpenAi
       "=== FILE: #{path}\n```\n#{code}\n```"
     end.join("\n\n")
 
-    prompt = (user_instruction || default_user_instruction) +
-             "\n\nYou may use some files only as context and leave them unchanged.\n\n" +
-             files_block
+    prompt = <<~HEREDOC
+      #{user_instruction || default_user_instruction}
+
+      You may use some files only as context and leave them unchanged.
+
+      #{files_block}
+    HEREDOC
 
     ask(
       [

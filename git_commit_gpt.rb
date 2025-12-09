@@ -34,16 +34,36 @@ class OpenAi
   def build_user_content(status_output, diff_output, cli_hint, recent_commits, recent_commands)
     content_parts = []
 
-    content_parts << "Here are hints or preferences from the user:\n\n#{cli_hint}\n" unless cli_hint.empty?
+    content_parts << <<~HEREDOC unless cli_hint.empty?
+      Here are hints or preferences from the user:
+
+      #{cli_hint}
+    HEREDOC
 
     content_parts.concat([
-                           "Here is the git status:\n\n#{status_output}\n",
-                           "Here is the git diff for all changes:\n\n#{diff_output}\n",
-                           "Here are the last 5 git commit one-line messages (most recent first):\n\n#{recent_commits}\n"
+                           <<~HEREDOC
+                               Here is the git status:
+
+                               #{status_output}
+                             HEREDOC,
+                             <<~HEREDOC
+                               Here is the git diff for all changes:
+
+                               #{diff_output}
+                             HEREDOC,
+                             <<~HEREDOC
+                               Here are the last 5 git commit one-line messages (most recent first):
+
+                               #{recent_commits}
+                           HEREDOC
                          ])
 
     unless recent_commands.empty?
-      content_parts << "Here are the last 5 shell commands from the user's terminal history (most recent last):\n\n#{recent_commands}"
+      content_parts << <<~HEREDOC
+        Here are the last 5 shell commands from the user's terminal history (most recent last):
+
+        #{recent_commands}
+      HEREDOC
     end
 
     content_parts.join("\n")

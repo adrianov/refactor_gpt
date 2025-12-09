@@ -37,10 +37,9 @@ class SystemInfo
 
       shell = detect_shell
 
-      "OS: #{platform}" +
-        (version.empty? ? '' : ", Version: #{version}") +
-        (desktop.empty? ? '' : ", Desktop: #{desktop}") +
-        (shell.empty? ? '' : ", Shell: #{shell}")
+      <<~HEREDOC
+        OS: #{platform}#{version.empty? ? '' : ", Version: #{version}"}#{desktop.empty? ? '' : ", Desktop: #{desktop}"}#{shell.empty? ? '' : ", Shell: #{shell}"}
+      HEREDOC
     rescue StandardError
       ''
     end
@@ -91,9 +90,10 @@ class OpenAi
       #{directory_listing}
     HEREDOC
 
-    ask([{ role: 'system', content: system_instruction },
-         { role: 'user', content: user_instruction }])
-      .gsub(/^```.*\n?/, '')
+    ask([
+          { role: 'system', content: system_instruction },
+          { role: 'user', content: user_instruction }
+        ]).gsub(/^```.*\n?/, '')
   end
 end
 

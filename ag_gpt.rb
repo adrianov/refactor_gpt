@@ -97,7 +97,14 @@ class OpenAi
     ask([
           { role: 'system', content: interpretation_system_instruction },
           { role: 'user',
-            content: "User question:\n#{user_instruction}\n\nag output:\n#{ag_output}" }
+            content: <<~HEREDOC
+              User question:
+              #{user_instruction}
+
+              ag output:
+              #{ag_output}
+            HEREDOC
+          }
         ])
   end
 
