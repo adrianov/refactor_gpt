@@ -2,11 +2,14 @@
 # frozen_string_literal: true
 
 require_relative 'openai_client'
+require_relative 'agents_file_handler'
 require 'shellwords'
 require 'ruby-progressbar'
 require 'colorize'
 
 class OpenAi
+  include AgentsFileHandler
+
   DEFAULT_MODEL = 'gpt-5.1'
 
   def initialize(model: DEFAULT_MODEL, debug: false)
@@ -52,15 +55,6 @@ class OpenAi
   rescue Oj::ParseError
     puts "Failed to parse model response as JSON. Raw response:\n#{raw_response}".red
     exit 1
-  end
-
-  def load_agents_file
-    agents_file = File.join(Dir.pwd, 'AGENTS.md')
-    return '' unless File.exist?(agents_file)
-
-    File.read(agents_file)
-  rescue SystemCallError
-    ''
   end
 
   def system_instruction

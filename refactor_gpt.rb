@@ -2,11 +2,14 @@
 # frozen_string_literal: true
 
 require_relative 'openai_client'
+require_relative 'agents_file_handler'
 require 'shellwords'
 require 'ruby-progressbar'
 
 # Class to interact with OpenAI API
 class OpenAi
+  include AgentsFileHandler
+
   def initialize
     @client = OpenAiClient.new
   end
@@ -18,24 +21,33 @@ class OpenAi
 
   # Method to refactor code based on user instructions
   def refactor(file_codes, user_instruction = nil)
-    system_instruction = <<~HEREDOC
-      Return the complete refactored code module only. Strictly preserve existing
-      comments unless implemented TODOs or changed code fragment business logic,
-      if not asked otherwise. When making bug fixes or applying specific requested
-      changes, keep the diff as small as reasonably possible in terms of changed
-      lines.
+    agents_content = load_agents_file
+    has_agents = !agents_content.empty?
 
-      When multiple files are provided, respond with the full content for each
-      file in the following structure, in order:
+    system_instruction_parts = []
 
-      === FILE: <relative-or-given-path-1>
-      <full file content 1>
-      === FILE: <relative-or-given-path-2>
-      <full file content 2>
-      ...
+    system_instruction_parts << "Return the complete refactored code module only. Strictly preserve existing\n" \
+      "comments unless implemented TODOs or changed code fragment business logic,\n" \
+      "if not asked otherwise. When making bug fixes or applying specific requested\n" \
+      "changes, keep the diff as small as reasonably possible in terms of changed\n" \
+      'lines.'
 
+    system_instruction_parts << 'Follow Ruby development guidelines from AGENTS.md.' if has_agents
 
-    HEREDOC
+    system_instruction_parts << "\nWhen multiple files are provided, respond with the full content for each\n" \
+      "file in the following structure, in order:\n\n" \
+      "=== FILE: <relative-or-given-path-1>\n" \
+      "<full file content 1>\n" \
+      "=== FILE: <relative-or-given-path-2>\n" \
+      "<full file content 2>\n" \
+      "...\n\n"
+
+    if has_agents
+      system_instruction_parts << "\nAGENTS.md content (development guidelines to follow):\n" \
+        "#{agents_content}\n\n"
+    end
+
+    system_instruction = system_instruction_parts.join
     default_user_instruction = <<~HEREDOC
       You are refactoring the following code. Apply these rules unless the user
       explicitly overrides them:
@@ -181,7 +193,7 @@ progress_thread = Thread.new do
   end
 end
 
-raw_response = OpenAi.new.refactor(file_codes, user_instruction)
+raw_response = OpenAi.new.refactor(file_codes, user_instruction).to_s
 
 # Stop progress bar thread
 progressbar.finish unless progressbar.finished?
@@ -245,10 +257,10 @@ refactored_files.each do |path, content|
 
   code_size = refactored_code.size
   elapsed_time = end_time - start_time
-  speed = code_size / elapsed_time
+  speed = elapsed_time.positive? ? (code_size / elapsed_time) : 0
 
   begin
-    File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s)
+    File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s) if speed.positive?
   rescue SystemCallError
     # ignore persistence errors
   end
