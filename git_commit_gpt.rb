@@ -215,7 +215,7 @@ end
 last_command_was_git_diff = recent_commands.lines.last&.include?('git diff')
 
 unless last_command_was_git_diff
-  system('git diff | less -R')
+  system('git diff')
   puts
 end
 
