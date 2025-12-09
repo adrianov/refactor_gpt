@@ -170,10 +170,7 @@ class OpenAiClient
 
       # Save speed for next time
       elapsed_time = Time.now - start_time
-      if elapsed_time.positive?
-        real_speed = total_size / elapsed_time
-        save_progress_speed(real_speed)
-      end
+      save_progress_speed((load_progress_speed + (total_size / elapsed_time)) / 2.0) if elapsed_time.positive?
     end
 
     answer
