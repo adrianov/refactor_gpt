@@ -100,25 +100,21 @@ class OpenAi
 
       Task:
       - Analyze the status and diff and infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
-      - Prefer commit messages that are consistent with the style of the provided recent commit messages.
+      - **Language Detection**: Analyze recent commit messages to determine the primary language. Use the same language for new commits to maintain consistency. Default to English if no recent commits exist.
+      - Prefer commit messages that are consistent with the style and language of the provided recent commit messages.
       - Respect and incorporate user-provided hints when choosing commit messages, grouping files, or prioritizing certain changes, as long as this does not conflict with the actual diffs.
       - Check the current branch name (available in git status output) and recent commit messages for JIRA task references (patterns like PT-4668, ABC-123, etc.).
       - If a JIRA task reference is found in the branch name or recent commits, use the same reference format at the beginning of commit messages (e.g., "[PT-4668] type: short description").
       - For each group, produce:
         - a one-line, conventional-style commit message (no trailing period) that describes the specific atomic change,
-        - For English: Focus on concrete actions: "add X", "fix Y", "remove Z", "update A", "refactor B", "extract C", "move D"
-        - For Russian: Use отглагольные существительные (verbal nouns) instead of infinitive verbs
-        - Instead of "добавить X" → "добавление X"
-        - Instead of "исправить Y" → "исправление Y"#{' '}
-        - Instead of "удалить Z" → "удаление Z"
-        - Instead of "обновить A" → "обновление A"
-        - Instead of "рефакторить B" → "рефакторинг B"
-        - Instead of "извлечь C" → "извлечение C"
-        - Instead of "переместить D" → "перемещение D"
-        - Avoid vague phrases like "стабилизация", "оптимизация", "улучшение", "обновление", "исправление проблем"
-        - Instead of "стабилизировать виджет" → "фиксация рендеринга виджета при прокрутке"
-        - Instead of "исправить время" → "фиксация расчета времени в тесте"
-        - Be specific about what changed and why
+        - **Language principles**:
+          - **English**: Use imperative verbs - "add X", "fix Y", "remove Z"
+          - **Russian**: Use verbal nouns - "добавление X", "исправление Y", "удаление Z"
+          - **Other languages**: Follow standard commit message conventions for that language
+        - **Universal principles**:
+          - Be specific about what changed and why
+          - Avoid vague terms like "optimization", "improvement", "fix issues"
+          - Focus on concrete actions and outcomes
         - a list of file paths to include in that commit.
       - Every changed file from the status output must appear in exactly one group.
       - Use only relative file paths exactly as they appear in the status output (after the status flags).
