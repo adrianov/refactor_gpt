@@ -236,8 +236,7 @@ class AskGptClient
   end
 
   def chat(question, style: nil, brevity: nil)
-    system_instr = build_system_instruction(style, brevity)
-    ask([{ role: 'system', content: system_instr }, { role: 'user', content: question }])
+    ask([{ role: 'system', content: build_system_instruction(style, brevity) }, { role: 'user', content: question }])
   end
 
   def ask(messages)

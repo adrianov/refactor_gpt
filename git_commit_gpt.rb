@@ -19,10 +19,11 @@ class OpenAi
   end
 
   def commit_plan(status_output, diff_output, cli_hint, recent_commits, recent_commands)
-    user_content = build_user_content(status_output, diff_output, cli_hint, recent_commits, recent_commands)
     raw_response = ask([
                          { role: 'system', content: system_instruction },
-                         { role: 'user', content: user_content }
+                         { role: 'user',
+                           content: build_user_content(status_output, diff_output, cli_hint, recent_commits,
+                                                       recent_commands) }
                        ])
     parse_commit_plan_response(raw_response)
   end

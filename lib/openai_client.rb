@@ -92,11 +92,10 @@ class OpenAiClient
   end
 
   def extract_answer(response)
-    parsed_response = Oj.load(response.body)
-    answer = parsed_response.dig('choices', 0, 'message', 'content')
+    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
 
     # If content is empty or nil, try reasoning_content
-    answer = parsed_response.dig('choices', 0, 'message', 'reasoning_content') if answer.nil? || answer.empty?
+    answer = Oj.load(response.body).dig('choices', 0, 'message', 'reasoning_content') if answer.nil? || answer.empty?
 
     return answer unless answer.nil? || answer.empty?
 
@@ -143,12 +142,8 @@ class OpenAiClient
         if progress <= total_size
           progressbar.progress = progress
         else
-          # After reaching 100%, continue showing progress by cycling
-          cycles = (progress / total_size).to_i
-          remaining = progress % total_size
-          progressbar.progress = remaining
-          # Update title to show cycles
-          progressbar.title = "#{@progress_title} (#{cycles}x)"
+          # Increase total so current progress shows as 75%
+          progressbar.total = (progress / 0.75).to_i
         end
 
         break if progressbar.finished? && progress <= total_size
