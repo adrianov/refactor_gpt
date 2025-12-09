@@ -148,8 +148,35 @@ class ProgressManager
   end
 
   def finish
-    @progressbar.finish unless @progressbar.finished?
-    @progress_thread.join
+    @progress_thread.kill
+    @progressbar.finish
+  end
+
+  def update_progress
+    loop do
+      elapsed_time = Time.now - @start_time
+      progress = [(elapsed_time * @progress_speed), @total_size].min.round
+      @progressbar.progress = progress
+      break if progress >= @total_size || @progressbar.finished?
+
+      sleep 0.1
+    end
+  end
+
+  def finish
+    @progressbar.finish
+  end
+
+  def update_while_api_runs(api_thread)
+    @api_thread = api_thread
+    while @api_thread.alive?
+      elapsed_time = Time.now - @start_time
+      progress = [(elapsed_time * @progress_speed), @total_size].min.round
+      @progressbar.progress = progress
+      break if progress >= @total_size
+
+      sleep 0.1
+    end
   end
 
   def save_speed(answer_size, elapsed_time)
@@ -162,16 +189,6 @@ class ProgressManager
 
   def load_speed
     File.exist?(PROGRESS_SPEED_FILE) ? File.read(PROGRESS_SPEED_FILE).to_f : DEFAULT_SPEED
-  end
-
-  def update_progress
-    loop do
-      progress = [(Time.now - @start_time) * @progress_speed, @total_size].min.round
-      @progressbar.progress = progress
-      break if progress >= @total_size || @progressbar.finished?
-
-      sleep 0.1
-    end
   end
 
   def calculate_speed(answer_size, elapsed_time)
@@ -278,6 +295,8 @@ def main
   progress.start
 
   start_time = Time.now
+  progress.start
+
   answer = AskGptClient.new(
     model: args[:search_mode] ? 'gpt-4o-search-preview' : 'gpt-5.1',
     max_completion_tokens: args[:short_mode] ? 500 : nil,

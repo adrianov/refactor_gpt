@@ -215,9 +215,8 @@ end
 last_command_was_git_diff = recent_commands.lines.last&.include?('git diff')
 
 unless last_command_was_git_diff
-  puts "\nCurrent changes:\n".cyan
   run_cmd('git diff', capture_output: false)
-  puts "\n"
+  puts
 end
 
 # Capture diff output for OpenAI analysis
@@ -271,19 +270,16 @@ progress_thread = Thread.new do
   end
 end
 
-plan_raw = nil
-begin
-  plan_raw = OpenAi.new(debug: debug_mode).commit_plan(
-    status_output,
-    diff_output,
-    cli_hint,
-    recent_commits,
-    recent_commands
-  )
-ensure
-  progressbar.finish unless progressbar.finished?
-  progress_thread.join
-end
+plan_raw = OpenAi.new(debug: debug_mode).commit_plan(
+  status_output,
+  diff_output,
+  cli_hint,
+  recent_commits,
+  recent_commands
+)
+
+progress_thread.kill
+progressbar.finish
 
 end_time = Time.now
 elapsed_time = end_time - start_time
@@ -306,7 +302,7 @@ if commits.empty?
 end
 
 unless warnings.empty?
-  puts "Warnings:\n\n".yellow
+  puts 'Warnings:'.yellow
   warnings.each do |warning|
     file = warning['file'].to_s
     description = warning['description'].to_s
@@ -317,7 +313,8 @@ unless warnings.empty?
   puts
 end
 
-puts "Planned commits:\n\n".cyan
+puts
+puts 'Planned commits:'.cyan
 commits.each_with_index do |commit, idx|
   puts "Commit ##{idx + 1}: #{commit['message']}".cyan
   Array(commit['files']).each do |file|
