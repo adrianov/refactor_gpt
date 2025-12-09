@@ -227,7 +227,7 @@ def main
   args = Utility.parse_args(Dir.pwd)
 
   # If no arguments and not piped input, show usage and start interactive mode
-  puts 'Enter your questions (Ctrl+D to exit):' if args[:question_parts].empty? && $stdin.tty?
+  puts 'Enter your questions (empty line to exit):' if args[:question_parts].empty? && $stdin.tty?
 
   client = AskGptClient.new(
     model: args[:search_mode] ? 'gpt-4o-search-preview' : 'gpt-5.1',
@@ -246,7 +246,7 @@ def main
       break if input.nil?
 
       input = input.strip
-      next if input.empty?
+      break if input.empty?
 
       question = input
     else
