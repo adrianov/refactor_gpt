@@ -34,6 +34,10 @@ When working with this codebase, follow these refactoring principles:
 - Don't add new comments unless explicitly requested
 - Use comments only for complex business logic
 
+### Code Optimization
+- **Inline single-use variables**: After each modification, inline variables that are used only once to improve readability and reduce unnecessary assignments
+- Example: `result = some_calculation; return result` becomes `return some_calculation`
+
 ### Safety
 - Always ask for confirmation before dangerous operations
 - Create backups for non-git files
