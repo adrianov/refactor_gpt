@@ -98,29 +98,25 @@ class OpenAi
   end
 end
 
-# Parse arguments for debug and search modes
+# Parse arguments for debug mode
 debug_mode = false
-search_mode = false
 user_instruction_parts = []
 
 ARGV.each do |arg|
   case arg
   when '--debug' then debug_mode = true
                       next
-  when '--search' then search_mode = true
-                       next
   end
   user_instruction_parts << arg
 end
 
 if user_instruction_parts.empty?
-  puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] [--search] \"What to do\"".cyan
+  puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] \"What to do\"".cyan
   exit
 end
 
 user_instruction = user_instruction_parts.join(' ')
-model = search_mode ? 'gpt-4o-search-preview' : 'gpt-5.1'
-bash_command = OpenAi.new(model: model, debug: debug_mode).bash_command(user_instruction)
+bash_command = OpenAi.new(debug: debug_mode).bash_command(user_instruction)
 
 safe_commands = %w[grep ag ls df cat less head tail sed awk tr uniq wc cut]
 
