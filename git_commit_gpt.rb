@@ -216,12 +216,12 @@ last_command_was_git_diff = recent_commands.lines.last&.include?('git diff')
 
 unless last_command_was_git_diff
   puts "\nCurrent changes:\n".cyan
-  run_cmd('git diff --cached', capture_output: false)
+  run_cmd('git diff', capture_output: false)
   puts "\n"
 end
 
 # Capture diff output for OpenAI analysis
-diff_output = `git diff --cached`
+diff_output = `git diff`
 unless $?.success?
   warn 'Failed to capture diff for analysis'.red
   exit 1

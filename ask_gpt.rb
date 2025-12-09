@@ -47,12 +47,13 @@ class SystemInfo
   end
 
   def self.detect_desktop
-    return ENV['XDG_CURRENT_DESKTOP'].to_s unless ENV['XDG_CURRENT_DESKTOP'].to_s.empty?
-    return ENV['DESKTOP_SESSION'].to_s unless ENV['DESKTOP_SESSION'].to_s.empty?
-    return 'GNOME' if ENV['GNOME_DESKTOP_SESSION_ID']
-    return 'KDE' if ENV['KDE_FULL_SESSION'] == 'true'
-
-    ''
+    [
+      ENV['XDG_CURRENT_DESKTOP'],
+      ENV['DESKTOP_SESSION'],
+      ENV['GNOME_DESKTOP_SESSION_ID'] ? 'GNOME' : nil,
+      ENV['KDE_FULL_SESSION'] == 'true' ? 'KDE' : nil,
+      ENV['XDG_SESSION_TYPE']
+    ].compact.join(' ')
   end
 
   def self.format_info(platform, version, desktop)
@@ -264,6 +265,8 @@ class AskGptClient
       - When you recommend Ruby gems, always include a GitHub repository URL for each gem
         you mention, in form: `gem_name – https://github.com/owner/repo`
         whenever such a public repository is known or can be reasonably inferred.
+
+
     HEREDOC
   end
 end
