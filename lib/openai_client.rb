@@ -166,15 +166,21 @@ class OpenAiClient
       # Save speed for next time with adjustment based on real vs estimated time
       elapsed_time = Time.now - start_time
       answer_size = answer.to_s.bytesize
-      speed = answer_size.positive? && elapsed_time.positive? ? answer_size / elapsed_time : 0
+      current_speed = answer_size.positive? && elapsed_time.positive? ? answer_size / elapsed_time : 0
 
-      if speed.positive? && estimated_time.positive?
-        # Adjust speed by multiplying by real time / estimated time ratio
-        adjustment_factor = elapsed_time / estimated_time
-        adjusted_speed = speed * adjustment_factor
-        save_progress_speed(adjusted_speed)
-      elsif speed.positive?
-        save_progress_speed(speed)
+      if current_speed.positive?
+        if estimated_time.positive?
+          # Use exponential moving average to smooth speed changes
+          # Weight the new speed more if it was more accurate (closer to estimated)
+          accuracy_ratio = [elapsed_time / estimated_time, estimated_time / elapsed_time].min
+          weight = accuracy_ratio.clamp(0.1, 0.9) # Higher weight for more accurate estimates
+          old_speed = load_progress_speed
+          new_speed = (old_speed * (1 - weight)) + (current_speed * weight)
+          save_progress_speed(new_speed)
+        else
+          # No estimate available, use current speed directly
+          save_progress_speed(current_speed)
+        end
       end
     end
 
