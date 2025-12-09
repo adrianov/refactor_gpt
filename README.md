@@ -14,7 +14,7 @@ A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring
 1. Clone this repository
 2. Install required Ruby gems:
    ```bash
-   gem install excon oj ruby-progressbar colorize
+   gem install httpx oj ruby-progressbar colorize
    ```
 3. Install The Silver Searcher (required for `ag_gpt.rb`):
    - macOS: `brew install the_silver_searcher`
@@ -36,7 +36,14 @@ A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring
    ```
    OPENAI_BASE_URL=https://api.openai.com/v1
    OPENAI_ACCESS_TOKEN=your-api-key-here
+   PROXY_URL=socks5h://127.0.0.1:1080
    ```
+
+   **Proxy Configuration (Optional):**
+   - Set `PROXY_URL` if you need to use a proxy to access the OpenAI API
+   - Supported protocols: `http`, `https`, `socks5`
+   - Example: `PROXY_URL=socks5://127.0.0.1:1080`
+   - Omit or leave empty if no proxy is needed
 
 ## Setting up Aliases
 
