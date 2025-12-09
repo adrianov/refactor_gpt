@@ -87,7 +87,6 @@ module Utility
       end
     end
 
-    question_parts = read_stdin_question if question_parts.empty?
     options.merge(question_parts: question_parts, file_snippets: file_snippets)
   end
 
@@ -121,7 +120,6 @@ module Utility
   end
 
   def self.read_stdin_question
-    puts 'Enter your question (finish with EOF / Ctrl-D on a new line):'
     input = $stdin.read
     if input.nil? || input.strip.empty?
       warn 'No question provided. Exiting.'
@@ -131,79 +129,13 @@ module Utility
   end
 end
 
-# Progress bar management
-class ProgressManager
-  PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt').freeze
-  DEFAULT_SPEED = 300
-
-  def initialize(total_size)
-    @total_size = total_size
-    @start_time = Time.now
-    @progress_speed = load_speed
-  end
-
-  def start
-    @progressbar = ProgressBar.create(title: 'Thinking', total: @total_size, format: '%t: |%B| %p%% %e', length: 60)
-    @progress_thread = Thread.new { update_progress }
-  end
-
-  def finish
-    @progress_thread.kill
-    @progressbar.finish
-  end
-
-  def update_progress
-    loop do
-      elapsed_time = Time.now - @start_time
-      progress = [(elapsed_time * @progress_speed), @total_size].min.round
-      @progressbar.progress = progress
-      break if progress >= @total_size || @progressbar.finished?
-
-      sleep 0.1
-    end
-  end
-
-  def finish
-    @progressbar.finish
-  end
-
-  def update_while_api_runs(api_thread)
-    @api_thread = api_thread
-    while @api_thread.alive?
-      elapsed_time = Time.now - @start_time
-      progress = [(elapsed_time * @progress_speed), @total_size].min.round
-      @progressbar.progress = progress
-      break if progress >= @total_size
-
-      sleep 0.1
-    end
-  end
-
-  def save_speed(answer_size, elapsed_time)
-    speed = calculate_speed(answer_size, elapsed_time)
-    File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s) if speed.positive?
-  rescue SystemCallError
-  end
-
-  private
-
-  def load_speed
-    File.exist?(PROGRESS_SPEED_FILE) ? File.read(PROGRESS_SPEED_FILE).to_f : DEFAULT_SPEED
-  end
-
-  def calculate_speed(answer_size, elapsed_time)
-    return 0 unless answer_size.positive? && elapsed_time.positive?
-
-    answer_size / elapsed_time
-  end
-end
-
 # OpenAI API client wrapper
 class AskGptClient
   DEFAULT_MODEL = 'gpt-5.1'
 
   def initialize(model: DEFAULT_MODEL, max_completion_tokens: nil, debug: false)
-    @client = OpenAiClient.new(model: model, max_completion_tokens: max_completion_tokens, debug: debug)
+    @client = OpenAiClient.new(model: model, max_completion_tokens: max_completion_tokens, debug: debug,
+                               progress_title: 'Thinking')
   end
 
   def chat(question, style: nil, brevity: nil)
@@ -213,6 +145,10 @@ class AskGptClient
 
   def ask(messages)
     @client.ask(messages)
+  end
+
+  def build_system_message(style, brevity)
+    { role: 'system', content: build_system_instruction(style, brevity) }
   end
 
   def build_system_instruction(style, brevity)
@@ -282,8 +218,6 @@ class AskGptClient
       - When you recommend Ruby gems, always include a GitHub repository URL for each gem
         you mention, in form: `gem_name – https://github.com/owner/repo`
         whenever such a public repository is known or can be reasonably inferred.
-
-
     HEREDOC
   end
 end
@@ -291,25 +225,50 @@ end
 # Main application
 def main
   args = Utility.parse_args(Dir.pwd)
-  progress = ProgressManager.new(Utility.total_size(args[:file_snippets]))
-  progress.start
 
-  start_time = Time.now
-  progress.start
+  # If no arguments and not piped input, show usage and start interactive mode
+  puts 'Enter your questions (Ctrl+D to exit):' if args[:question_parts].empty? && $stdin.tty?
 
-  answer = AskGptClient.new(
+  client = AskGptClient.new(
     model: args[:search_mode] ? 'gpt-4o-search-preview' : 'gpt-5.1',
     max_completion_tokens: args[:short_mode] ? 500 : nil,
     debug: args[:debug_mode]
-  ).chat(
-    Utility.build_question(args[:question_parts], args[:file_snippets]),
-    style: args[:eldritch_mode] ? :eldritch : nil,
-    brevity: args[:short_mode] ? :short : nil
   )
 
-  progress.finish
-  progress.save_speed(answer.to_s.bytesize, Time.now - start_time)
-  Utility.display_answer(answer)
+  # Initialize conversation with system message
+  messages = [client.build_system_message(args[:eldritch_mode] ? :eldritch : nil,
+                                          args[:short_mode] ? :short : nil)]
+
+  loop do
+    if args[:question_parts].empty?
+      print '> '
+      input = $stdin.gets
+      break if input.nil?
+
+      input = input.strip
+      next if input.empty?
+
+      question = input
+    else
+      question = Utility.build_question(args[:question_parts], args[:file_snippets])
+    end
+
+    # Add user message to conversation
+    messages << { role: 'user', content: question }
+
+    # Get response from API
+    answer = client.ask(messages)
+
+    # Add assistant response to conversation
+    messages << { role: 'assistant', content: answer }
+
+    Utility.display_answer(answer)
+    puts
+
+    # Clear arguments for next iteration
+    args[:question_parts] = []
+    args[:file_snippets] = []
+  end
 end
 
 main if __FILE__ == $PROGRAM_NAME

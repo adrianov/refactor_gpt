@@ -7,7 +7,7 @@ require 'shellwords'
 # Class to interact with OpenAI API
 class OpenAi
   def initialize
-    @client = OpenAiClient.new
+    @client = OpenAiClient.new(progress_title: 'Searching code')
   end
 
   # Method to send prompts to OpenAI and get a response

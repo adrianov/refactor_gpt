@@ -13,7 +13,7 @@ class OpenAi
   DEFAULT_MODEL = 'gpt-5.1'
 
   def initialize(model: DEFAULT_MODEL, debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug)
+    @client = OpenAiClient.new(model: model, debug: debug, progress_title: 'Planning commits'.cyan)
   end
 
   def ask(prompts)
@@ -215,7 +215,7 @@ end
 last_command_was_git_diff = recent_commands.lines.last&.include?('git diff')
 
 unless last_command_was_git_diff
-  run_cmd('git diff', capture_output: false)
+  system('git diff | less -R')
   puts
 end
 
@@ -226,73 +226,13 @@ unless $?.success?
   exit 1
 end
 
-combined_input = [
-  status_output,
-  diff_output,
-  cli_hint,
-  recent_commits,
-  recent_commands
-].join("\n\n")
-
-total_size = [combined_input.bytesize, 1000].max
-start_time = Time.now
-
-PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt')
-
-def load_progress_speed(progress_speed_file)
-  return 300 unless File.exist?(progress_speed_file)
-
-  value = File.read(progress_speed_file).to_f
-  return 300 if value <= 0
-
-  value
-rescue SystemCallError, ArgumentError
-  300
-end
-
-PROGRESS_SPEED = load_progress_speed(PROGRESS_SPEED_FILE)
-
-progressbar = ProgressBar.create(
-  title: 'Planning commits'.cyan,
-  total: total_size,
-  format: '%t: |%B| %p%% %e',
-  length: 60
-)
-
-progress_thread = Thread.new do
-  loop do
-    elapsed_time = Time.now - start_time
-    progress = [(elapsed_time * PROGRESS_SPEED).round, total_size].min
-    progressbar.progress = progress
-    break if progress >= total_size || progressbar.finished?
-
-    sleep 0.1
-  end
-end
-
-plan_raw = OpenAi.new(debug: debug_mode).commit_plan(
+plan = OpenAi.new(debug: debug_mode).commit_plan(
   status_output,
   diff_output,
   cli_hint,
   recent_commits,
   recent_commands
 )
-
-progress_thread.kill
-progressbar.finish
-
-end_time = Time.now
-elapsed_time = end_time - start_time
-plan_size = plan_raw.to_s.bytesize
-speed = plan_size.positive? && elapsed_time.positive? ? plan_size / elapsed_time : 0
-
-begin
-  File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s) if speed.positive?
-rescue SystemCallError
-  # ignore persistence errors
-end
-
-plan = plan_raw
 commits = plan['commits'] || []
 warnings = plan['warnings'] || []
 

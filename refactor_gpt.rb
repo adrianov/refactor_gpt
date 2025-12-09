@@ -4,14 +4,15 @@
 require_relative 'lib/openai_client'
 require_relative 'lib/agents_file_handler'
 require 'shellwords'
-require 'ruby-progressbar'
 
 # Class to interact with OpenAI API
 class OpenAi
   include AgentsFileHandler
 
-  def initialize
-    @client = OpenAiClient.new
+  DEFAULT_MODEL = 'gpt-5.1'
+
+  def initialize(model: DEFAULT_MODEL, debug: false)
+    @client = OpenAiClient.new(model: model, debug: debug, progress_title: 'Refactoring code'.cyan)
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -172,46 +173,7 @@ end
 
 start_time = Time.now
 
-# Progress speed in characters per second
-PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt')
-
-def load_progress_speed(progress_speed_file)
-  return 300 unless File.exist?(progress_speed_file)
-
-  value = File.read(progress_speed_file).to_f
-  return 300 if value <= 0
-
-  value
-rescue SystemCallError, ArgumentError
-  300
-end
-
-PROGRESS_SPEED = load_progress_speed(PROGRESS_SPEED_FILE)
-
-# Initialize progress bar
-ProgressBar.create(
-  title: 'Refactoring',
-  total: total_size,
-  format: '%t: |%B| %p%% %e',
-  length: 60
-)
-
-# Start progress bar in a separate thread
-progress_thread = Thread.new do
-  loop do
-    elapsed_time = Time.now - start_time
-    progress = [(elapsed_time * PROGRESS_SPEED).round, total_size].min
-    progressbar.progress = progress
-    break if progress >= total_size || progressbar.finished?
-
-    sleep 0.1
-  end
-end
-
 raw_response = OpenAi.new.refactor(file_codes, user_instruction).to_s
-
-progress_thread.kill
-progressbar.finish
 
 end_time = Time.now
 
@@ -272,12 +234,6 @@ refactored_files.each do |path, content|
   code_size = refactored_code.size
   elapsed_time = end_time - start_time
   speed = elapsed_time.positive? ? (code_size / elapsed_time) : 0
-
-  begin
-    File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s) if speed.positive?
-  rescue SystemCallError
-    # ignore persistence errors
-  end
 
   puts "\nFile: #{path}"
   puts "Code size: #{code_size} characters"

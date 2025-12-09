@@ -3,23 +3,28 @@
 
 require 'httpx'
 require 'oj'
+require 'ruby-progressbar'
 
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
   DEFAULT_MODEL = 'gpt-5.1'
   REQUEST_TIMEOUT = 100
+  PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt').freeze
 
-  def initialize(model: DEFAULT_MODEL, debug: false, max_completion_tokens: nil)
+  def initialize(model: DEFAULT_MODEL, debug: false, max_completion_tokens: nil, progress_title: nil)
     @api_base_url = fetch_env('OPENAI_BASE_URL', 'https://api.openai.com/v1')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
     @proxy_url = fetch_env('PROXY_URL', nil)
     @model = model
     @debug = debug
     @max_completion_tokens = max_completion_tokens
+    @progress_title = progress_title
     @env_vars = nil
   end
 
   def ask(messages)
+    return ask_with_progress(messages) if @progress_title
+
     body = build_request_body(messages)
     debug_request(body) if @debug
 
@@ -107,6 +112,74 @@ class OpenAiClient
       exit 1
     end
     default
+  end
+
+  def ask_with_progress(messages)
+    total_size = [messages.to_s.bytesize, 1000].max
+    progress_speed = load_progress_speed
+
+    progressbar = ProgressBar.create(
+      title: @progress_title,
+      total: total_size,
+      format: '%t: |%B| %p%% %e',
+      length: 60
+    )
+
+    start_time = Time.now
+    progress_thread = Thread.new do
+      loop do
+        elapsed_time = Time.now - start_time
+        progress = [(elapsed_time * progress_speed).round, total_size].min
+        progressbar.progress = progress
+        break if progress >= total_size || progressbar.finished?
+
+        sleep 0.1
+      end
+    end
+
+    begin
+      body = build_request_body(messages)
+      debug_request(body) if @debug
+
+      response = make_api_request(body)
+      handle_response_errors(response)
+      answer = extract_answer(response)
+    ensure
+      progress_thread.kill
+      progressbar.finish
+
+      # Save speed for next time
+      elapsed_time = Time.now - start_time
+      answer_size = answer.to_s.bytesize
+      speed = answer_size.positive? && elapsed_time.positive? ? answer_size / elapsed_time : 0
+      save_progress_speed(speed) if speed.positive?
+    end
+
+    answer
+  rescue HTTPX::Error => e
+    warn "HTTP request failed: #{e.class} - #{e.message}"
+    exit 1
+  rescue Oj::ParseError => e
+    warn "Failed to parse JSON response: #{e.message}"
+    warn response.body if defined?(response) && response&.body
+    exit 1
+  end
+
+  def load_progress_speed
+    return 300 unless File.exist?(PROGRESS_SPEED_FILE)
+
+    value = File.read(PROGRESS_SPEED_FILE).to_f
+    return 300 if value <= 0
+
+    value
+  rescue SystemCallError, ArgumentError
+    300
+  end
+
+  def save_progress_speed(speed)
+    File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s)
+  rescue SystemCallError
+    # ignore persistence errors
   end
 
   def load_env_vars
