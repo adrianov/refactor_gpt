@@ -143,8 +143,8 @@ class OpenAiClient
         if progress <= progressbar.total
           progressbar.progress = progress
         else
-          # Increase total so current progress shows as 75%
-          progressbar.total = (progress / 0.75).to_i
+          # Increase total so current progress shows as random percentage between 50% and 90%
+          progressbar.total = (progress / rand(0.5..0.9)).to_i
         end
 
         sleep 0.1
