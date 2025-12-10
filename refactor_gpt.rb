@@ -32,6 +32,8 @@ class OpenAi
       if not asked otherwise. When making bug fixes or applying specific requested
       changes, keep the diff as small as reasonably possible in terms of changed
       lines.
+      Do not suggest changes that are purely stylistic choices - e.g. type of
+      quotes, alternative method names. Only suggest real structural changes.
     HEREDOC
 
     system_instruction_parts << 'Follow Ruby development guidelines from AGENTS.md.' if has_agents
