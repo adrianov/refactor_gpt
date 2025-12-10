@@ -8,7 +8,7 @@ require 'ruby-progressbar'
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
   DEFAULT_MODEL = 'glm-4.6'
-  REQUEST_TIMEOUT = 100
+  REQUEST_TIMEOUT = 300
   PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt').freeze
 
   def initialize(model: nil, debug: false, max_completion_tokens: nil, progress_title: nil)
@@ -20,6 +20,7 @@ class OpenAiClient
     @max_completion_tokens = max_completion_tokens
     @progress_title = progress_title
     @env_vars = nil
+    @request_timeout = Integer(fetch_env('REQUEST_TIMEOUT', REQUEST_TIMEOUT))
   end
 
   def ask(messages)
@@ -63,7 +64,7 @@ class OpenAiClient
 
   def make_api_request(body)
     http = HTTPX.plugin(:proxy).with(
-      timeout: { total_timeout: REQUEST_TIMEOUT },
+      timeout: { total_timeout: @request_timeout },
       ssl: { verify_mode: OpenSSL::SSL::VERIFY_NONE }
     )
 
