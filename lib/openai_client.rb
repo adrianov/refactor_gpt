@@ -64,7 +64,7 @@ class OpenAiClient
 
   def make_api_request(body)
     http = HTTPX.plugin(:proxy).with(
-      timeout: { total_timeout: @request_timeout },
+      timeout: { read_timeout: @request_timeout, write_timeout: @request_timeout },
       ssl: { verify_mode: OpenSSL::SSL::VERIFY_NONE }
     )
 
