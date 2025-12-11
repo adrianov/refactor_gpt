@@ -162,9 +162,10 @@ module Utility
   end
 
   def self.clean_glow_line(line)
-    line.gsub(/\e\[[\d;]+m ?\e\[0m/, "")
-      .gsub(/\e\[[\d;]+m ?\e\[0m/, "")
-      .sub(/^(\e\[\d+m)?  /, "")
+    line
+      .gsub(/(\e\[[\d;]+m\s*)+$/, "\e[0m")
+      .sub(/^.*?  /, "")
+      # .gsub("\e", "~") # debug
   end
 
   def self.init_options
