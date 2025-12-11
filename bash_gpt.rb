@@ -141,7 +141,7 @@ bash_command = OpenAi.new(debug: debug_mode).bash_command(user_instruction)
 
 safe_commands = %w[grep ag ls df cat less head tail sed awk tr uniq wc cut]
 
-puts "Generated bash command:".cyan
+print "Generated bash command: ".cyan
 puts bash_command.green
 
 if safe_commands.any? do |cmd|
