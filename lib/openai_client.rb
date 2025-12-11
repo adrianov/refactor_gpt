@@ -11,7 +11,8 @@ class OpenAiClient
   REQUEST_TIMEOUT = 300
   PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt').freeze
 
-  def initialize(model: nil, debug: false, max_completion_tokens: nil, progress_title: nil)
+  def initialize(model: nil, debug: false, max_completion_tokens: nil,
+                 progress_title: nil)
     @api_base_url = fetch_env('OPENAI_BASE_URL', 'https://api.openai.com/v1')
     @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
     @proxy_url = fetch_env('PROXY_URL', nil)
@@ -45,7 +46,10 @@ class OpenAiClient
 
   def build_request_body(messages)
     body = { model: @model, messages: messages }
-    body[:max_completion_tokens] = @max_completion_tokens if @max_completion_tokens
+    if @max_completion_tokens
+      body[:max_completion_tokens] =
+        @max_completion_tokens
+    end
     body
   end
 
@@ -58,13 +62,15 @@ class OpenAiClient
         msg
       end
     end
-    warn Oj.dump(body.merge(messages: pretty_messages), mode: :compat, indent: 2)
+    warn Oj.dump(body.merge(messages: pretty_messages), mode: :compat,
+                                                        indent: 2)
     warn '--- end payload ---'
   end
 
   def make_api_request(body)
     http = HTTPX.plugin(:proxy).with(
-      timeout: { read_timeout: @request_timeout, write_timeout: @request_timeout },
+      timeout: { read_timeout: @request_timeout,
+                 write_timeout: @request_timeout },
       ssl: { verify_mode: OpenSSL::SSL::VERIFY_NONE }
     )
 
@@ -96,7 +102,10 @@ class OpenAiClient
     answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
 
     # If content is empty or nil, try reasoning_content
-    answer = Oj.load(response.body).dig('choices', 0, 'message', 'reasoning_content') if answer.nil? || answer.empty?
+    if answer.nil? || answer.empty?
+      answer = Oj.load(response.body).dig('choices', 0, 'message',
+                                          'reasoning_content')
+    end
 
     return answer unless answer.nil? || answer.empty?
 
@@ -139,7 +148,9 @@ class OpenAiClient
         elapsed_time = Time.now - start_time
         progress = (elapsed_time * progress_speed).round
 
-        # Allow progress to continue beyond 100%
+        # Allow progress to continue beyond 100% by gradually increasing total.
+        # This provides better user experience than holding at 100% when we don't
+        # know the real response speed, giving users continuous visual feedback.
         progressbar.total += total_size if progressbar.total < progress
         progressbar.total = progress if progressbar.total < progress
         progressbar.progress = progress
@@ -161,7 +172,13 @@ class OpenAiClient
 
       # Save speed for next time
       elapsed_time = Time.now - start_time
-      save_progress_speed((load_progress_speed + (total_size / elapsed_time)) / 2.0) if elapsed_time.positive?
+      if elapsed_time.positive?
+        current_speed = total_size / elapsed_time
+        # Use weighted average to prevent speed from spiraling up
+        # Cap current_speed to reasonable range (100-10000 chars/sec)
+        current_speed = current_speed.clamp(100, 10_000)
+        save_progress_speed((load_progress_speed * 0.7) + (current_speed * 0.3))
+      end
     end
 
     answer

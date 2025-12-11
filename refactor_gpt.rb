@@ -11,7 +11,8 @@ class OpenAi
   include AgentsFileHandler
 
   def initialize(model: nil, debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug, progress_title: 'Refactoring code'.cyan)
+    @client = OpenAiClient.new(model: model, debug: debug,
+                               progress_title: 'Refactoring code'.cyan)
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -198,7 +199,10 @@ def parse_files_from_response(response, expected_paths)
   result[current_path] = buffer.join if current_path
 
   # Fallback: if structure not respected, treat whole response as single file
-  result[expected_paths.first] = response if result.empty? && expected_paths.size == 1
+  if result.empty? && expected_paths.size == 1
+    result[expected_paths.first] =
+      response
+  end
 
   result
 end

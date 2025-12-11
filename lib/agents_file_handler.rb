@@ -7,7 +7,10 @@ module AgentsFileHandler
     agents_file = File.join(File.dirname(__dir__), 'AGENTS.md')
 
     # Fallback to current directory if not found
-    agents_file = File.join(Dir.pwd, 'AGENTS.md') unless File.exist?(agents_file)
+    unless File.exist?(agents_file)
+      agents_file = File.join(Dir.pwd,
+                              'AGENTS.md')
+    end
 
     return '' unless File.exist?(agents_file)
 
