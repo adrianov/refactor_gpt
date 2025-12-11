@@ -1,27 +1,27 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require 'httpx'
-require 'oj'
-require 'ruby-progressbar'
+require "httpx"
+require "oj"
+require "ruby-progressbar"
 
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
-  DEFAULT_MODEL = 'glm-4.6'
+  DEFAULT_MODEL = "glm-4.6"
   REQUEST_TIMEOUT = 300
-  PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt').freeze
+  PROGRESS_SPEED_FILE = File.join(Dir.home, ".refactor_gpt").freeze
 
   def initialize(model: nil, debug: false, max_completion_tokens: nil,
-                 progress_title: nil)
-    @api_base_url = fetch_env('OPENAI_BASE_URL', 'https://api.openai.com/v1')
-    @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @proxy_url = fetch_env('PROXY_URL', nil)
-    @model = model || fetch_env('DEFAULT_MODEL', DEFAULT_MODEL)
+    progress_title: nil)
+    @api_base_url = fetch_env("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    @api_key = fetch_env("OPENAI_ACCESS_TOKEN")
+    @proxy_url = fetch_env("PROXY_URL", nil)
+    @model = model || fetch_env("DEFAULT_MODEL", DEFAULT_MODEL)
     @debug = debug
     @max_completion_tokens = max_completion_tokens
     @progress_title = progress_title
     @env_vars = nil
-    @request_timeout = Integer(fetch_env('REQUEST_TIMEOUT', REQUEST_TIMEOUT))
+    @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
   end
 
   def ask(messages)
@@ -34,18 +34,15 @@ class OpenAiClient
     handle_response_errors(response)
     extract_answer(response)
   rescue HTTPX::Error => e
-    warn "HTTP request failed: #{e.class} - #{e.message}"
-    exit 1
+    handle_http_error(e)
   rescue Oj::ParseError => e
-    warn "Failed to parse JSON response: #{e.message}"
-    warn response.body if defined?(response) && response&.body
-    exit 1
+    handle_parse_error(e, response)
   end
 
   private
 
   def build_request_body(messages)
-    body = { model: @model, messages: messages }
+    body = {model: @model, messages: messages}
     if @max_completion_tokens
       body[:max_completion_tokens] =
         @max_completion_tokens
@@ -54,35 +51,35 @@ class OpenAiClient
   end
 
   def debug_request(body)
-    warn '--- OpenAI request payload (Ruby hash) ---'
+    warn "--- OpenAI request payload (Ruby hash) ---"
     pretty_messages = body[:messages].map do |msg|
-      if msg[:role] == 'system' && msg[:content].is_a?(String)
-        { role: msg[:role], content_lines: msg[:content].split("\n") }
+      if msg[:role] == "system" && msg[:content].is_a?(String)
+        {role: msg[:role], content_lines: msg[:content].split("\n")}
       else
         msg
       end
     end
     warn Oj.dump(body.merge(messages: pretty_messages), mode: :compat,
-                                                        indent: 2)
-    warn '--- end payload ---'
+      indent: 2)
+    warn "--- end payload ---"
   end
 
   def make_api_request(body)
     http = HTTPX.plugin(:proxy).with(
-      timeout: { read_timeout: @request_timeout,
-                 write_timeout: @request_timeout },
-      ssl: { verify_mode: OpenSSL::SSL::VERIFY_NONE }
+      timeout: {read_timeout: @request_timeout,
+                write_timeout: @request_timeout},
+      ssl: {verify_mode: OpenSSL::SSL::VERIFY_NONE}
     )
 
     # Set up proxy if configured
     http = http.with_proxy(uri: @proxy_url) if @proxy_url && !@proxy_url.empty?
 
     http.post("#{@api_base_url}/chat/completions",
-              headers: {
-                'Content-Type' => 'application/json',
-                'Authorization' => "Bearer #{@api_key}"
-              },
-              body: Oj.dump(body, mode: :compat))
+      headers: {
+        "Content-Type" => "application/json",
+        "Authorization" => "Bearer #{@api_key}"
+      },
+      body: Oj.dump(body, mode: :compat))
   end
 
   def handle_response_errors(response)
@@ -99,17 +96,17 @@ class OpenAiClient
   end
 
   def extract_answer(response)
-    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
+    answer = Oj.load(response.body).dig("choices", 0, "message", "content")
 
     # If content is empty or nil, try reasoning_content
     if answer.nil? || answer.empty?
-      answer = Oj.load(response.body).dig('choices', 0, 'message',
-                                          'reasoning_content')
+      answer = Oj.load(response.body).dig("choices", 0, "message",
+        "reasoning_content")
     end
 
     return answer unless answer.nil? || answer.empty?
 
-    warn 'No answer returned from OpenAI API. Full response body:'
+    warn "No answer returned from OpenAI API. Full response body:"
     warn response.body
     exit 1
   end
@@ -120,7 +117,7 @@ class OpenAiClient
     return value unless value.nil?
 
     # Only require certain variables, make others optional
-    required_vars = ['OPENAI_ACCESS_TOKEN']
+    required_vars = ["OPENAI_ACCESS_TOKEN"]
     if required_vars.include?(key)
       warn("Missing required environment variable: #{key}. Please add it to the .env file.")
       exit 1
@@ -129,35 +126,20 @@ class OpenAiClient
   end
 
   def ask_with_progress(messages)
+    setup_progress_tracking(messages)
+  rescue HTTPX::Error => e
+    handle_http_error(e)
+  rescue Oj::ParseError => e
+    handle_parse_error(e, response)
+  end
+
+  def setup_progress_tracking(messages)
     total_size = [messages.to_s.bytesize, 6000].max
     progress_speed = load_progress_speed
 
-    # Calculate estimated time based on historical speed
-    progress_speed.positive? ? total_size / progress_speed : 30
-
-    progressbar = ProgressBar.create(
-      title: @progress_title,
-      total: total_size,
-      format: '%t: |%B| %p%% %e',
-      length: 60
-    )
-
+    progressbar = create_progress_bar(total_size)
     start_time = Time.now
-    progress_thread = Thread.new do
-      loop do
-        elapsed_time = Time.now - start_time
-        progress = (elapsed_time * progress_speed).round
-
-        # Allow progress to continue beyond 100% by gradually increasing total.
-        # This provides better user experience than holding at 100% when we don't
-        # know the real response speed, giving users continuous visual feedback.
-        progressbar.total += total_size if progressbar.total < progress
-        progressbar.total = progress if progressbar.total < progress
-        progressbar.progress = progress
-
-        sleep 0.1
-      end
-    end
+    progress_thread = start_progress_thread(progressbar, start_time, progress_speed)
 
     begin
       body = build_request_body(messages)
@@ -165,30 +147,10 @@ class OpenAiClient
 
       response = make_api_request(body)
       handle_response_errors(response)
-      answer = extract_answer(response)
+      extract_answer(response)
     ensure
-      progress_thread.kill
-      progressbar.finish
-
-      # Save speed for next time
-      elapsed_time = Time.now - start_time
-      if elapsed_time.positive?
-        current_speed = total_size / elapsed_time
-        # Use weighted average to prevent speed from spiraling up
-        # Cap current_speed to reasonable range (100-10000 chars/sec)
-        current_speed = current_speed.clamp(100, 10_000)
-        save_progress_speed((load_progress_speed * 0.7) + (current_speed * 0.3))
-      end
+      finish_progress(progress_thread, progressbar, start_time, total_size)
     end
-
-    answer
-  rescue HTTPX::Error => e
-    warn "HTTP request failed: #{e.class} - #{e.message}"
-    exit 1
-  rescue Oj::ParseError => e
-    warn "Failed to parse JSON response: #{e.message}"
-    warn response.body if defined?(response) && response&.body
-    exit 1
   end
 
   def load_progress_speed
@@ -208,17 +170,70 @@ class OpenAiClient
     # ignore persistence errors
   end
 
+  def handle_http_error(error)
+    warn "HTTP request failed: #{error.class} - #{error.message}"
+    exit 1
+  end
+
+  def handle_parse_error(error, response)
+    warn "Failed to parse JSON response: #{error.message}"
+    warn response.body if defined?(response) && response&.body
+    exit 1
+  end
+
+  def create_progress_bar(total_size)
+    ProgressBar.create(
+      title: @progress_title,
+      total: total_size,
+      format: "%t: |%B| %p%% %e",
+      length: 60
+    )
+  end
+
+  def start_progress_thread(progressbar, start_time, progress_speed)
+    Thread.new do
+      loop do
+        elapsed_time = Time.now - start_time
+        progress = (elapsed_time * progress_speed).round
+
+        # Allow progress to continue beyond 100% by gradually increasing total.
+        # This provides better user experience than holding at 100% when we don't
+        # know the real response speed, giving users continuous visual feedback.
+        progressbar.total += progressbar.total if progressbar.total < progress
+        progressbar.total = progress if progressbar.total < progress
+        progressbar.progress = progress
+
+        sleep 0.1
+      end
+    end
+  end
+
+  def finish_progress(progress_thread, progressbar, start_time, total_size)
+    progress_thread.kill
+    progressbar.finish
+
+    # Save speed for next time
+    elapsed_time = Time.now - start_time
+    return unless elapsed_time.positive?
+
+    current_speed = total_size / elapsed_time
+    # Use weighted average to prevent speed from spiraling up
+    # Cap current_speed to reasonable range (100-10000 chars/sec)
+    current_speed = current_speed.clamp(100, 10_000)
+    save_progress_speed((load_progress_speed * 0.7) + (current_speed * 0.3))
+  end
+
   def load_env_vars
     # First try project root (one level up from lib/)
-    env_file_path = File.join(File.dirname(__dir__), '.env')
+    env_file_path = File.join(File.dirname(__dir__), ".env")
 
     # Fallback to current directory if not found
-    env_file_path = File.join(Dir.pwd, '.env') unless File.exist?(env_file_path)
+    env_file_path = File.join(Dir.pwd, ".env") unless File.exist?(env_file_path)
 
     return {} unless File.exist?(env_file_path)
 
     File.foreach(env_file_path).with_object({}) do |line, h|
-      key, value = line.split('=', 2)
+      key, value = line.split("=", 2)
       h[key.strip] = value.strip if key && value
     end
   end
