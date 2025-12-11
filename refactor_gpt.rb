@@ -1,10 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require 'colorize'
-require_relative 'lib/openai_client'
-require_relative 'lib/agents_file_handler'
-require 'shellwords'
+require "colorize"
+require_relative "lib/openai_client"
+require_relative "lib/agents_file_handler"
+require "shellwords"
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -12,7 +12,7 @@ class OpenAi
 
   def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug,
-                               progress_title: 'Refactoring code'.cyan)
+      progress_title: "Refactoring code".cyan)
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -37,7 +37,7 @@ class OpenAi
       quotes, alternative method names. Only suggest real structural changes.
     HEREDOC
 
-    system_instruction_parts << 'Follow Ruby development guidelines from AGENTS.md.' if has_agents
+    system_instruction_parts << "Follow Ruby development guidelines from AGENTS.md." if has_agents
 
     system_instruction_parts << <<~HEREDOC
 
@@ -126,8 +126,8 @@ class OpenAi
 
     ask(
       [
-        { role: 'system', content: system_instruction },
-        { role: 'user', content: prompt }
+        {role: "system", content: system_instruction},
+        {role: "user", content: prompt}
       ]
     )
   end
@@ -153,18 +153,18 @@ ARGV.each do |arg|
 end
 
 if file_paths.empty?
-  puts 'No valid files provided.'
+  puts "No valid files provided."
   exit 1
 end
 
-user_instruction = user_instruction_parts.join(' ') unless user_instruction_parts.empty?
+user_instruction = user_instruction_parts.join(" ") unless user_instruction_parts.empty?
 
 file_codes = {}
 total_size = 0
 
 file_paths.each do |file_path|
   begin
-    code = File.binread(file_path).force_encoding('UTF-8')
+    code = File.binread(file_path).force_encoding("UTF-8")
   rescue SystemCallError => e
     warn "Failed to read file #{file_path}: #{e.message}"
     exit 1
@@ -185,44 +185,65 @@ def parse_files_from_response(response, expected_paths)
   buffer = []
 
   response.each_line do |line|
-    if line.start_with?('=== FILE: ')
-      if current_path
-        result[current_path] = buffer.join
-        buffer = []
-      end
-      current_path = line.sub('=== FILE: ', '').strip
+    if line.start_with?("=== FILE: ")
+      finalize_current_file(result, current_path, buffer)
+      current_path = extract_file_path(line)
+      buffer = []
     elsif current_path
       buffer << line
     end
   end
 
-  result[current_path] = buffer.join if current_path
+  finalize_current_file(result, current_path, buffer)
+  apply_single_file_fallback(result, response, expected_paths)
+end
 
-  # Fallback: if structure not respected, treat whole response as single file
-  if result.empty? && expected_paths.size == 1
-    result[expected_paths.first] =
-      response
-  end
+def finalize_current_file(result, current_path, buffer)
+  return unless current_path
 
-  result
+  result[current_path] = buffer.join
+end
+
+def extract_file_path(line)
+  line.sub("=== FILE: ", "").strip
+end
+
+def apply_single_file_fallback(result, response, expected_paths)
+  return unless result.empty? && expected_paths.size == 1
+
+  result[expected_paths.first] = response
 end
 
 def strip_edge_backticks(content)
   lines = content.lines
   return content if lines.empty?
 
+  first_line, last_line = extract_edge_lines(lines)
+  stripped_lines = build_stripped_lines(lines, first_line, last_line)
+
+  stripped_lines.join.sub(/\A[\r\n]+/, "").sub(/[\r\n]+\z/, "")
+end
+
+def extract_edge_lines(lines)
   first = lines.first
   last = lines.last
 
-  first = nil if first.strip == '```' || first.strip.start_with?('```')
-  last = nil if last.strip == '```' || last.strip.start_with?('```')
+  first = nil if backtick_line?(first)
+  last = nil if backtick_line?(last)
 
+  [first, last]
+end
+
+def backtick_line?(line)
+  line.strip == "```" || line.strip.start_with?("```")
+end
+
+def build_stripped_lines(lines, first_line, last_line)
   stripped_lines = []
-  stripped_lines << first if first
+  stripped_lines << first_line if first_line
   stripped_lines.concat(lines[1..-2]) if lines.size > 2
-  stripped_lines << last if last && lines.size > 1
-
-  stripped_lines.join.sub(/\A[\r\n]+/, '').sub(/[\r\n]+\z/, '')
+  stripped_lines << last_line if last_line && lines.size > 1
+  stripped_lines
 end
 
 refactored_files = parse_files_from_response(raw_response, file_paths)
@@ -246,12 +267,12 @@ refactored_files.each do |path, content|
   puts "Speed: #{speed.round(2)} characters per second"
 
   if original_code == refactored_code
-    puts 'No changes made.'
+    puts "No changes made."
     next
   end
 
   is_git_repository = system(
-    'git ls-files --error-unmatch ' \
+    "git ls-files --error-unmatch " \
     "#{Shellwords.shellescape(path)} > #{File::NULL} 2>&1"
   )
 
