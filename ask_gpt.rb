@@ -7,19 +7,19 @@ require "rbconfig"
 
 # System information detection
 class SystemInfo
-  PLATFORM_PATTERNS = { /darwin/ => "macOS", /linux/ => "Linux",
-                       /mswin|mingw|cygwin/ => "Windows" }.freeze
+  PLATFORM_PATTERNS = {/darwin/ => "macOS", /linux/ => "Linux",
+                       /mswin|mingw|cygwin/ => "Windows"}.freeze
 
   def self.to_s
     @to_s ||= begin
-        os = RbConfig::CONFIG["host_os"].downcase
-        platform = detect_platform(os)
-        version = detect_version(platform)
-        desktop = detect_desktop
-        format_info(platform, version, desktop)
-      rescue StandardError
-        ""
-      end
+      os = RbConfig::CONFIG["host_os"].downcase
+      platform = detect_platform(os)
+      version = detect_version(platform)
+      desktop = detect_desktop
+      format_info(platform, version, desktop)
+    rescue
+      ""
+    end
   end
 
   def self.detect_platform(os)
@@ -52,8 +52,8 @@ class SystemInfo
       ENV["XDG_CURRENT_DESKTOP"],
       ENV["DESKTOP_SESSION"],
       ENV["GNOME_DESKTOP_SESSION_ID"] ? "GNOME" : nil,
-      ENV["KDE_FULL_SESSION"] == "true" ? "KDE" : nil,
-      ENV["XDG_SESSION_TYPE"],
+      (ENV["KDE_FULL_SESSION"] == "true") ? "KDE" : nil,
+      ENV["XDG_SESSION_TYPE"]
     ].compact.join(" ")
   end
 
@@ -67,8 +67,8 @@ end
 
 # Argument parsing and utilities
 module Utility
-  FLAG_MAPPING = { "--search" => :search_mode, "--eldritch" => :eldritch_mode, "--short" => :short_mode,
-                   "--debug" => :debug_mode }.freeze
+  FLAG_MAPPING = {"--search" => :search_mode, "--eldritch" => :eldritch_mode, "--short" => :short_mode,
+                  "--debug" => :debug_mode}.freeze
 
   def self.parse_args(base_dir)
     options = init_options
@@ -76,20 +76,32 @@ module Utility
     file_snippets = []
 
     ARGV.each do |arg|
-      if FLAG_MAPPING.key?(arg)
-        options[FLAG_MAPPING[arg]] = true
-      else
-        path = File.expand_path(arg, base_dir)
-        if File.file?(path) && path.start_with?(base_dir + File::SEPARATOR)
-          file_snippets << "File: #{path.sub(base_dir + File::SEPARATOR,
-                                             "")}\n#{File.read(path)}"
-        else
-          question_parts << arg
-        end
-      end
+      process_argument(arg, base_dir, options, question_parts, file_snippets)
     end
 
     options.merge(question_parts: question_parts, file_snippets: file_snippets)
+  end
+
+  def self.process_argument(arg, base_dir, options, question_parts, file_snippets)
+    if FLAG_MAPPING.key?(arg)
+      options[FLAG_MAPPING[arg]] = true
+    else
+      path = File.expand_path(arg, base_dir)
+      if valid_file_path?(path, base_dir)
+        file_snippets << build_file_snippet(path, base_dir)
+      else
+        question_parts << arg
+      end
+    end
+  end
+
+  def self.valid_file_path?(path, base_dir)
+    File.file?(path) && path.start_with?(base_dir + File::SEPARATOR)
+  end
+
+  def self.build_file_snippet(path, base_dir)
+    relative_path = path.sub(base_dir + File::SEPARATOR, "")
+    "File: #{relative_path}\n#{File.read(path)}"
   end
 
   def self.build_question(parts, snippets)
@@ -108,30 +120,51 @@ module Utility
   end
 
   def self.display_answer(answer)
-    return puts answer unless system("command -v glow >/dev/null 2>&1")
+    return puts answer unless glow_available?
 
-    urls = answer.scan(%r{\[.*?\]\(https?://[^)]+\)|https?://[^\s)]+})
-    width = urls.empty? ? "100" : [urls.map(&:length).max + 2, 100].max.to_s
-    formatted = answer.gsub(%r{\(\s*\n\s*(https?://[^)]+)\)}, '(\\1)').gsub(
-      %r{(\[.*?\]\(https?://[^)]+\))}, "\n\n\\1"
-    )
+    urls = extract_urls(answer)
+    width = calculate_width(urls)
+    formatted = format_answer(answer)
 
-    IO.popen(ENV.to_h.merge({ "CLICOLOR_FORCE" => "1" }), ["glow", "--width", width, "--style", "dark", "-"],
-             "w+") do |io|
+    display_with_glow(formatted, width)
+  end
+
+  def self.glow_available?
+    system("command -v glow >/dev/null 2>&1")
+  end
+
+  def self.extract_urls(answer)
+    answer.scan(%r{\[.*?\]\(https?://[^)]+\)|https?://[^\s)]+})
+  end
+
+  def self.calculate_width(urls)
+    return "100" if urls.empty?
+
+    [urls.map(&:length).max + 2, 100].max.to_s
+  end
+
+  def self.format_answer(answer)
+    answer.gsub(%r{\(\s*\n\s*(https?://[^)]+)\)}, '(\\1)')
+      .gsub(%r{(\[.*?\]\(https?://[^)]+\))}, "\n\n\\1")
+  end
+
+  def self.display_with_glow(formatted, width)
+    IO.popen(ENV.to_h.merge({"CLICOLOR_FORCE" => "1"}),
+      ["glow", "--width", width, "--style", "dark", "-"], "w+") do |io|
       io.write(formatted)
       io.close_write
 
       # fixing glow output: we strip unneeded spaces surrounded by ANSI codes
-      io.each_line do |l|
-        puts l.gsub(/\e\[[\d;]+m ?\e\[0m/, "").
-               gsub(/\e\[[\d;]+m ?\e\[0m/, "").
-               sub(
-               /^(\e\[\d+m)?  /, ""
-             )
+      io.each_line do |line|
+        puts clean_glow_line(line)
       end
-
-      # for debug: #.gsub("\e", '~')
     end
+  end
+
+  def self.clean_glow_line(line)
+    line.gsub(/\e\[[\d;]+m ?\e\[0m/, "")
+      .gsub(/\e\[[\d;]+m ?\e\[0m/, "")
+      .sub(/^(\e\[\d+m)?  /, "")
   end
 
   def self.init_options
@@ -157,11 +190,11 @@ class AskGptClient
     @max_completion_tokens = max_completion_tokens
     @debug = debug
     @client = OpenAiClient.new(model: model, max_completion_tokens: max_completion_tokens, debug: debug,
-                               progress_title: "Thinking")
+      progress_title: "Thinking")
   end
 
   def build_system_message(style, brevity)
-    { role: "system", content: build_system_instruction(style, brevity) }
+    {role: "system", content: build_system_instruction(style, brevity)}
   end
 
   def build_system_instruction(style, brevity)
@@ -239,7 +272,7 @@ class AskGptClient
 
     @model = new_model
     @client = OpenAiClient.new(model: @model, max_completion_tokens: @max_completion_tokens, debug: @debug,
-                               progress_title: "Thinking")
+      progress_title: "Thinking")
   end
 
   def search_mode?
@@ -255,8 +288,8 @@ class AskGptClient
   end
 
   def chat(question, style: nil, brevity: nil)
-    ask([{ role: "system", content: build_system_instruction(style, brevity) },
-         { role: "user", content: question }])
+    ask([{role: "system", content: build_system_instruction(style, brevity)},
+      {role: "user", content: question}])
   end
 
   def ask(messages)
@@ -268,63 +301,81 @@ end
 def main
   args = Utility.parse_args(Dir.pwd)
 
-  # If no arguments and not piped input, show usage and start interactive mode
-  if args[:question_parts].empty? && $stdin.tty?
-    puts "Enter your questions (empty line to exit):"
-    puts "Available commands: --search, --no-search"
-  end
+  show_interactive_prompt(args)
+  client = create_client(args)
+  messages = initialize_conversation(client, args)
 
-  client = AskGptClient.new(
+  run_conversation_loop(client, messages, args)
+end
+
+def show_interactive_prompt(args)
+  return unless args[:question_parts].empty? && $stdin.tty?
+
+  puts "Enter your questions (empty line to exit):"
+  puts "Available commands: --search, --no-search"
+end
+
+def create_client(args)
+  AskGptClient.new(
     model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : nil,
     max_completion_tokens: args[:short_mode] ? 500 : nil,
-    debug: args[:debug_mode],
+    debug: args[:debug_mode]
   )
+end
 
-  # Initialize conversation with system message
-  messages = [client.build_system_message(args[:eldritch_mode] ? :eldritch : nil,
-                                          args[:short_mode] ? :short : nil)]
+def initialize_conversation(client, args)
+  [client.build_system_message(args[:eldritch_mode] ? :eldritch : nil,
+    args[:short_mode] ? :short : nil)]
+end
 
+def run_conversation_loop(client, messages, args)
   loop do
-    if args[:question_parts].empty?
-      print "> "
-      input = $stdin.gets
-      break if input.nil?
+    question = get_question(args)
+    break unless question
 
-      input = input.strip
-      break if input.empty?
+    handle_mode_switch(client, question) if args[:question_parts].empty?
+    next if question == "--no-search"
 
-      # Check for mode switches in dialog
-      if input == "--search"
-        client.enable_search_mode
-        question = "--search"
-      elsif input == "--no-search"
-        client.disable_search_mode
-        puts "Switched to normal mode"
-        next
-      else
-        question = input
-      end
-    else
-      question = Utility.build_question(args[:question_parts],
-                                        args[:file_snippets])
-    end
-
-    # Add user message to conversation
-    messages << { role: "user", content: question }
-
-    # Get response from API
-    answer = client.ask(messages)
-
-    # Add assistant response to conversation
-    messages << { role: "assistant", content: answer }
-
-    Utility.display_answer(answer)
-    puts
-
-    # Clear arguments for next iteration
-    args[:question_parts] = []
-    args[:file_snippets] = []
+    process_question(client, messages, question)
+    clear_args_for_next_iteration(args)
   end
+end
+
+def get_question(args)
+  if args[:question_parts].empty?
+    print "> "
+    input = $stdin.gets
+    return nil if input.nil?
+
+    input = input.strip
+    return nil if input.empty?
+
+    input
+  else
+    Utility.build_question(args[:question_parts], args[:file_snippets])
+  end
+end
+
+def handle_mode_switch(client, input)
+  if input == "--search"
+    client.enable_search_mode
+  elsif input == "--no-search"
+    client.disable_search_mode
+    puts "Switched to normal mode"
+  end
+end
+
+def process_question(client, messages, question)
+  messages << {role: "user", content: question}
+  answer = client.ask(messages)
+  messages << {role: "assistant", content: answer}
+  Utility.display_answer(answer)
+  puts
+end
+
+def clear_args_for_next_iteration(args)
+  args[:question_parts] = []
+  args[:file_snippets] = []
 end
 
 main if __FILE__ == $PROGRAM_NAME
