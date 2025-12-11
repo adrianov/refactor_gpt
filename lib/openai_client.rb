@@ -140,13 +140,8 @@ class OpenAiClient
         progress = (elapsed_time * progress_speed).round
 
         # Allow progress to continue beyond 100%
-        if progress <= progressbar.total
-          progressbar.progress = progress
-        else
-          # Add initial total to progress total when reaching 100%
-          progressbar.total += total_size
-          progressbar.progress = progress
-        end
+        progressbar.total += total_size if progress > progressbar.total
+        progressbar.progress = progress
 
         sleep 0.1
       end
