@@ -1,0 +1,36 @@
+AllCops:
+  Enabled: false
+  NewCops: disable
+
+Layout/LineLength:
+  Enabled: true
+  Max: 120
+  AutoCorrect: true
+
+Metrics/AbcSize:
+  Enabled: true
+  Max: 17
+
+# Disable all other departments
+Bundler:
+  Enabled: false
+Gemspec:
+  Enabled: false
+Lint:
+  Enabled: false
+Migration:
+  Enabled: false
+Naming:
+  Enabled: false
+Security:
+  Enabled: false
+Style:
+  Enabled: false
+
+# Disable all Metrics except AbcSize
+Metrics:
+  Enabled: false
+
+# Disable all Layout except LineLength
+Layout:
+  Enabled: false
