@@ -1,59 +1,60 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative 'lib/openai_client'
-require 'ruby-progressbar'
-require 'rbconfig'
+require_relative "lib/openai_client"
+require "ruby-progressbar"
+require "rbconfig"
 
 # System information detection
 class SystemInfo
-  PLATFORM_PATTERNS = { /darwin/ => 'macOS', /linux/ => 'Linux', /mswin|mingw|cygwin/ => 'Windows' }.freeze
+  PLATFORM_PATTERNS = { /darwin/ => "macOS", /linux/ => "Linux",
+                       /mswin|mingw|cygwin/ => "Windows" }.freeze
 
   def self.to_s
     @to_s ||= begin
-      os = RbConfig::CONFIG['host_os'].downcase
-      platform = detect_platform(os)
-      version = detect_version(platform)
-      desktop = detect_desktop
-      format_info(platform, version, desktop)
-    rescue StandardError
-      ''
-    end
+        os = RbConfig::CONFIG["host_os"].downcase
+        platform = detect_platform(os)
+        version = detect_version(platform)
+        desktop = detect_desktop
+        format_info(platform, version, desktop)
+      rescue StandardError
+        ""
+      end
   end
 
   def self.detect_platform(os)
     PLATFORM_PATTERNS.find { |p, _| os.match?(p) }&.last ||
       if os.match?(/linux/)
-        if File.exist?('/etc/os-release') && File.read('/etc/os-release') =~ /^NAME="?Ubuntu"?/i
-          'Ubuntu'
+        if File.exist?("/etc/os-release") && File.read("/etc/os-release") =~ /^NAME="?Ubuntu"?/i
+          "Ubuntu"
         else
-          'Linux'
+          "Linux"
         end
       else
-        RbConfig::CONFIG['host_os']
+        RbConfig::CONFIG["host_os"]
       end
   end
 
   def self.detect_version(platform)
     case platform
-    when 'macOS' then `sw_vers -productVersion 2>/dev/null`.strip
-    when 'Ubuntu'
-      return '' unless File.exist?('/etc/os-release')
+    when "macOS" then `sw_vers -productVersion 2>/dev/null`.strip
+    when "Ubuntu"
+      return "" unless File.exist?("/etc/os-release")
 
-      File.read('/etc/os-release').match(/^VERSION="?([^"\n]+)"?/)&.[](1)&.strip || ''
-    when 'Windows' then `wmic os get Version /value 2>NUL`.split('=').last.to_s.strip
-    else ''
+      File.read("/etc/os-release").match(/^VERSION="?([^"\n]+)"?/)&.[](1)&.strip || ""
+    when "Windows" then `wmic os get Version /value 2>NUL`.split("=").last.to_s.strip
+    else ""
     end
   end
 
   def self.detect_desktop
     [
-      ENV['XDG_CURRENT_DESKTOP'],
-      ENV['DESKTOP_SESSION'],
-      ENV['GNOME_DESKTOP_SESSION_ID'] ? 'GNOME' : nil,
-      ENV['KDE_FULL_SESSION'] == 'true' ? 'KDE' : nil,
-      ENV['XDG_SESSION_TYPE']
-    ].compact.join(' ')
+      ENV["XDG_CURRENT_DESKTOP"],
+      ENV["DESKTOP_SESSION"],
+      ENV["GNOME_DESKTOP_SESSION_ID"] ? "GNOME" : nil,
+      ENV["KDE_FULL_SESSION"] == "true" ? "KDE" : nil,
+      ENV["XDG_SESSION_TYPE"],
+    ].compact.join(" ")
   end
 
   def self.format_info(platform, version, desktop)
@@ -66,8 +67,8 @@ end
 
 # Argument parsing and utilities
 module Utility
-  FLAG_MAPPING = { '--search' => :search_mode, '--eldritch' => :eldritch_mode, '--short' => :short_mode,
-                   '--debug' => :debug_mode }.freeze
+  FLAG_MAPPING = { "--search" => :search_mode, "--eldritch" => :eldritch_mode, "--short" => :short_mode,
+                   "--debug" => :debug_mode }.freeze
 
   def self.parse_args(base_dir)
     options = init_options
@@ -80,7 +81,8 @@ module Utility
       else
         path = File.expand_path(arg, base_dir)
         if File.file?(path) && path.start_with?(base_dir + File::SEPARATOR)
-          file_snippets << "File: #{path.sub(base_dir + File::SEPARATOR, '')}\n#{File.read(path)}"
+          file_snippets << "File: #{path.sub(base_dir + File::SEPARATOR,
+                                             "")}\n#{File.read(path)}"
         else
           question_parts << arg
         end
@@ -91,10 +93,10 @@ module Utility
   end
 
   def self.build_question(parts, snippets)
-    return parts.join(' ') if snippets.empty?
+    return parts.join(" ") if snippets.empty?
 
     <<~HEREDOC
-      #{parts.join(' ')}
+      #{parts.join(" ")}
 
       Included files:
       #{snippets.join("\n\n---\n\n")}
@@ -106,19 +108,27 @@ module Utility
   end
 
   def self.display_answer(answer)
-    return puts answer unless system('command -v glow >/dev/null 2>&1')
+    return puts answer unless system("command -v glow >/dev/null 2>&1")
 
     urls = answer.scan(%r{\[.*?\]\(https?://[^)]+\)|https?://[^\s)]+})
-    width = urls.empty? ? '100' : [urls.map(&:length).max + 2, 100].max.to_s
-    formatted = answer.gsub(%r{\(\s*\n\s*(https?://[^)]+)\)}, '(\\1)').gsub(%r{(\[.*?\]\(https?://[^)]+\))}, "\n\n\\1")
+    width = urls.empty? ? "100" : [urls.map(&:length).max + 2, 100].max.to_s
+    formatted = answer.gsub(%r{\(\s*\n\s*(https?://[^)]+)\)}, '(\\1)').gsub(
+      %r{(\[.*?\]\(https?://[^)]+\))}, "\n\n\\1"
+    )
 
-    IO.popen(ENV.to_h.merge({ 'CLICOLOR_FORCE' => '1' }), ['glow', '--width', width, '--style', 'dark', '-'],
-             'w+') do |io|
+    IO.popen(ENV.to_h.merge({ "CLICOLOR_FORCE" => "1" }), ["glow", "--width", width, "--style", "dark", "-"],
+             "w+") do |io|
       io.write(formatted)
       io.close_write
 
       # fixing glow output: we strip unneeded spaces surrounded by ANSI codes
-      io.each_line { |l| puts l.gsub(/\e\[[\d;]+m ?\e\[0m/, '').gsub(/\e\[[\d;]+m ?\e\[0m/, '').sub(/^(\e\[\d+m)?  /, '') } }
+      io.each_line do |l|
+        puts l.gsub(/\e\[[\d;]+m ?\e\[0m/, "").
+               gsub(/\e\[[\d;]+m ?\e\[0m/, "").
+               sub(
+               /^(\e\[\d+m)?  /, ""
+             )
+      end
 
       # for debug: #.gsub("\e", '~')
     end
@@ -131,7 +141,7 @@ module Utility
   def self.read_stdin_question
     input = $stdin.read
     if input.nil? || input.strip.empty?
-      warn 'No question provided. Exiting.'
+      warn "No question provided. Exiting."
       exit 1
     end
     [input.strip]
@@ -140,18 +150,18 @@ end
 
 # OpenAI API client wrapper
 class AskGptClient
-  SEARCH_MODEL = 'gpt-4o-search-preview'
+  SEARCH_MODEL = "gpt-4o-search-preview"
 
   def initialize(model: nil, max_completion_tokens: nil, debug: false)
     @model = model
     @max_completion_tokens = max_completion_tokens
     @debug = debug
     @client = OpenAiClient.new(model: model, max_completion_tokens: max_completion_tokens, debug: debug,
-                               progress_title: 'Thinking')
+                               progress_title: "Thinking")
   end
 
   def build_system_message(style, brevity)
-    { role: 'system', content: build_system_instruction(style, brevity) }
+    { role: "system", content: build_system_instruction(style, brevity) }
   end
 
   def build_system_instruction(style, brevity)
@@ -173,7 +183,7 @@ class AskGptClient
   end
 
   def build_style_instruction(style)
-    return 'Answer in a Lovecraftian, eldritch horror tone' if style == :eldritch
+    return "Answer in a Lovecraftian, eldritch horror tone" if style == :eldritch
 
     <<~HEREDOC
       - Answer in clear, concise terms, prioritizing Ruby concepts and tooling.
@@ -229,7 +239,7 @@ class AskGptClient
 
     @model = new_model
     @client = OpenAiClient.new(model: @model, max_completion_tokens: @max_completion_tokens, debug: @debug,
-                               progress_title: 'Thinking')
+                               progress_title: "Thinking")
   end
 
   def search_mode?
@@ -245,7 +255,8 @@ class AskGptClient
   end
 
   def chat(question, style: nil, brevity: nil)
-    ask([{ role: 'system', content: build_system_instruction(style, brevity) }, { role: 'user', content: question }])
+    ask([{ role: "system", content: build_system_instruction(style, brevity) },
+         { role: "user", content: question }])
   end
 
   def ask(messages)
@@ -259,14 +270,14 @@ def main
 
   # If no arguments and not piped input, show usage and start interactive mode
   if args[:question_parts].empty? && $stdin.tty?
-    puts 'Enter your questions (empty line to exit):'
-    puts 'Available commands: --search, --no-search'
+    puts "Enter your questions (empty line to exit):"
+    puts "Available commands: --search, --no-search"
   end
 
   client = AskGptClient.new(
     model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : nil,
     max_completion_tokens: args[:short_mode] ? 500 : nil,
-    debug: args[:debug_mode]
+    debug: args[:debug_mode],
   )
 
   # Initialize conversation with system message
@@ -275,7 +286,7 @@ def main
 
   loop do
     if args[:question_parts].empty?
-      print '> '
+      print "> "
       input = $stdin.gets
       break if input.nil?
 
@@ -283,28 +294,29 @@ def main
       break if input.empty?
 
       # Check for mode switches in dialog
-      if input == '--search'
+      if input == "--search"
         client.enable_search_mode
-        question = '--search'
-      elsif input == '--no-search'
+        question = "--search"
+      elsif input == "--no-search"
         client.disable_search_mode
-        puts 'Switched to normal mode'
+        puts "Switched to normal mode"
         next
       else
         question = input
       end
     else
-      question = Utility.build_question(args[:question_parts], args[:file_snippets])
+      question = Utility.build_question(args[:question_parts],
+                                        args[:file_snippets])
     end
 
     # Add user message to conversation
-    messages << { role: 'user', content: question }
+    messages << { role: "user", content: question }
 
     # Get response from API
     answer = client.ask(messages)
 
     # Add assistant response to conversation
-    messages << { role: 'assistant', content: answer }
+    messages << { role: "assistant", content: answer }
 
     Utility.display_answer(answer)
     puts
