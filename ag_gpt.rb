@@ -155,7 +155,7 @@ user_instruction = ARGV.join(' ')
 openai = OpenAi.new
 bash_command = openai.bash_command(user_instruction)
 
-puts "Generated bash command:\n#{bash_command}"
+puts "Generated bash command: #{bash_command}"
 
 # Run the command automatically if it starts with 'ag'
 answer = if bash_command.start_with?('ag ')
