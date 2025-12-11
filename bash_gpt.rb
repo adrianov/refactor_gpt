@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require_relative "lib/openai_client"
+require_relative "lib/agents_file_handler"
 require "shellwords"
 require "rbconfig"
 require "colorize"
@@ -78,6 +79,8 @@ end
 
 # Class to interact with OpenAI API
 class OpenAi
+  include AgentsFileHandler
+
   def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug,
       progress_title: "Generating command")
@@ -90,6 +93,9 @@ class OpenAi
 
   # Method to refactor code based on user instructions
   def bash_command(user_instruction)
+    agents_content = load_agents_file
+    has_agents = !agents_content.empty?
+
     system_info = SystemInfo.to_s
     current_directory = Dir.pwd
 
@@ -98,9 +104,31 @@ class OpenAi
     entries = entries[0..48] + ["..."] if entries.length > 50
     directory_listing = entries.join("\n")
 
-    system_instruction = <<~HEREDOC
+    system_instruction_parts = []
+
+    system_instruction_parts << <<~HEREDOC
       Generate a bash command to accomplish the user's request.
       Return the command only.
+    HEREDOC
+
+    if has_agents
+      system_instruction_parts << <<~HEREDOC
+
+        When generating commands, carefully review the AGENTS.md content below for:
+        - Specific command examples and patterns
+        - Testing commands (e.g., npm test, pytest, rspec, etc.)
+        - Build commands (e.g., npm run build, make, cargo build, etc.)
+        - Linting commands (e.g., npm run lint, ruff, rubocop, etc.)
+        - Any project-specific bash command guidelines
+        Pay special attention to testing and build commands when the user request involves running tests or building the project.
+
+        AGENTS.md content (development guidelines to follow):
+        #{agents_content}
+
+      HEREDOC
+    end
+
+    system_instruction_parts << <<~HEREDOC
 
       System info:
       #{system_info}
@@ -111,6 +139,8 @@ class OpenAi
       Directory listing:
       #{directory_listing}
     HEREDOC
+
+    system_instruction = system_instruction_parts.join
 
     ask([
       {role: "system", content: system_instruction},
