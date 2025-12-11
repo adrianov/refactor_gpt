@@ -112,7 +112,16 @@ module Utility
     width = urls.empty? ? '100' : [urls.map(&:length).max + 2, 100].max.to_s
     formatted = answer.gsub(%r{\(\s*\n\s*(https?://[^)]+)\)}, '(\\1)').gsub(%r{(\[.*?\]\(https?://[^)]+\))}, "\n\n\\1")
 
-    IO.popen(['glow', '--width', width, '-'], 'w') { |io| formatted.each_line { |l| io.write(l.sub(/ +$/, '')) } }
+    IO.popen(ENV.to_h.merge({ 'CLICOLOR_FORCE' => '1' }), ['glow', '--width', width, '--style', 'dark', '-'],
+             'w+') do |io|
+      io.write(formatted)
+      io.close_write
+
+      # fixing glow output: we strip unneeded spaces surrounded by ANSI codes
+      io.each_line { |l| puts l.gsub(/\e\[[\d;]+m ?\e\[0m/, '').gsub(/\e\[[\d;]+m ?\e\[0m/, '').sub(/^(\e\[\d+m)?  /, '') } }
+
+      # for debug: #.gsub("\e", '~')
+    end
   end
 
   def self.init_options
