@@ -163,7 +163,7 @@ answer = if bash_command.start_with?('ag ')
            'y'
          else
            puts 'Do you want to run this command? (y/n)'
-           STDIN.gets.to_s.chomp.downcase
+           $stdin.gets.to_s.chomp.downcase
          end
 
 if answer == 'y'
@@ -173,7 +173,7 @@ if answer == 'y'
   ag_output = `#{bash_command}`
   unless ag_output.strip.empty?
     puts "\nInterpret results with OpenAI? (y/N)"
-    interpret_answer = STDIN.gets&.chomp&.downcase
+    interpret_answer = $stdin.gets&.chomp&.downcase
 
     if interpret_answer == 'y'
       puts "\nInterpreting results with OpenAI..."

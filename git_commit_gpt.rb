@@ -11,14 +11,16 @@ class OpenAi
   include AgentsFileHandler
 
   def initialize(model: nil, debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug, progress_title: 'Planning commits'.cyan)
+    @client = OpenAiClient.new(model: model, debug: debug,
+                               progress_title: 'Planning commits'.cyan)
   end
 
   def ask(prompts)
     @client.ask(prompts)
   end
 
-  def commit_plan(status_output, diff_output, cli_hint, recent_commits, recent_commands)
+  def commit_plan(status_output, diff_output, cli_hint, recent_commits,
+                  recent_commands)
     raw_response = ask([
                          { role: 'system', content: system_instruction },
                          { role: 'user',
@@ -30,7 +32,8 @@ class OpenAi
 
   private
 
-  def build_user_content(status_output, diff_output, cli_hint, recent_commits, recent_commands)
+  def build_user_content(status_output, diff_output, cli_hint, recent_commits,
+                         recent_commands)
     content_parts = []
 
     content_parts << <<~HEREDOC unless cli_hint.empty?
@@ -263,7 +266,7 @@ commits.each_with_index do |commit, idx|
 end
 
 puts 'Do you want to run these git add/commit commands? (y/N)'.white
-answer = STDIN.gets.to_s.chomp.downcase
+answer = $stdin.gets.to_s.chomp.downcase
 
 unless answer == 'y'
   puts 'Commands not executed.'.yellow
@@ -287,7 +290,7 @@ commits.each do |commit|
 end
 
 puts 'Do you want to push? (y/N)'.white
-push_answer = STDIN.gets.to_s.chomp.downcase
+push_answer = $stdin.gets.to_s.chomp.downcase
 
 if push_answer == 'y'
   puts 'Running: git push'.green

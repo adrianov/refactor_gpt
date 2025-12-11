@@ -59,7 +59,8 @@ end
 # Class to interact with OpenAI API
 class OpenAi
   def initialize(model: nil, debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug, progress_title: 'Generating command')
+    @client = OpenAiClient.new(model: model, debug: debug,
+                               progress_title: 'Generating command')
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -123,12 +124,14 @@ safe_commands = %w[grep ag ls df cat less head tail sed awk tr uniq wc cut]
 puts "Generated bash command:\n".cyan
 puts bash_command.green
 
-if safe_commands.any? { |cmd| bash_command.start_with?(cmd + ' ') || bash_command == cmd }
+if safe_commands.any? do |cmd|
+  bash_command.start_with?(cmd + ' ') || bash_command == cmd
+end
   puts "Running: #{bash_command}".green
   system(bash_command)
 else
   puts 'Do you want to run this command? (y/N)'.white
-  answer = STDIN.gets.chomp.downcase
+  answer = $stdin.gets.chomp.downcase
 
   if answer == 'y'
     puts "Running: #{bash_command}".green
