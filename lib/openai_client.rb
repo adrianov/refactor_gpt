@@ -139,7 +139,7 @@ class OpenAiClient
 
     progressbar = create_progress_bar(total_size)
     start_time = Time.now
-    progress_thread = start_progress_thread(progressbar, start_time, progress_speed)
+    progress_thread = start_progress_thread(progressbar, start_time, progress_speed, total_size)
 
     begin
       body = build_request_body(messages)
@@ -190,7 +190,7 @@ class OpenAiClient
     )
   end
 
-  def start_progress_thread(progressbar, start_time, progress_speed)
+  def start_progress_thread(progressbar, start_time, progress_speed, total_size)
     Thread.new do
       loop do
         elapsed_time = Time.now - start_time
@@ -199,7 +199,9 @@ class OpenAiClient
         # Allow progress to continue beyond 100% by gradually increasing total.
         # This provides better user experience than holding at 100% when we don't
         # know the real response speed, giving users continuous visual feedback.
-        progressbar.total += progressbar.total if progressbar.total < progress
+        # Add initial total size to get closer to 100% with each enhancement
+        progressbar.total += total_size if progressbar.total < progress
+        # Rare case: when progress far exceeds total, adding initial size isn't enough
         progressbar.total = progress if progressbar.total < progress
         progressbar.progress = progress
 
