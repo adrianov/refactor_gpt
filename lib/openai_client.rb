@@ -9,6 +9,7 @@ require "ruby-progressbar"
 class OpenAiClient
   DEFAULT_MODEL = "glm-4.6"
   REQUEST_TIMEOUT = 300
+  DEFAULT_PROGRESS_SPEED = 300
   PROGRESS_SPEED_FILE = File.join(Dir.home, ".refactor_gpt").freeze
 
   def initialize(model: nil, debug: false, max_completion_tokens: nil,
@@ -154,14 +155,13 @@ class OpenAiClient
   end
 
   def load_progress_speed
-    return 300 unless File.exist?(PROGRESS_SPEED_FILE)
-
-    value = File.read(PROGRESS_SPEED_FILE).to_f
-    return 300 if value <= 0
-
-    value
+    return @progress_speed if defined?(@progress_speed)
+    @progress_speed =
+      File.exist?(PROGRESS_SPEED_FILE) ? File.read(PROGRESS_SPEED_FILE).to_f : DEFAULT_PROGRESS_SPEED
+    @progress_speed = DEFAULT_PROGRESS_SPEED if @progress_speed <= 0
+    @progress_speed
   rescue SystemCallError, ArgumentError
-    300
+    @progress_speed = DEFAULT_PROGRESS_SPEED
   end
 
   def save_progress_speed(speed)
@@ -218,10 +218,7 @@ class OpenAiClient
     elapsed_time = Time.now - start_time
     return unless elapsed_time.positive?
 
-    current_speed = total_size / elapsed_time
-    # Use weighted average to prevent speed from spiraling up
-    # Cap current_speed to reasonable range (100-10000 chars/sec)
-    current_speed = current_speed.clamp(100, 10_000)
+    current_speed = progressbar.progress / elapsed_time
     save_progress_speed((load_progress_speed * 0.7) + (current_speed * 0.3))
   end
 
