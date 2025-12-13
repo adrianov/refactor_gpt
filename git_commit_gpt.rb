@@ -270,7 +270,7 @@ if status_output.strip.empty? ||
   exit 0
 end
 
-recent_commits = run_cmd("git log -5 --pretty=%s")
+recent_commits = `git log -5 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
 # Get all untracked files and filter out excluded ones before adding to tracking
@@ -334,12 +334,20 @@ end
 display_commits_and_ask(commits, warnings)
 execute_commits(commits)
 
-puts "Do you want to push? (y/N)".white
-push_answer = $stdin.gets.to_s.chomp.downcase
+# Check if there's a remote before asking to push
+remote_output = `git remote 2>/dev/null`.strip
+has_remote = !remote_output.empty?
 
-if push_answer == "y"
-  puts "Running: git push".green
-  system("git push")
+if has_remote
+  puts "Do you want to push? (y/N)".white
+  push_answer = $stdin.gets.to_s.chomp.downcase
+
+  if push_answer == "y"
+    puts "Running: git push".green
+    system("git push")
+  else
+    puts "Changes committed but not pushed.".yellow
+  end
 else
-  puts "Changes committed but not pushed.".yellow
+  puts "Changes committed. No remote configured to push to.".yellow
 end
