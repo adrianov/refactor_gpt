@@ -164,6 +164,7 @@ class OpenAi
   end
 end
 
+# Helper functions
 def run_cmd(cmd, capture_output: true)
   if capture_output
     output = `#{cmd}`
@@ -181,19 +182,84 @@ def run_cmd(cmd, capture_output: true)
   end
 end
 
-# Parse arguments for debug mode
-debug_mode = false
-cli_hint_parts = []
+# Main execution
+def parse_arguments(args)
+  debug_mode = false
+  cli_hint_parts = []
 
-ARGV.each do |arg|
-  case arg
-  when '--debug' then debug_mode = true
+  args.each do |arg|
+    case arg
+    when '--debug' then debug_mode = true
                       next
+    end
+    cli_hint_parts << arg
   end
-  cli_hint_parts << arg
+
+  [debug_mode, cli_hint_parts.join(' ').to_s.strip]
 end
 
-cli_hint = cli_hint_parts.join(' ').to_s.strip
+def get_recent_commands
+  history_file = ENV['HISTFILE'] || File.expand_path('~/.bash_history')
+  if File.exist?(history_file)
+    lines = File.readlines(history_file, chomp: true)
+    lines.last(5).join("\n")
+  else
+    ''
+  end
+end
+
+def execute_commits(commits)
+  commits.each do |commit|
+    files = Array(commit['files']).map(&:to_s).reject(&:empty?)
+    next if files.empty?
+
+    add_cmd = ['git', 'add', *files].map { |p| Shellwords.escape(p) }.join(' ')
+    puts "Running: #{add_cmd}".green
+    system(add_cmd)
+
+    commit_msg = commit['message'].to_s.strip
+    next if commit_msg.empty?
+
+    commit_cmd = "git commit -m #{Shellwords.escape(commit_msg)}"
+    puts "Running: #{commit_cmd}".green
+    system(commit_cmd)
+  end
+end
+
+def display_commits_and_ask(commits, warnings)
+  unless warnings.empty?
+    puts 'Warnings:'.yellow
+    warnings.each do |warning|
+      file = warning['file'].to_s
+      description = warning['description'].to_s
+      probability = warning['probability']
+      probability_str = probability.nil? ? 'n/a' : probability.to_s
+      puts "Warning in #{file}: #{description} (probability: #{probability_str})".yellow
+    end
+    puts
+  end
+
+  puts
+  puts 'Planned commits:'.cyan
+  commits.each_with_index do |commit, idx|
+    puts "Commit ##{idx + 1}: #{commit['message']}".cyan
+    Array(commit['files']).each do |file|
+      puts "  - #{file}".blue
+    end
+    puts
+  end
+
+  puts 'Do you want to run these git add/commit commands? (y/N)'.white
+  answer = $stdin.gets.to_s.chomp.downcase
+
+  unless answer == 'y'
+    puts 'Commands not executed.'.yellow
+    exit 0
+  end
+end
+
+# Entry point
+debug_mode, cli_hint = parse_arguments(ARGV)
 
 status_output = run_cmd('git status')
 
@@ -205,15 +271,7 @@ if status_output.strip.empty? ||
 end
 
 recent_commits = run_cmd('git log -5 --pretty=%s')
-recent_commands = begin
-  history_file = ENV['HISTFILE'] || File.expand_path('~/.bash_history')
-  if File.exist?(history_file)
-    lines = File.readlines(history_file, chomp: true)
-    lines.last(5).join("\n")
-  else
-    ''
-  end
-end
+recent_commands = get_recent_commands
 
 # Check if last command was git diff to avoid showing it twice
 last_command_was_git_diff = recent_commands.lines.last&.include?('git diff')
@@ -245,51 +303,8 @@ if commits.empty?
   exit 0
 end
 
-unless warnings.empty?
-  puts 'Warnings:'.yellow
-  warnings.each do |warning|
-    file = warning['file'].to_s
-    description = warning['description'].to_s
-    probability = warning['probability']
-    probability_str = probability.nil? ? 'n/a' : probability.to_s
-    puts "Warning in #{file}: #{description} (probability: #{probability_str})".yellow
-  end
-  puts
-end
-
-puts
-puts 'Planned commits:'.cyan
-commits.each_with_index do |commit, idx|
-  puts "Commit ##{idx + 1}: #{commit['message']}".cyan
-  Array(commit['files']).each do |file|
-    puts "  - #{file}".blue
-  end
-  puts
-end
-
-puts 'Do you want to run these git add/commit commands? (y/N)'.white
-answer = $stdin.gets.to_s.chomp.downcase
-
-unless answer == 'y'
-  puts 'Commands not executed.'.yellow
-  exit 0
-end
-
-commits.each do |commit|
-  files = Array(commit['files']).map(&:to_s).reject(&:empty?)
-  next if files.empty?
-
-  add_cmd = ['git', 'add', *files].map { |p| Shellwords.escape(p) }.join(' ')
-  puts "Running: #{add_cmd}".green
-  system(add_cmd)
-
-  commit_msg = commit['message'].to_s.strip
-  next if commit_msg.empty?
-
-  commit_cmd = "git commit -m #{Shellwords.escape(commit_msg)}"
-  puts "Running: #{commit_cmd}".green
-  system(commit_cmd)
-end
+display_commits_and_ask(commits, warnings)
+execute_commits(commits)
 
 puts 'Do you want to push? (y/N)'.white
 push_answer = $stdin.gets.to_s.chomp.downcase
