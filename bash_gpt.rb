@@ -1,11 +1,11 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative "lib/openai_client"
-require_relative "lib/agents_file_handler"
-require "shellwords"
-require "rbconfig"
-require "colorize"
+require_relative 'lib/openai_client'
+require_relative 'lib/agents_file_handler'
+require 'shellwords'
+require 'rbconfig'
+require 'colorize'
 
 # Simple system information detection with memoization
 class SystemInfo
@@ -17,63 +17,65 @@ class SystemInfo
       shell = detect_shell
 
       <<~HEREDOC
-        OS: #{platform}#{version.empty? ? "" : ", Version: #{version}"}#{desktop.empty? ? "" : ", Desktop: #{desktop}"}#{shell.empty? ? "" : ", Shell: #{shell}"}
+        OS: #{platform}#{version.empty? ? '' : ", Version: #{version}"}#{desktop.empty? ? '' : ", Desktop: #{desktop}"}#{shell.empty? ? '' : ", Shell: #{shell}"}
       HEREDOC
-    rescue
-      ""
+    rescue StandardError
+      ''
     end
   end
 
   def self.detect_platform
-    case RbConfig::CONFIG["host_os"].downcase
-    when /darwin/ then "macOS"
+    case RbConfig::CONFIG['host_os'].downcase
+    when /darwin/ then 'macOS'
     when /linux/ then detect_linux_platform
-    when /mswin|mingw|cygwin/ then "Windows"
-    else RbConfig::CONFIG["host_os"]
+    when /mswin|mingw|cygwin/ then 'Windows'
+    else RbConfig::CONFIG['host_os']
     end
   end
 
   def self.detect_linux_platform
-    return "Ubuntu" if ubuntu_os_release?
-    "Linux"
+    return 'Ubuntu' if ubuntu_os_release?
+
+    'Linux'
   end
 
   def self.ubuntu_os_release?
-    File.exist?("/etc/os-release") &&
-      File.read("/etc/os-release") =~ /^NAME="?Ubuntu"?/i
+    File.exist?('/etc/os-release') &&
+      File.read('/etc/os-release') =~ /^NAME="?Ubuntu"?/i
   end
 
   def self.detect_version(platform)
     case platform
-    when "macOS" then `sw_vers -productVersion 2>/dev/null`.strip
-    when "Ubuntu" then ubuntu_version
-    when "Windows" then `wmic os get Version /value 2>NUL`.split("=").last.to_s.strip
-    else ""
+    when 'macOS' then `sw_vers -productVersion 2>/dev/null`.strip
+    when 'Ubuntu' then ubuntu_version
+    when 'Windows' then `wmic os get Version /value 2>NUL`.split('=').last.to_s.strip
+    else ''
     end
   end
 
   def self.ubuntu_version
-    return "" unless File.exist?("/etc/os-release")
+    return '' unless File.exist?('/etc/os-release')
 
-    match = File.read("/etc/os-release").match(/^VERSION="?([^"\n]+)"?/)
-    match ? match[1].strip : ""
+    match = File.read('/etc/os-release').match(/^VERSION="?([^"\n]+)"?/)
+    match ? match[1].strip : ''
   end
 
   def self.detect_desktop
-    return ENV["XDG_CURRENT_DESKTOP"].to_s unless ENV["XDG_CURRENT_DESKTOP"].to_s.empty?
-    return ENV["DESKTOP_SESSION"].to_s unless ENV["DESKTOP_SESSION"].to_s.empty?
-    return "GNOME" if ENV["GNOME_DESKTOP_SESSION_ID"]
-    return "KDE" if ENV["KDE_FULL_SESSION"] == "true"
-    ""
+    return ENV['XDG_CURRENT_DESKTOP'].to_s unless ENV['XDG_CURRENT_DESKTOP'].to_s.empty?
+    return ENV['DESKTOP_SESSION'].to_s unless ENV['DESKTOP_SESSION'].to_s.empty?
+    return 'GNOME' if ENV['GNOME_DESKTOP_SESSION_ID']
+    return 'KDE' if ENV['KDE_FULL_SESSION'] == 'true'
+
+    ''
   end
 
   def self.detect_shell
-    shell_path = ENV["SHELL"]
-    return "" unless shell_path
+    shell_path = ENV['SHELL']
+    return '' unless shell_path
 
     File.basename(shell_path)
-  rescue
-    ""
+  rescue StandardError
+    ''
   end
 end
 
@@ -83,7 +85,7 @@ class OpenAi
 
   def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug,
-      progress_title: "Generating command")
+                               progress_title: 'Generating command')
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -101,7 +103,7 @@ class OpenAi
 
     # Get directory listing, limit to 50 entries with '...' if more
     entries = Dir.entries(current_directory)
-    entries = entries[0..48] + ["..."] if entries.length > 50
+    entries = entries[0..48] + ['...'] if entries.length > 50
     directory_listing = entries.join("\n")
 
     system_instruction_parts = []
@@ -143,9 +145,9 @@ class OpenAi
     system_instruction = system_instruction_parts.join
 
     ask([
-      {role: "system", content: system_instruction},
-      {role: "user", content: user_instruction}
-    ]).gsub(/^```.*\n?/, "")
+          { role: 'system', content: system_instruction },
+          { role: 'user', content: user_instruction }
+        ]).gsub(/^```.*\n?/, '')
   end
 end
 
@@ -155,7 +157,7 @@ user_instruction_parts = []
 
 ARGV.each do |arg|
   case arg
-  when "--debug" then debug_mode = true
+  when '--debug' then debug_mode = true
                       next
   end
   user_instruction_parts << arg
@@ -166,27 +168,27 @@ if user_instruction_parts.empty?
   exit
 end
 
-user_instruction = user_instruction_parts.join(" ")
+user_instruction = user_instruction_parts.join(' ')
 bash_command = OpenAi.new(debug: debug_mode).bash_command(user_instruction)
 
 safe_commands = %w[grep ag ls df cat less head tail sed awk tr uniq wc cut]
 
-print "Generated bash command: ".cyan
+print 'Generated bash command: '.cyan
 puts bash_command.green
 
 if safe_commands.any? do |cmd|
-  bash_command.start_with?(cmd + " ") || bash_command == cmd
+  bash_command.start_with?(cmd + ' ') || bash_command == cmd
 end
   puts "Running: #{bash_command}".green
   system(bash_command)
 else
-  puts "Do you want to run this command? (y/N)".white
+  puts 'Do you want to run this command? (y/N)'.white
   answer = $stdin.gets.chomp.downcase
 
-  if answer == "y"
+  if answer == 'y'
     puts "Running: #{bash_command}".green
     system(bash_command)
   else
-    puts "Command not executed.".yellow
+    puts 'Command not executed.'.yellow
   end
 end

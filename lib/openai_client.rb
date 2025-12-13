@@ -1,28 +1,28 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require "httpx"
-require "oj"
-require "ruby-progressbar"
+require 'httpx'
+require 'oj'
+require 'ruby-progressbar'
 
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
-  DEFAULT_MODEL = "glm-4.6"
+  DEFAULT_MODEL = 'glm-4.6'
   REQUEST_TIMEOUT = 300
   DEFAULT_PROGRESS_SPEED = 300
-  PROGRESS_SPEED_FILE = File.join(Dir.home, ".refactor_gpt").freeze
+  PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt').freeze
 
   def initialize(model: nil, debug: false, max_completion_tokens: nil,
-    progress_title: nil)
-    @api_base_url = fetch_env("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    @api_key = fetch_env("OPENAI_ACCESS_TOKEN")
-    @proxy_url = fetch_env("PROXY_URL", nil)
-    @model = model || fetch_env("DEFAULT_MODEL", DEFAULT_MODEL)
+                 progress_title: nil)
+    @api_base_url = fetch_env('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+    @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
+    @proxy_url = fetch_env('PROXY_URL', nil)
+    @model = model || fetch_env('DEFAULT_MODEL', DEFAULT_MODEL)
     @debug = debug
     @max_completion_tokens = max_completion_tokens
     @progress_title = progress_title
     @env_vars = nil
-    @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
+    @request_timeout = Integer(fetch_env('REQUEST_TIMEOUT', REQUEST_TIMEOUT))
   end
 
   def ask(messages)
@@ -43,7 +43,7 @@ class OpenAiClient
   private
 
   def build_request_body(messages)
-    body = {model: @model, messages: messages}
+    body = { model: @model, messages: messages }
     if @max_completion_tokens
       body[:max_completion_tokens] =
         @max_completion_tokens
@@ -52,35 +52,35 @@ class OpenAiClient
   end
 
   def debug_request(body)
-    warn "--- OpenAI request payload (Ruby hash) ---"
+    warn '--- OpenAI request payload (Ruby hash) ---'
     pretty_messages = body[:messages].map do |msg|
-      if msg[:role] == "system" && msg[:content].is_a?(String)
-        {role: msg[:role], content_lines: msg[:content].split("\n")}
+      if msg[:role] == 'system' && msg[:content].is_a?(String)
+        { role: msg[:role], content_lines: msg[:content].split("\n") }
       else
         msg
       end
     end
     warn Oj.dump(body.merge(messages: pretty_messages), mode: :compat,
-      indent: 2)
-    warn "--- end payload ---"
+                                                        indent: 2)
+    warn '--- end payload ---'
   end
 
   def make_api_request(body)
     http = HTTPX.plugin(:proxy).with(
-      timeout: {read_timeout: @request_timeout,
-                write_timeout: @request_timeout},
-      ssl: {verify_mode: OpenSSL::SSL::VERIFY_NONE}
+      timeout: { read_timeout: @request_timeout,
+                 write_timeout: @request_timeout },
+      ssl: { verify_mode: OpenSSL::SSL::VERIFY_NONE }
     )
 
     # Set up proxy if configured
     http = http.with_proxy(uri: @proxy_url) if @proxy_url && !@proxy_url.empty?
 
     http.post("#{@api_base_url}/chat/completions",
-      headers: {
-        "Content-Type" => "application/json",
-        "Authorization" => "Bearer #{@api_key}"
-      },
-      body: Oj.dump(body, mode: :compat))
+              headers: {
+                'Content-Type' => 'application/json',
+                'Authorization' => "Bearer #{@api_key}"
+              },
+              body: Oj.dump(body, mode: :compat))
   end
 
   def handle_response_errors(response)
@@ -97,17 +97,17 @@ class OpenAiClient
   end
 
   def extract_answer(response)
-    answer = Oj.load(response.body).dig("choices", 0, "message", "content")
+    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
 
     # If content is empty or nil, try reasoning_content
     if answer.nil? || answer.empty?
-      answer = Oj.load(response.body).dig("choices", 0, "message",
-        "reasoning_content")
+      answer = Oj.load(response.body).dig('choices', 0, 'message',
+                                          'reasoning_content')
     end
 
     return answer unless answer.nil? || answer.empty?
 
-    warn "No answer returned from OpenAI API. Full response body:"
+    warn 'No answer returned from OpenAI API. Full response body:'
     warn response.body
     exit 1
   end
@@ -118,7 +118,7 @@ class OpenAiClient
     return value unless value.nil?
 
     # Only require certain variables, make others optional
-    required_vars = ["OPENAI_ACCESS_TOKEN"]
+    required_vars = ['OPENAI_ACCESS_TOKEN']
     if required_vars.include?(key)
       warn("Missing required environment variable: #{key}. Please add it to the .env file.")
       exit 1
@@ -156,6 +156,7 @@ class OpenAiClient
 
   def load_progress_speed
     return @progress_speed if defined?(@progress_speed)
+
     @progress_speed =
       File.exist?(PROGRESS_SPEED_FILE) ? File.read(PROGRESS_SPEED_FILE).to_f : DEFAULT_PROGRESS_SPEED
     @progress_speed = DEFAULT_PROGRESS_SPEED if @progress_speed <= 0
@@ -185,7 +186,7 @@ class OpenAiClient
     ProgressBar.create(
       title: @progress_title,
       total: total_size,
-      format: "%t: |%B| %p%% %e",
+      format: '%t: |%B| %p%% %e',
       length: 60
     )
   end
@@ -210,7 +211,7 @@ class OpenAiClient
     end
   end
 
-  def finish_progress(progress_thread, progressbar, start_time, total_size)
+  def finish_progress(progress_thread, progressbar, start_time, _total_size)
     progress_thread.kill
     progressbar.finish
 
@@ -224,15 +225,15 @@ class OpenAiClient
 
   def load_env_vars
     # First try project root (one level up from lib/)
-    env_file_path = File.join(File.dirname(__dir__), ".env")
+    env_file_path = File.join(File.dirname(__dir__), '.env')
 
     # Fallback to current directory if not found
-    env_file_path = File.join(Dir.pwd, ".env") unless File.exist?(env_file_path)
+    env_file_path = File.join(Dir.pwd, '.env') unless File.exist?(env_file_path)
 
     return {} unless File.exist?(env_file_path)
 
     File.foreach(env_file_path).with_object({}) do |line, h|
-      key, value = line.split("=", 2)
+      key, value = line.split('=', 2)
       h[key.strip] = value.strip if key && value
     end
   end

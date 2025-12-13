@@ -11,7 +11,6 @@ Metrics/AbcSize:
   Enabled: true
   Max: 17
 
-# Disable all other departments
 Bundler:
   Enabled: false
 Gemspec:
@@ -26,11 +25,7 @@ Security:
   Enabled: false
 Style:
   Enabled: false
-
-# Disable all Metrics except AbcSize
 Metrics:
   Enabled: false
-
-# Disable all Layout except LineLength
 Layout:
   Enabled: false

@@ -1,18 +1,18 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative "lib/openai_client"
-require_relative "lib/agents_file_handler"
-require "shellwords"
-require "ruby-progressbar"
-require "colorize"
+require_relative 'lib/openai_client'
+require_relative 'lib/agents_file_handler'
+require 'shellwords'
+require 'ruby-progressbar'
+require 'colorize'
 
 class OpenAi
   include AgentsFileHandler
 
   def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug,
-      progress_title: "Planning commits".cyan)
+                               progress_title: 'Planning commits'.cyan)
   end
 
   def ask(prompts)
@@ -20,20 +20,20 @@ class OpenAi
   end
 
   def commit_plan(status_output, diff_output, cli_hint, recent_commits,
-    recent_commands)
+                  recent_commands)
     raw_response = ask([
-      {role: "system", content: system_instruction},
-      {role: "user",
-       content: build_user_content(status_output, diff_output, cli_hint, recent_commits,
-         recent_commands)}
-    ])
+                         { role: 'system', content: system_instruction },
+                         { role: 'user',
+                           content: build_user_content(status_output, diff_output, cli_hint, recent_commits,
+                                                       recent_commands) }
+                       ])
     parse_commit_plan_response(raw_response)
   end
 
   private
 
   def build_user_content(status_output, diff_output, cli_hint, recent_commits,
-    recent_commands)
+                         recent_commands)
     content_parts = []
 
     content_parts << <<~HEREDOC unless cli_hint.empty?
@@ -43,22 +43,22 @@ class OpenAi
     HEREDOC
 
     content_parts.concat([
-      <<~HEREDOC
-          Here is the git status:
+                           <<~HEREDOC
+                               Here is the git status:
 
-          #{status_output}
-        HEREDOC,
-        <<~HEREDOC
-          Here is the git diff for all changes:
+                               #{status_output}
+                             HEREDOC,
+                             <<~HEREDOC
+                               Here is the git diff for all changes:
 
-          #{diff_output}
-        HEREDOC,
-        <<~HEREDOC
-          Here are the last 5 git commit one-line messages (most recent first):
+                               #{diff_output}
+                             HEREDOC,
+                             <<~HEREDOC
+                               Here are the last 5 git commit one-line messages (most recent first):
 
-          #{recent_commits}
-      HEREDOC
-    ])
+                               #{recent_commits}
+                           HEREDOC
+                         ])
 
     unless recent_commands.empty?
       content_parts << <<~HEREDOC
@@ -72,7 +72,7 @@ class OpenAi
   end
 
   def parse_commit_plan_response(raw_response)
-    json_str = raw_response.gsub(/^```.*\n?/, "").gsub(/```$/, "").strip
+    json_str = raw_response.gsub(/^```.*\n?/, '').gsub(/```$/, '').strip
     Oj.load(json_str)
   rescue Oj::ParseError
     puts "Failed to parse model response as JSON. Raw response:\n#{raw_response}".red
@@ -121,7 +121,7 @@ class OpenAi
       - Every changed file from the status output must appear in exactly one group.
       - Use only relative file paths exactly as they appear in the status output (after the status flags).
       - Prefer a small number of coherent commits over many tiny ones.
-      - Additionally, carefully review the provided diffs for potential errors or issues (such as obvious bugs, suspicious logic, or likely regressions)#{has_agents ? " based on the development guidelines provided in AGENTS.md" : ""}.
+      - Additionally, carefully review the provided diffs for potential errors or issues (such as obvious bugs, suspicious logic, or likely regressions)#{has_agents ? ' based on the development guidelines provided in AGENTS.md' : ''}.
       - If you detect any potential error in a file or diff hunk, include a warning entry describing:
         - the affected file path,
         - a short description of the possible error,
@@ -187,46 +187,46 @@ cli_hint_parts = []
 
 ARGV.each do |arg|
   case arg
-  when "--debug" then debug_mode = true
+  when '--debug' then debug_mode = true
                       next
   end
   cli_hint_parts << arg
 end
 
-cli_hint = cli_hint_parts.join(" ").to_s.strip
+cli_hint = cli_hint_parts.join(' ').to_s.strip
 
-status_output = run_cmd("git status")
+status_output = run_cmd('git status')
 
 if status_output.strip.empty? ||
-    status_output.include?("nothing to commit") ||
-    status_output.include?("working tree clean")
-  puts "No changes to commit.".yellow
+   status_output.include?('nothing to commit') ||
+   status_output.include?('working tree clean')
+  puts 'No changes to commit.'.yellow
   exit 0
 end
 
-recent_commits = run_cmd("git log -5 --pretty=%s")
+recent_commits = run_cmd('git log -5 --pretty=%s')
 recent_commands = begin
-  history_file = ENV["HISTFILE"] || File.expand_path("~/.bash_history")
+  history_file = ENV['HISTFILE'] || File.expand_path('~/.bash_history')
   if File.exist?(history_file)
     lines = File.readlines(history_file, chomp: true)
     lines.last(5).join("\n")
   else
-    ""
+    ''
   end
 end
 
 # Check if last command was git diff to avoid showing it twice
-last_command_was_git_diff = recent_commands.lines.last&.include?("git diff")
+last_command_was_git_diff = recent_commands.lines.last&.include?('git diff')
 
 unless last_command_was_git_diff
-  system("git diff")
+  system('git diff')
   puts
 end
 
 # Capture diff output for OpenAI analysis
 diff_output = `git diff`
 unless $?.success?
-  warn "Failed to capture diff for analysis".red
+  warn 'Failed to capture diff for analysis'.red
   exit 1
 end
 
@@ -237,53 +237,53 @@ plan = OpenAi.new(debug: debug_mode).commit_plan(
   recent_commits,
   recent_commands
 )
-commits = plan["commits"] || []
-warnings = plan["warnings"] || []
+commits = plan['commits'] || []
+warnings = plan['warnings'] || []
 
 if commits.empty?
-  puts "No commits suggested by the model.".yellow
+  puts 'No commits suggested by the model.'.yellow
   exit 0
 end
 
 unless warnings.empty?
-  puts "Warnings:".yellow
+  puts 'Warnings:'.yellow
   warnings.each do |warning|
-    file = warning["file"].to_s
-    description = warning["description"].to_s
-    probability = warning["probability"]
-    probability_str = probability.nil? ? "n/a" : probability.to_s
+    file = warning['file'].to_s
+    description = warning['description'].to_s
+    probability = warning['probability']
+    probability_str = probability.nil? ? 'n/a' : probability.to_s
     puts "Warning in #{file}: #{description} (probability: #{probability_str})".yellow
   end
   puts
 end
 
 puts
-puts "Planned commits:".cyan
+puts 'Planned commits:'.cyan
 commits.each_with_index do |commit, idx|
-  puts "Commit ##{idx + 1}: #{commit["message"]}".cyan
-  Array(commit["files"]).each do |file|
+  puts "Commit ##{idx + 1}: #{commit['message']}".cyan
+  Array(commit['files']).each do |file|
     puts "  - #{file}".blue
   end
   puts
 end
 
-puts "Do you want to run these git add/commit commands? (y/N)".white
+puts 'Do you want to run these git add/commit commands? (y/N)'.white
 answer = $stdin.gets.to_s.chomp.downcase
 
-unless answer == "y"
-  puts "Commands not executed.".yellow
+unless answer == 'y'
+  puts 'Commands not executed.'.yellow
   exit 0
 end
 
 commits.each do |commit|
-  files = Array(commit["files"]).map(&:to_s).reject(&:empty?)
+  files = Array(commit['files']).map(&:to_s).reject(&:empty?)
   next if files.empty?
 
-  add_cmd = ["git", "add", *files].map { |p| Shellwords.escape(p) }.join(" ")
+  add_cmd = ['git', 'add', *files].map { |p| Shellwords.escape(p) }.join(' ')
   puts "Running: #{add_cmd}".green
   system(add_cmd)
 
-  commit_msg = commit["message"].to_s.strip
+  commit_msg = commit['message'].to_s.strip
   next if commit_msg.empty?
 
   commit_cmd = "git commit -m #{Shellwords.escape(commit_msg)}"
@@ -291,12 +291,12 @@ commits.each do |commit|
   system(commit_cmd)
 end
 
-puts "Do you want to push? (y/N)".white
+puts 'Do you want to push? (y/N)'.white
 push_answer = $stdin.gets.to_s.chomp.downcase
 
-if push_answer == "y"
-  puts "Running: git push".green
-  system("git push")
+if push_answer == 'y'
+  puts 'Running: git push'.green
+  system('git push')
 else
-  puts "Changes committed but not pushed.".yellow
+  puts 'Changes committed but not pushed.'.yellow
 end
