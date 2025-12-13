@@ -4,6 +4,7 @@
 require_relative "lib/openai_client"
 require "ruby-progressbar"
 require "rbconfig"
+require "reline"
 
 # System information detection
 class SystemInfo
@@ -165,7 +166,7 @@ module Utility
     line
       .gsub(/(\e\[[\d;]+m\s*)+$/, "\e[0m")
       .sub(/^.*?  /, "")
-      # .gsub("\e", "~") # debug
+    # .gsub("\e", "~") # debug
   end
 
   def self.init_options
@@ -312,8 +313,10 @@ end
 def show_interactive_prompt(args)
   return unless args[:question_parts].empty? && $stdin.tty?
 
-  puts "Enter your questions (empty line to exit):"
+  puts "Enter your questions (Ctrl+D to exit):"
   puts "Available commands: --search, --no-search"
+  puts "Use arrow keys for history, Tab for completion"
+  puts "For multiline input, press Enter twice to submit"
 end
 
 def create_client(args)
@@ -344,14 +347,22 @@ end
 
 def get_question(args)
   if args[:question_parts].empty?
-    print "> "
-    input = $stdin.gets
-    return nil if input.nil?
+    lines = []
 
-    input = input.strip
-    return nil if input.empty?
+    loop do
+      line = Reline.readline(lines.empty? ? "> " : "  ", true)
+      return nil if line.nil?
 
-    input
+      line = line.strip
+      if line.empty?
+        break unless lines.empty?
+        return nil
+      end
+
+      lines << line
+    end
+
+    lines.join("\n")
   else
     Utility.build_question(args[:question_parts], args[:file_snippets])
   end
