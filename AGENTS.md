@@ -43,3 +43,9 @@ When working with this codebase, follow these refactoring principles:
 - Create backups for non-git files
 - Handle network errors gracefully
 - Use appropriate exit codes
+
+### Linting and Code Quality
+- Always run `rubocop -a` to auto-correct Ruby style issues before committing changes
+- Ensure syntax is valid with `ruby -c` after modifications
+- Follow Ruby style guides and existing code conventions
+- Remove duplicate code and unused variables
