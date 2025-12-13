@@ -302,14 +302,15 @@ end
 last_command_was_git_diff = recent_commands.lines.last&.include?("git diff")
 
 # Show all changes in git diff (no exclusions)
-diff_cmd = "git diff"
+display_diff_cmd = "git diff"
 
 unless last_command_was_git_diff
-  system(diff_cmd)
+  system(display_diff_cmd)
   puts
 end
 
-# Capture diff output for OpenAI analysis
+# Capture diff output for OpenAI analysis with 500 lines context
+diff_cmd = "git diff -U500"
 diff_output = `#{diff_cmd}`
 unless $?.success?
   warn "Failed to capture diff for analysis".red
