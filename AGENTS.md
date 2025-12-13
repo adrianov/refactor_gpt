@@ -49,3 +49,4 @@ When working with this codebase, follow these refactoring principles:
 - Ensure syntax is valid with `ruby -c` after modifications
 - Follow Ruby style guides and existing code conventions
 - Remove duplicate code and unused variables
+- Read files as whole when fixing errors or adding new functionality to ensure complete context is preserved
