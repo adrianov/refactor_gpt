@@ -1,39 +1,41 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require 'httpx'
-require 'oj'
-require 'ruby-progressbar'
+require "httpx"
+require "oj"
+require "ruby-progressbar"
 
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
-  DEFAULT_MODEL = 'glm-4.6'
+  DEFAULT_MODEL = "glm-4.6"
   REQUEST_TIMEOUT = 300
   DEFAULT_PROGRESS_SPEED = 300
-  PROGRESS_SPEED_FILE = File.join(Dir.home, '.refactor_gpt').freeze
+  PROGRESS_SPEED_FILE = File.join(Dir.home, ".refactor_gpt").freeze
 
   def initialize(model: nil, debug: false, max_completion_tokens: nil,
-                 progress_title: nil)
-    @api_base_url = fetch_env('OPENAI_BASE_URL', 'https://api.openai.com/v1')
-    @api_key = fetch_env('OPENAI_ACCESS_TOKEN')
-    @proxy_url = fetch_env('PROXY_URL', nil)
-    @model = model || fetch_env('DEFAULT_MODEL', DEFAULT_MODEL)
+    progress_title: nil)
+    @api_base_url = fetch_env("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    @api_key = fetch_env("OPENAI_ACCESS_TOKEN")
+    @proxy_url = fetch_env("PROXY_URL", nil)
+    @model = model || fetch_env("DEFAULT_MODEL", DEFAULT_MODEL)
     @debug = debug
     @max_completion_tokens = max_completion_tokens
     @progress_title = progress_title
     @env_vars = nil
-    @request_timeout = Integer(fetch_env('REQUEST_TIMEOUT', REQUEST_TIMEOUT))
+    @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
   end
 
   def ask(messages)
     return ask_with_progress(messages) if @progress_title
 
-    body = build_request_body(messages)
-    debug_request(body) if @debug
+    retry_with_backoff do
+      body = build_request_body(messages)
+      debug_request(body) if @debug
 
-    response = make_api_request(body)
-    handle_response_errors(response)
-    extract_answer(response)
+      response = make_api_request(body)
+      handle_response_errors(response)
+      extract_answer(response)
+    end
   rescue HTTPX::Error => e
     handle_http_error(e)
   rescue Oj::ParseError => e
@@ -42,8 +44,30 @@ class OpenAiClient
 
   private
 
+  def retry_with_backoff(max_retries: 3, base_delay: 1)
+    retries = 0
+
+    begin
+      yield
+    rescue HTTPX::Connection::HTTP2::GoawayError,
+      HTTPX::TimeoutError,
+      HTTPX::ConnectError => e
+
+      retries += 1
+      if retries <= max_retries
+        delay = base_delay * (2**(retries - 1))
+        error_name = e.class.name.split("::").last
+        warn "⚠️  Connection issue (#{error_name}), retrying in #{delay}s... (#{retries}/#{max_retries})"
+        sleep(delay)
+        retry
+      else
+        raise e
+      end
+    end
+  end
+
   def build_request_body(messages)
-    body = { model: @model, messages: messages }
+    body = {model: @model, messages: messages}
     if @max_completion_tokens
       body[:max_completion_tokens] =
         @max_completion_tokens
@@ -52,62 +76,60 @@ class OpenAiClient
   end
 
   def debug_request(body)
-    warn '--- OpenAI request payload (Ruby hash) ---'
+    warn "--- OpenAI request payload (Ruby hash) ---"
     pretty_messages = body[:messages].map do |msg|
-      if msg[:role] == 'system' && msg[:content].is_a?(String)
-        { role: msg[:role], content_lines: msg[:content].split("\n") }
+      if msg[:role] == "system" && msg[:content].is_a?(String)
+        {role: msg[:role], content_lines: msg[:content].split("\n")}
       else
         msg
       end
     end
     warn Oj.dump(body.merge(messages: pretty_messages), mode: :compat,
-                                                        indent: 2)
-    warn '--- end payload ---'
+      indent: 2)
+    warn "--- end payload ---"
   end
 
   def make_api_request(body)
     http = HTTPX.plugin(:proxy).with(
-      timeout: { read_timeout: @request_timeout,
-                 write_timeout: @request_timeout },
-      ssl: { verify_mode: OpenSSL::SSL::VERIFY_NONE }
+      timeout: {read_timeout: @request_timeout,
+                write_timeout: @request_timeout},
+      ssl: {verify_mode: OpenSSL::SSL::VERIFY_NONE}
     )
 
     # Set up proxy if configured
     http = http.with_proxy(uri: @proxy_url) if @proxy_url && !@proxy_url.empty?
 
     http.post("#{@api_base_url}/chat/completions",
-              headers: {
-                'Content-Type' => 'application/json',
-                'Authorization' => "Bearer #{@api_key}"
-              },
-              body: Oj.dump(body, mode: :compat))
+      headers: {
+        "Content-Type" => "application/json",
+        "Authorization" => "Bearer #{@api_key}"
+      },
+      body: Oj.dump(body, mode: :compat))
   end
 
   def handle_response_errors(response)
     return if response.status == 200
 
-    warn "OpenAI API request failed with status #{response.status}"
-    warn response.body
+    pretty_print_error("API Error", response.status, response.body)
     exit 1
   rescue NoMethodError
     # Handle HTTPX::ErrorResponse which doesn't have status method
-    warn "OpenAI API request failed: #{response.class}"
-    warn "Error details: #{response.inspect}"
+    pretty_print_error("API Error", "Unknown", response.inspect)
     exit 1
   end
 
   def extract_answer(response)
-    answer = Oj.load(response.body).dig('choices', 0, 'message', 'content')
+    answer = Oj.load(response.body).dig("choices", 0, "message", "content")
 
     # If content is empty or nil, try reasoning_content
     if answer.nil? || answer.empty?
-      answer = Oj.load(response.body).dig('choices', 0, 'message',
-                                          'reasoning_content')
+      answer = Oj.load(response.body).dig("choices", 0, "message",
+        "reasoning_content")
     end
 
     return answer unless answer.nil? || answer.empty?
 
-    warn 'No answer returned from OpenAI API. Full response body:'
+    warn "No answer returned from OpenAI API. Full response body:"
     warn response.body
     exit 1
   end
@@ -118,7 +140,7 @@ class OpenAiClient
     return value unless value.nil?
 
     # Only require certain variables, make others optional
-    required_vars = ['OPENAI_ACCESS_TOKEN']
+    required_vars = ["OPENAI_ACCESS_TOKEN"]
     if required_vars.include?(key)
       warn("Missing required environment variable: #{key}. Please add it to the .env file.")
       exit 1
@@ -143,12 +165,14 @@ class OpenAiClient
     progress_thread = start_progress_thread(progressbar, start_time, progress_speed, total_size)
 
     begin
-      body = build_request_body(messages)
-      debug_request(body) if @debug
+      retry_with_backoff do
+        body = build_request_body(messages)
+        debug_request(body) if @debug
 
-      response = make_api_request(body)
-      handle_response_errors(response)
-      extract_answer(response)
+        response = make_api_request(body)
+        handle_response_errors(response)
+        extract_answer(response)
+      end
     ensure
       finish_progress(progress_thread, progressbar, start_time, total_size)
     end
@@ -172,7 +196,20 @@ class OpenAiClient
   end
 
   def handle_http_error(error)
-    warn "HTTP request failed: #{error.class} - #{error.message}"
+    error_type = case error
+    when HTTPX::Connection::HTTP2::GoawayError
+      "Connection Closed (HTTP/2)"
+    when HTTPX::TimeoutError
+      "Request Timeout"
+    when HTTPX::ResolveError
+      "DNS Resolution Failed"
+    when HTTPX::ConnectError
+      "Connection Failed"
+    else
+      error.class.name.split("::").last
+    end
+
+    pretty_print_error(error_type, "Network Error", error.message)
     exit 1
   end
 
@@ -186,7 +223,7 @@ class OpenAiClient
     ProgressBar.create(
       title: @progress_title,
       total: total_size,
-      format: '%t: |%B| %p%% %e',
+      format: "%t: |%B| %p%% %e",
       length: 60
     )
   end
@@ -223,17 +260,74 @@ class OpenAiClient
     save_progress_speed((load_progress_speed * 0.7) + (current_speed * 0.3))
   end
 
+  def pretty_print_error(error_type, status, details)
+    print_error_header(error_type, status)
+    print_error_details(details)
+    print_error_suggestions(error_type)
+  end
+
+  def print_error_header(error_type, status)
+    puts
+    puts "❌ #{error_type}"
+    puts "┌─ #{"─" * 50}"
+    puts "│ Status: #{status}"
+    puts "│ Time: #{Time.now.strftime("%Y-%m-%d %H:%M:%S")}"
+    puts "├─ #{"─" * 50}"
+  end
+
+  def print_error_details(details)
+    # Truncate very long error details for readability
+    if details.length > 200
+      puts "│ Details: #{details[0..197]}..."
+    else
+      puts "│ Details: #{details}"
+    end
+
+    puts "└─ #{"─" * 50}"
+    puts
+  end
+
+  def print_error_suggestions(error_type)
+    suggestions = error_suggestions(error_type)
+    return unless suggestions
+
+    puts "💡 Suggestions:"
+    suggestions.each { |suggestion| puts "   #{suggestion}" }
+    puts
+  end
+
+  def error_suggestions(error_type)
+    case error_type
+    when "Connection Closed (HTTP/2)", "Connection Failed"
+      ["• Check your internet connection",
+        "• Try again in a few moments",
+        "• Verify API endpoint is accessible"]
+    when "Request Timeout"
+      ["• Request was too large or server is busy",
+        "• Try with a shorter prompt",
+        "• Check REQUEST_TIMEOUT environment variable"]
+    when "DNS Resolution Failed"
+      ["• Check your DNS settings",
+        "• Verify OPENAI_BASE_URL environment variable",
+        "• Try using a different network"]
+    when "API Error"
+      ["• Check your API key (OPENAI_ACCESS_TOKEN)",
+        "• Verify API quota and billing",
+        "• Check if the model is available"]
+    end
+  end
+
   def load_env_vars
     # First try project root (one level up from lib/)
-    env_file_path = File.join(File.dirname(__dir__), '.env')
+    env_file_path = File.join(File.dirname(__dir__), ".env")
 
     # Fallback to current directory if not found
-    env_file_path = File.join(Dir.pwd, '.env') unless File.exist?(env_file_path)
+    env_file_path = File.join(Dir.pwd, ".env") unless File.exist?(env_file_path)
 
     return {} unless File.exist?(env_file_path)
 
     File.foreach(env_file_path).with_object({}) do |line, h|
-      key, value = line.split('=', 2)
+      key, value = line.split("=", 2)
       h[key.strip] = value.strip if key && value
     end
   end
