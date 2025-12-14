@@ -64,6 +64,12 @@ class SystemInfo
     info += ", Desktop: #{desktop}" unless desktop.empty?
     info
   end
+
+  def self.date_info
+    `date`.strip
+  rescue StandardError
+    ''
+  end
 end
 
 # Argument parsing and utilities
@@ -205,16 +211,12 @@ class AskGptClient
 
     system_instr = base_instruction(style_instr)
     system_info = SystemInfo.to_s
-    if system_info.empty?
-      system_instr
-    else
-      <<~HEREDOC
-        #{system_instr.strip}
+    date_info = SystemInfo.date_info
 
-        User environment:
-        #{system_info}
-      HEREDOC
-    end
+    result = system_instr.strip
+    result += "\n\nUser environment:\n#{system_info}" unless system_info.empty?
+    result += "\nCurrent date/time: #{date_info}" unless date_info.empty?
+    result
   end
 
   def build_style_instruction(style)
