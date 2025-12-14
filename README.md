@@ -57,11 +57,12 @@ To make the scripts easier to use from anywhere, you can add aliases to your `.z
 
 2. Run the following commands to add the aliases to your `.zshrc`:
    ```bash
-   echo "alias refactor='$(pwd)/refactor_gpt.rb'" >> ~/.zshrc
-   echo "alias agpt='$(pwd)/ag_gpt.rb'" >> ~/.zshrc
-   echo "alias bashgpt='$(pwd)/bash_gpt.rb'" >> ~/.zshrc
-   echo "alias ask='$(pwd)/ask_gpt.rb'" >> ~/.zshrc
-   echo "alias gcommit='$(pwd)/git_commit_gpt.rb'" >> ~/.zshrc
+    echo "alias refactor='$(pwd)/refactor_gpt.rb'" >> ~/.zshrc
+    echo "alias agpt='$(pwd)/ag_gpt.rb'" >> ~/.zshrc
+    echo "alias bashgpt='$(pwd)/bash_gpt.rb'" >> ~/.zshrc
+    echo "alias ask='$(pwd)/ask_gpt.rb'" >> ~/.zshrc
+    echo "alias gcommit='$(pwd)/git_commit_gpt.rb'" >> ~/.zshrc
+    echo "alias ge='$(pwd)/git_explain_gpt.rb'" >> ~/.zshrc
    ```
 
 3. Activate the aliases by either:
@@ -74,6 +75,7 @@ agpt "find all database queries"
 bashgpt "list all files modified today"
 ask "explain how Ruby blocks work"
 gcommit "plan and create structured git commits"
+ge "explain current git changes"
 
 ## Available Scripts
 
@@ -148,6 +150,21 @@ Features:
 - Ensures every changed file is included in exactly one suggested commit
 - Prints a clear commit plan and asks for confirmation before running any `git add`/`git commit` commands
 - Reviews diffs for potential issues and prints warnings with a probability score
+
+### git_explain_gpt.rb
+
+An assistant that analyzes git changes and creates comprehensive technical explanations in Markdown format.
+
+Usage:
+./git_explain_gpt.rb [--debug]
+
+Features:
+- Analyzes `git status`, `git diff`, recent commits, and terminal history
+- Creates detailed technical explanations with code analysis and integration impact
+- Includes specific file paths and line numbers for all changes
+- Uses `glow` for formatted Markdown output when available
+- Incorporates AGENTS.md development guidelines when present
+- Provides testing recommendations and developer notes for the changes
 
 ## Safety Features
 
