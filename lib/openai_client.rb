@@ -51,7 +51,7 @@ class OpenAiClient
       yield
     rescue HTTPX::Connection::HTTP2::GoawayError,
       HTTPX::TimeoutError,
-      HTTPX::ConnectError => e
+      HTTPX::ConnectionError => e
 
       retries += 1
       if retries <= max_retries
@@ -119,12 +119,16 @@ class OpenAiClient
   end
 
   def extract_answer(response)
-    answer = Oj.load(response.body).dig("choices", 0, "message", "content")
+    return nil unless response&.body
+
+    parsed_response = Oj.load(response.body)
+    return nil unless parsed_response.is_a?(Hash)
+
+    answer = parsed_response.dig("choices", 0, "message", "content")
 
     # If content is empty or nil, try reasoning_content
     if answer.nil? || answer.empty?
-      answer = Oj.load(response.body).dig("choices", 0, "message",
-        "reasoning_content")
+      answer = parsed_response.dig("choices", 0, "message", "reasoning_content")
     end
 
     return answer unless answer.nil? || answer.empty?
@@ -203,7 +207,7 @@ class OpenAiClient
       "Request Timeout"
     when HTTPX::ResolveError
       "DNS Resolution Failed"
-    when HTTPX::ConnectError
+    when HTTPX::ConnectionError
       "Connection Failed"
     else
       error.class.name.split("::").last
