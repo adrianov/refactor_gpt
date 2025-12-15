@@ -248,7 +248,7 @@ class OpenAiClient
     end
   end
 
-  def finish_progress(progress_thread, progressbar, start_time, _total_size)
+  def finish_progress(progress_thread, progressbar, start_time, total_size)
     progress_thread.kill
     progressbar.finish
 
@@ -256,8 +256,10 @@ class OpenAiClient
     elapsed_time = Time.now - start_time
     return unless elapsed_time.positive?
 
-    current_speed = progressbar.progress / elapsed_time
-    save_progress_speed((load_progress_speed * 0.7) + (current_speed * 0.3))
+    # Use actual content size instead of inflated progressbar.progress
+    # progressbar.progress may be inflated to provide continuous visual feedback
+    actual_speed = total_size / elapsed_time
+    save_progress_speed((load_progress_speed * 0.7) + (actual_speed * 0.3))
   end
 
   def pretty_print_error(error_type, status, details)
