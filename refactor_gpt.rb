@@ -1,10 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require 'colorize'
-require_relative 'lib/openai_client'
-require_relative 'lib/agents_file_handler'
-require 'shellwords'
+require "colorize"
+require_relative "lib/openai_client"
+require_relative "lib/agents_file_handler"
+require "shellwords"
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -12,7 +12,7 @@ class OpenAi
 
   def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug,
-                               progress_title: 'Refactoring code'.cyan)
+      progress_title: "Refactoring code".cyan)
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -37,7 +37,7 @@ class OpenAi
       quotes, alternative method names. Only suggest real structural changes.
     HEREDOC
 
-    system_instruction_parts << 'Follow Ruby development guidelines from AGENTS.md.' if has_agents
+    system_instruction_parts << "Follow Ruby development guidelines from AGENTS.md." if has_agents
 
     system_instruction_parts << <<~HEREDOC
 
@@ -126,8 +126,8 @@ class OpenAi
 
     ask(
       [
-        { role: 'system', content: system_instruction },
-        { role: 'user', content: prompt }
+        {role: "system", content: system_instruction},
+        {role: "user", content: prompt}
       ]
     )
   end
@@ -153,24 +153,22 @@ ARGV.each do |arg|
 end
 
 if file_paths.empty?
-  puts 'No valid files provided.'
+  puts "No valid files provided."
   exit 1
 end
 
-user_instruction = user_instruction_parts.join(' ') unless user_instruction_parts.empty?
+user_instruction = user_instruction_parts.join(" ") unless user_instruction_parts.empty?
 
 file_codes = {}
-total_size = 0
 
 file_paths.each do |file_path|
   begin
-    code = File.binread(file_path).force_encoding('UTF-8')
+    code = File.binread(file_path).force_encoding("UTF-8")
   rescue SystemCallError => e
     warn "Failed to read file #{file_path}: #{e.message}"
     exit 1
   end
   file_codes[file_path] = code
-  total_size += code.size
 end
 
 start_time = Time.now
@@ -185,7 +183,7 @@ def parse_files_from_response(response, expected_paths)
   buffer = []
 
   response.each_line do |line|
-    if line.start_with?('=== FILE: ')
+    if line.start_with?("=== FILE: ")
       finalize_current_file(result, current_path, buffer)
       current_path = extract_file_path(line)
       buffer = []
@@ -206,7 +204,7 @@ def finalize_current_file(result, current_path, buffer)
 end
 
 def extract_file_path(line)
-  line.sub('=== FILE: ', '').strip
+  line.sub("=== FILE: ", "").strip
 end
 
 def apply_single_file_fallback(result, response, expected_paths)
@@ -223,7 +221,7 @@ def strip_edge_backticks(content)
   first_line, last_line = extract_edge_lines(lines)
   stripped_lines = build_stripped_lines(lines, first_line, last_line)
 
-  stripped_lines.join.sub(/\A[\r\n]+/, '').sub(/[\r\n]+\z/, '')
+  stripped_lines.join.sub(/\A[\r\n]+/, "").sub(/[\r\n]+\z/, "")
 end
 
 def extract_edge_lines(lines)
@@ -237,7 +235,7 @@ def extract_edge_lines(lines)
 end
 
 def backtick_line?(line)
-  line.strip == '```' || line.strip.start_with?('```')
+  line.strip == "```" || line.strip.start_with?("```")
 end
 
 def build_stripped_lines(lines, first_line, last_line)
@@ -259,22 +257,20 @@ refactored_files.each do |path, content|
   original_code = file_codes[path]
   refactored_code = content
 
-  code_size = refactored_code.size
-  elapsed_time = end_time - start_time
-  speed = elapsed_time.positive? ? (code_size / elapsed_time) : 0
-
   puts "\nFile: #{path}"
-  puts "Code size: #{code_size} characters"
-  puts "Elapsed time: #{elapsed_time.round(2)} seconds"
-  puts "Speed: #{speed.round(2)} characters per second"
+  puts "Code size: #{refactored_code.size} characters"
+  puts "Elapsed time: #{(end_time - start_time).round(2)} seconds"
+  elapsed = end_time - start_time
+  speed = elapsed.positive? ? (refactored_code.size / elapsed).round(2) : 0
+  puts "Speed: #{speed} characters per second"
 
   if original_code == refactored_code
-    puts 'No changes made.'
+    puts "No changes made."
     next
   end
 
   is_git_repository = system(
-    'git ls-files --error-unmatch ' \
+    "git ls-files --error-unmatch " \
     "#{Shellwords.shellescape(path)} > #{File::NULL} 2>&1"
   )
 

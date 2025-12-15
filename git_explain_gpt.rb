@@ -268,8 +268,7 @@ unless files_to_add.empty?
 end
 
 # Capture diff output for analysis with 500 lines context
-diff_cmd = "git diff -U500"
-diff_output = `#{diff_cmd}`
+diff_output = `git diff -U500`
 unless $?.success?
   warn "Failed to capture diff for analysis".red
   exit 1

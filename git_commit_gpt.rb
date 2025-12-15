@@ -273,9 +273,8 @@ end
 recent_commits = `git log -5 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
-# Get all untracked files and filter out excluded ones before adding to tracking
-all_untracked = `git ls-files --others`.split("\n")
-excluded_files = `git ls-files --others --exclude-standard`.split("\n")
+# Get untracked files that are not ignored by .gitignore
+untracked_files = `git status --porcelain | grep '^??' | cut -c4-`.split("\n")
 
 # Additional patterns to exclude from git add -N (temporary, binary, debug files)
 additional_exclusions = [
@@ -287,9 +286,8 @@ additional_exclusions = [
 ]
 
 # Filter out files matching exclusion patterns
-files_to_add = all_untracked.reject do |file|
-  excluded_files.include?(file) ||
-    additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
+files_to_add = untracked_files.reject do |file|
+  additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
 end
 
 unless files_to_add.empty?
@@ -298,14 +296,9 @@ unless files_to_add.empty?
   system("#{add_cmd} 2>/dev/null")
 end
 
-# Check if last command was git diff to avoid showing it twice
-last_command_was_git_diff = recent_commands.lines.last&.include?("git diff")
-
-# Show all changes in git diff (no exclusions)
-display_diff_cmd = "git diff"
-
-unless last_command_was_git_diff
-  system(display_diff_cmd)
+# Show all changes in git diff (no exclusions) unless last command was git diff
+unless recent_commands.lines.last&.include?("git diff")
+  system("git diff")
   puts
 end
 

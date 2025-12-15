@@ -1,13 +1,13 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative 'lib/openai_client'
-require 'shellwords'
+require_relative "lib/openai_client"
+require "shellwords"
 
 # Class to interact with OpenAI API
 class OpenAi
   def initialize
-    @client = OpenAiClient.new(progress_title: 'Searching code')
+    @client = OpenAiClient.new(progress_title: "Searching code")
   end
 
   # Method to send prompts to OpenAI and get a response
@@ -19,7 +19,7 @@ class OpenAi
   def bash_command(user_instruction)
     project_keywords = list_code_file_keywords
     project_keywords = Dir.entries(Dir.pwd) if project_keywords.empty?
-    project_keywords = project_keywords.join(' ')[0..4096]
+    project_keywords = project_keywords.join(" ")[0..4096]
 
     system_instruction = <<~HEREDOC
       Task: Use `ag` (The Silver Searcher) to search through the software repository and answer the user's request by outputting a single shell command.
@@ -70,9 +70,9 @@ class OpenAi
     HEREDOC
 
     ask([
-          { role: 'system', content: system_instruction },
-          { role: 'user', content: user_instruction }
-        ]).gsub(/^```.*\n?/, '')
+      {role: "system", content: system_instruction},
+      {role: "user", content: user_instruction}
+    ]).gsub(/^```.*\n?/, "")
   end
 
   def interpret_ag_output(user_instruction, ag_output)
@@ -95,17 +95,17 @@ class OpenAi
     HEREDOC
 
     ask([
-          { role: 'system', content: interpretation_system_instruction },
-          { role: 'user',
-            content: <<~HEREDOC
-              User question:
-              #{user_instruction}
+      {role: "system", content: interpretation_system_instruction},
+      {role: "user",
+       content: <<~HEREDOC
+         User question:
+         #{user_instruction}
 
-              ag output:
-              #{ag_output}
-            HEREDOC
-          }
-        ])
+         ag output:
+         #{ag_output}
+       HEREDOC
+      }
+    ])
   end
 
   def list_code_file_keywords
@@ -126,7 +126,7 @@ class OpenAi
     end
 
     # Sort files using BFS-like directory traversal order (by path depth, then lexicographically)
-    code_files = code_files.sort_by { |file| [file.count('/'), file] }
+    code_files = code_files.sort_by { |file| [file.count("/"), file] }
 
     # Tokenize file names by words
     code_files.flat_map do |file|
@@ -146,45 +146,44 @@ unless check_ag_installed
 end
 
 if ARGV.empty?
-  puts 'Search through your code with human language.'
+  puts "Search through your code with human language."
   puts "Usage: #{File.basename($PROGRAM_NAME)} \"What to search in human language\""
   exit(0)
 end
 
-user_instruction = ARGV.join(' ')
+user_instruction = ARGV.join(" ")
 openai = OpenAi.new
 bash_command = openai.bash_command(user_instruction)
 
 puts "Generated bash command: #{bash_command}"
 
 # Run the command automatically if it starts with 'ag'
-answer = if bash_command.start_with?('ag ')
-           puts ''
-           'y'
-         else
-           puts 'Do you want to run this command? (y/n)'
-           $stdin.gets.to_s.chomp.downcase
-         end
+answer = if bash_command.start_with?("ag ")
+  puts ""
+  "y"
+else
+  puts "Do you want to run this command? (y/n)"
+  $stdin.gets.to_s.chomp.downcase
+end
 
-if answer == 'y'
+if answer == "y"
   system(bash_command)
   puts "\nFinished:\n#{bash_command}"
 
-  ag_output = `#{bash_command}`
-  unless ag_output.strip.empty?
+  unless `#{bash_command}`.strip.empty?
     puts "\nInterpret results with OpenAI? (y/N)"
     interpret_answer = $stdin.gets&.chomp&.downcase
 
-    if interpret_answer == 'y'
+    if interpret_answer == "y"
       puts "\nInterpreting results with OpenAI..."
-      interpretation = openai.interpret_ag_output(user_instruction, ag_output)
-      if system('command -v glow >/dev/null 2>&1')
-        IO.popen(['glow', '-'], 'w') { |io| io.write(interpretation) }
+      interpretation = openai.interpret_ag_output(user_instruction, `#{bash_command}`)
+      if system("command -v glow >/dev/null 2>&1")
+        IO.popen(["glow", "-"], "w") { |io| io.write(interpretation) }
       else
         puts "\nOpenAI interpretation:\n\n#{interpretation}"
       end
     end
   end
 else
-  puts 'Command not executed.'
+  puts "Command not executed."
 end
