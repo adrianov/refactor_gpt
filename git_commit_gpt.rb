@@ -209,46 +209,71 @@ def get_recent_commands
 end
 
 def execute_commits(commits)
-  commits.each do |commit|
-    files = Array(commit["files"]).map(&:to_s).reject(&:empty?)
-    next if files.empty?
+  commits.each { |commit| execute_single_commit(commit) }
+end
 
-    add_cmd = ["git", "add", *files].map { |p| Shellwords.escape(p) }.join(" ")
-    puts "Running: #{add_cmd}".green
-    system(add_cmd)
+def execute_single_commit(commit)
+  files = extract_commit_files(commit)
+  return if files.empty?
 
-    commit_msg = commit["message"].to_s.strip
-    next if commit_msg.empty?
+  add_files_to_index(files)
+  commit_files(commit["message"])
+end
 
-    commit_cmd = "git commit -m #{Shellwords.escape(commit_msg)}"
-    puts "Running: #{commit_cmd}".green
-    system(commit_cmd)
-  end
+def extract_commit_files(commit)
+  Array(commit["files"]).map(&:to_s).reject(&:empty?)
+end
+
+def add_files_to_index(files)
+  add_cmd = ["git", "add", *files].map { |p| Shellwords.escape(p) }.join(" ")
+  puts "Running: #{add_cmd}".green
+  system(add_cmd)
+end
+
+def commit_files(commit_message)
+  commit_msg = commit_message.to_s.strip
+  return if commit_msg.empty?
+
+  commit_cmd = "git commit -m #{Shellwords.escape(commit_msg)}"
+  puts "Running: #{commit_cmd}".green
+  system(commit_cmd)
 end
 
 def display_commits_and_ask(commits, warnings)
-  unless warnings.empty?
-    puts "Warnings:".yellow
-    warnings.each do |warning|
-      file = warning["file"].to_s
-      description = warning["description"].to_s
-      probability = warning["probability"]
-      probability_str = probability.nil? ? "n/a" : probability.to_s
-      puts "Warning in #{file}: #{description} (probability: #{probability_str})".yellow
-    end
-    puts
-  end
+  display_warnings(warnings)
+  display_planned_commits(commits)
+  get_user_confirmation
+end
 
+def display_warnings(warnings)
+  return if warnings.empty?
+
+  puts "Warnings:".yellow
+  warnings.each { |warning| display_single_warning(warning) }
+  puts
+end
+
+def display_single_warning(warning)
+  file = warning["file"].to_s
+  description = warning["description"].to_s
+  probability = warning["probability"]
+  probability_str = probability.nil? ? "n/a" : probability.to_s
+  puts "Warning in #{file}: #{description} (probability: #{probability_str})".yellow
+end
+
+def display_planned_commits(commits)
   puts
   puts "Planned commits:".cyan
-  commits.each_with_index do |commit, idx|
-    puts "Commit ##{idx + 1}: #{commit["message"]}".cyan
-    Array(commit["files"]).each do |file|
-      puts "  - #{file}".blue
-    end
-    puts
-  end
+  commits.each_with_index { |commit, idx| display_single_commit(commit, idx) }
+end
 
+def display_single_commit(commit, idx)
+  puts "Commit ##{idx + 1}: #{commit["message"]}".cyan
+  Array(commit["files"]).each { |file| puts "  - #{file}".blue }
+  puts
+end
+
+def get_user_confirmation
   puts "Do you want to run these git add/commit commands? (y/N)".white
   answer = $stdin.gets.to_s.chomp.downcase
 
@@ -273,8 +298,9 @@ end
 recent_commits = `git log -5 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
-# Get untracked files that are not ignored by .gitignore
-untracked_files = `git status --porcelain | grep '^??' | cut -c4-`.split("\n")
+# Get all untracked files and filter out ignored ones before adding to tracking
+# git ls-files --others --exclude-standard already respects .gitignore and other standard exclusions
+all_untracked = `git ls-files --others --exclude-standard`.split("\n")
 
 # Additional patterns to exclude from git add -N (temporary, binary, debug files)
 additional_exclusions = [
@@ -285,8 +311,8 @@ additional_exclusions = [
   ".DS_Store", "Thumbs.db"
 ]
 
-# Filter out files matching exclusion patterns
-files_to_add = untracked_files.reject do |file|
+# Filter out files matching additional exclusion patterns
+files_to_add = all_untracked.reject do |file|
   additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
 end
 
