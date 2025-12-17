@@ -78,7 +78,7 @@ class OpenAiClient
   def debug_request(body)
     warn "--- OpenAI request payload (Ruby hash) ---"
     pretty_messages = body[:messages].map do |msg|
-      if msg[:role] == "system" && msg[:content].is_a?(String)
+      if msg[:content].is_a?(String)
         {role: msg[:role], content_lines: msg[:content].split("\n")}
       else
         msg
