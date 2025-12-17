@@ -38,11 +38,8 @@ class GitExplainer
     ])
 
     unless recent_commands.empty?
-      content_parts << <<~HEREDOC
-        Here are the last 5 shell commands from the user's terminal history (most recent last):
-
-        #{recent_commands}
-      HEREDOC
+      content_parts << "Here are the last 5 shell commands from the user's terminal history " \
+        "(most recent last):\n\n#{recent_commands}\n"
     end
 
     content_parts.join("\n")

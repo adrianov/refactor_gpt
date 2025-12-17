@@ -114,12 +114,7 @@ module Utility
   def self.build_question(parts, snippets)
     return parts.join(" ") if snippets.empty?
 
-    <<~HEREDOC
-      #{parts.join(" ")}
-
-      Included files:
-      #{snippets.join("\n\n---\n\n")}
-    HEREDOC
+    "#{parts.join(' ')}\n\nIncluded files:\n#{snippets.join("\n\n---\n\n")}\n"
   end
 
   def self.total_size(snippets)

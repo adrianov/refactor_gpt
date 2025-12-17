@@ -36,36 +36,17 @@ class OpenAi
     recent_commands)
     content_parts = []
 
-    content_parts << <<~HEREDOC unless cli_hint.empty?
-      Here are hints or preferences from the user:
-
-      #{cli_hint}
-    HEREDOC
+    content_parts << "Here are hints or preferences from the user:\n\n#{cli_hint}\n" unless cli_hint.empty?
 
     content_parts.concat([
-      <<~HEREDOC
-          Here is the git status:
-
-          #{status_output}
-        HEREDOC,
-        <<~HEREDOC
-          Here is the git diff for all changes:
-
-          #{diff_output}
-        HEREDOC,
-        <<~HEREDOC
-          Here are the last 15 git commit one-line messages (most recent first):
-
-          #{recent_commits}
-      HEREDOC
+      "Here is the git status:\n\n#{status_output}\n",
+      "Here is the git diff for all changes:\n\n#{diff_output}\n",
+      "Here are the last 15 git commit one-line messages (most recent first):\n\n#{recent_commits}\n"
     ])
 
     unless recent_commands.empty?
-      content_parts << <<~HEREDOC
-        Here are the last 5 shell commands from the user's terminal history (most recent last):
-
-        #{recent_commands}
-      HEREDOC
+      content_parts << "Here are the last 5 shell commands from the user's terminal history " \
+        "(most recent last):\n\n#{recent_commands}\n"
     end
 
     content_parts.join("\n")
@@ -201,10 +182,10 @@ end
 def get_recent_commands
   history_file = detect_history_file
   return "" unless history_file && File.exist?(history_file)
-  
+
   lines = read_history_file(history_file)
   return "" if lines.empty?
-  
+
   commands = extract_commands_from_history(lines, history_file)
   commands.last(5).join("\n")
 end
@@ -221,22 +202,22 @@ end
 def detect_history_file
   # First try HISTFILE environment variable (set by zsh and modern bash)
   return ENV["HISTFILE"] if ENV["HISTFILE"] && File.exist?(ENV["HISTFILE"])
-  
+
   # Try common zsh history locations
   zsh_history = File.expand_path("~/.zsh_history")
   return zsh_history if File.exist?(zsh_history)
-  
+
   # Fallback to bash history
   bash_history = File.expand_path("~/.bash_history")
   return bash_history if File.exist?(bash_history)
-  
+
   nil
 end
 
 def extract_commands_from_history(lines, history_file)
   if history_file.include?("zsh_history")
     # Zsh history format: : timestamp:duration;command
-    lines.map { |line| 
+    lines.map { |line|
       next "" unless line.valid_encoding?
       line.sub(/^: \d+:\d+;/, "")
     }.reject(&:empty?)

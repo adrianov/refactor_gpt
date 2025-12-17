@@ -16,9 +16,9 @@ class SystemInfo
       desktop = detect_desktop
       shell = detect_shell
 
-      <<~HEREDOC
-        OS: #{platform}#{version.empty? ? "" : ", Version: #{version}"}#{desktop.empty? ? "" : ", Desktop: #{desktop}"}#{shell.empty? ? "" : ", Shell: #{shell}"}
-      HEREDOC
+      "OS: #{platform}#{version.empty? ? "" : ", Version: #{version}"}" \
+        "#{desktop.empty? ? "" : ", Desktop: #{desktop}"}" \
+        "#{shell.empty? ? "" : ", Shell: #{shell}"}"
     rescue
       ""
     end
@@ -112,10 +112,8 @@ class OpenAi
   end
 
   def base_instruction
-    <<~HEREDOC
-      Generate a bash command to accomplish the user's request.
-      Return the command only.
-    HEREDOC
+    "Generate a bash command to accomplish the user's request.\n" \
+      "Return the command only."
   end
 
   def agents_instruction
