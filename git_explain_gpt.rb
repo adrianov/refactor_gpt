@@ -99,6 +99,11 @@ class GitExplainer
       - **Problem Understanding**: How the core issue or requirement was identified
       - **Initial Approach**: First ideas and why they worked or didn't work
       - **Iterative Refinement**: Step-by-step evolution of the solution with code examples
+        - **Example Data Structures**: Illustrate the journey with concrete examples of:
+          - Models/Entities being modified (e.g., User, Product, Order objects with actual data)
+          - API request/response payloads showing before/after states
+          - Database schema changes with sample records
+          - Configuration structures and their transformations
       - **Key Decisions**: Critical technical choices and their rationale
       - **Implementation Details**: Specific code patterns and techniques used
       - **Testing Strategy**: How the solution was verified to work correctly
