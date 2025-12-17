@@ -50,7 +50,8 @@ When working with this codebase, follow these refactoring principles:
 - Follow Ruby style guides and existing code conventions
 - Remove duplicate code and unused variables
 - Read files as whole when fixing errors or adding new functionality to ensure complete context is preserved
-- **Metric Violations**: When Rubocop detects Metric violations (e.g., `Metrics/AbcSize`, `Metrics/MethodLength`, `Metrics/ClassLength`, `Metrics/CyclomaticComplexity`), refactor by:
+- **File Length**: Keep files under 400 lines to maintain readability and modularity
+- **Metric Violations**: When Rubocop detects Metric violations (e.g., `Metrics/AbcSize`, `Metrics/MethodLength`, `Metrics/ClassLength`, `Metrics/CyclomaticComplexity`, `Metrics/ModuleLength`), refactor by:
   - Extracting complex logic into smaller, focused methods
   - Breaking down large methods into logical units
   - Using guard clauses to reduce nested conditions
@@ -58,3 +59,4 @@ When working with this codebase, follow these refactoring principles:
   - Applying Single Responsibility Principle
   - Creating helper methods for repeated patterns
   - Ensure extracted methods have descriptive names that explain their purpose
+  - Splitting large files into smaller, focused modules/classes when approaching 400-line limit
