@@ -191,12 +191,10 @@ def get_recent_commands
 end
 
 def read_history_file(history_file)
-  begin
-    File.readlines(history_file, chomp: true, encoding: "UTF-8")
-  rescue ArgumentError
-    # Fallback for encoding issues
-    File.readlines(history_file, chomp: true).select { |line| line.valid_encoding? }
-  end
+  File.readlines(history_file, chomp: true, encoding: "UTF-8")
+rescue ArgumentError
+  # Fallback for encoding issues
+  File.readlines(history_file, chomp: true).select { |line| line.valid_encoding? }
 end
 
 def detect_history_file
@@ -264,6 +262,51 @@ def display_commits_and_ask(commits, warnings)
   get_user_confirmation
 end
 
+def get_file_stats(files)
+  return {} unless files.any?
+
+  # Get diff stats for the specific files
+  stat_cmd = "git diff --stat -- #{files.map { |f| Shellwords.escape(f) }.join(" ")}"
+  stat_output = `#{stat_cmd} 2>/dev/null`
+
+  return {} unless $?.success?
+
+  parse_stats_output(stat_output, files)
+end
+
+def parse_stats_output(output, files)
+  stats = {}
+
+  output.lines.each { |line| process_stat_line(line, stats) }
+  ensure_all_files_have_stats(files, stats)
+  stats
+end
+
+def process_stat_line(line, stats)
+  return if summary_line?(line)
+
+  match = line.match(/^\s*(.+?)\s+\|\s*(\d+)\s*([+-]+)?\s*$/)
+  return unless match
+
+  filename = match[1].strip
+  total_changes = match[2].to_i
+  plus_minus = match[3] || ""
+
+  return unless total_changes > 0
+
+  additions = plus_minus.count("+")
+  deletions = plus_minus.count("-")
+  stats[filename] = "#{additions}+#{deletions}-"
+end
+
+def summary_line?(line)
+  line.include?("changed") || line.include?("insertion") || line.include?("deletion")
+end
+
+def ensure_all_files_have_stats(files, stats)
+  files.each { |file| stats[file] ||= "" }
+end
+
 def display_warnings(warnings)
   return if warnings.empty?
 
@@ -288,8 +331,36 @@ end
 
 def display_single_commit(commit, idx)
   puts "Commit ##{idx + 1}: #{commit["message"]}".cyan
-  Array(commit["files"]).each { |file| puts "  - #{file}".blue }
+  files = Array(commit["files"])
+
+  return puts unless files.any?
+
+  file_stats = get_file_stats(files)
+  max_filename_length = files.map(&:length).max
+
+  files.each { |file| display_file_with_stats(file, file_stats, max_filename_length) }
   puts
+end
+
+def display_file_with_stats(file, file_stats, max_filename_length)
+  stat_info = file_stats[file] || ""
+  padding = " " * (max_filename_length - file.length)
+
+  print "  - #{file}#{padding}".blue
+  print " " unless stat_info.empty?
+
+  if stat_info.empty?
+    puts
+  else
+    puts format_colored_stats(stat_info)
+  end
+end
+
+def format_colored_stats(stat_info)
+  additions, deletions = stat_info.match(/(\d+)\+(\d+)-/)&.captures
+  return "" unless additions && deletions
+
+  "[".white + "+#{additions}".green + " ".white + "-#{deletions}".red + "]".white
 end
 
 def get_user_confirmation
