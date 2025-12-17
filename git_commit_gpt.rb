@@ -102,11 +102,17 @@ class OpenAi
       - Every changed file from the status output must appear in exactly one group.
       - Use only relative file paths exactly as they appear in the status output (after the status flags).
       - Prefer a small number of coherent commits over many tiny ones.
-      - Additionally, carefully review the provided diffs for potential errors or issues (such as obvious bugs, suspicious logic, or likely regressions)#{has_agents ? " based on the development guidelines provided in AGENTS.md" : ""}.
-      - If you detect any potential error in a file or diff hunk, include a warning entry describing:
-        - the affected file path,
-        - a short description of the possible error,
-        - a probability (0.0–1.0) indicating how sure you are that this is a real issue.
+       - Additionally, carefully review the provided diffs for potential errors or issues (such as obvious bugs, suspicious logic, or likely regressions)#{has_agents ? " based on the development guidelines provided in AGENTS.md" : ""}.
+       - **Special attention to unused code and reference errors**: Pay special attention to detecting:
+         - Unused methods that were left behind after refactoring
+         - Unused variables or constants that are no longer referenced
+         - Calls to undefined methods, functions, or variables
+         - References to deleted or moved code elements
+         - Dead code that serves no purpose
+       - If you detect any potential error in a file or diff hunk, include a warning entry describing:
+         - the affected file path,
+         - a short description of the possible error,
+         - a probability (0.0–1.0) indicating how sure you are that this is a real issue.
     HEREDOC
 
     if has_agents
