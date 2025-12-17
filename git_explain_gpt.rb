@@ -122,6 +122,11 @@ class GitExplainer
       - Migration path for existing code
       - Common pitfalls or things to watch out for
 
+      ## 7. Prompts for Further Development
+      - 3-5 concise prompt starters for LLM agents to apply recommended changes
+      - Cover code implementation, tests, integrations, and documentation updates
+      - Keep prompts short, direct, and action-oriented
+
       Format Requirements:
       - Use proper Markdown with code blocks showing actual diff content
       - Include specific file paths and line numbers (e.g., `src/models/user.rb:45-52`)
@@ -174,7 +179,7 @@ def get_user_question
   lines = []
 
   loop do
-    line = Reline.readline(lines.empty? ? "? " : "  ", true)
+    line = Reline.readline(lines.empty? ? "> " : "  ", true)
     return nil if line.nil?
 
     line = line.strip
