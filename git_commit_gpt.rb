@@ -54,7 +54,7 @@ class OpenAi
           #{diff_output}
         HEREDOC,
         <<~HEREDOC
-          Here are the last 5 git commit one-line messages (most recent first):
+          Here are the last 15 git commit one-line messages (most recent first):
 
           #{recent_commits}
       HEREDOC
@@ -92,7 +92,7 @@ class OpenAi
       - `git status` output (shows current branch name, added, modified, deleted, renamed, untracked files)
       - unified git diff for all changes (including new files)
       - optional user-provided hints or preferences from the command line
-      - last 5 git commit one-line messages to help you match existing style
+      - last 15 git commit one-line messages to help you match existing style
       - last 5 shell commands from the user's terminal history to give you extra context
     HEREDOC
 
@@ -199,12 +199,50 @@ def parse_arguments(args)
 end
 
 def get_recent_commands
-  history_file = ENV["HISTFILE"] || File.expand_path("~/.bash_history")
-  if File.exist?(history_file)
-    lines = File.readlines(history_file, chomp: true)
-    lines.last(5).join("\n")
+  history_file = detect_history_file
+  return "" unless history_file && File.exist?(history_file)
+  
+  lines = read_history_file(history_file)
+  return "" if lines.empty?
+  
+  commands = extract_commands_from_history(lines, history_file)
+  commands.last(5).join("\n")
+end
+
+def read_history_file(history_file)
+  begin
+    File.readlines(history_file, chomp: true, encoding: "UTF-8")
+  rescue ArgumentError
+    # Fallback for encoding issues
+    File.readlines(history_file, chomp: true).select { |line| line.valid_encoding? }
+  end
+end
+
+def detect_history_file
+  # First try HISTFILE environment variable (set by zsh and modern bash)
+  return ENV["HISTFILE"] if ENV["HISTFILE"] && File.exist?(ENV["HISTFILE"])
+  
+  # Try common zsh history locations
+  zsh_history = File.expand_path("~/.zsh_history")
+  return zsh_history if File.exist?(zsh_history)
+  
+  # Fallback to bash history
+  bash_history = File.expand_path("~/.bash_history")
+  return bash_history if File.exist?(bash_history)
+  
+  nil
+end
+
+def extract_commands_from_history(lines, history_file)
+  if history_file.include?("zsh_history")
+    # Zsh history format: : timestamp:duration;command
+    lines.map { |line| 
+      next "" unless line.valid_encoding?
+      line.sub(/^: \d+:\d+;/, "")
+    }.reject(&:empty?)
   else
-    ""
+    # Bash history format: plain commands
+    lines.select { |line| line.valid_encoding? }
   end
 end
 
@@ -295,7 +333,7 @@ if status_output.strip.empty? ||
   exit 0
 end
 
-recent_commits = `git log -5 --pretty=%s 2>/dev/null`.strip
+recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
 # Get all untracked files and filter out ignored ones before adding to tracking

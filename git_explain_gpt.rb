@@ -5,6 +5,7 @@ require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
 require "shellwords"
 require "colorize"
+require "reline"
 
 class GitExplainer
   include AgentsFileHandler
@@ -31,21 +32,9 @@ class GitExplainer
     content_parts = []
 
     content_parts.concat([
-      <<~HEREDOC
-          Here is the git status:
-
-          #{status_output}
-        HEREDOC,
-        <<~HEREDOC
-          Here is the git diff for all changes:
-
-          #{diff_output}
-        HEREDOC,
-        <<~HEREDOC
-          Here are the last 5 git commit one-line messages (most recent first):
-
-          #{recent_commits}
-      HEREDOC
+      "Here is the git status:\n#{status_output.strip}\n\n",
+      "Here is the git diff for all changes:\n#{diff_output.strip}\n\n",
+      "Here are the last 15 git commit one-line messages (most recent first):\n#{recent_commits.strip}\n\n"
     ])
 
     unless recent_commands.empty?
@@ -71,7 +60,7 @@ class GitExplainer
       Input:
       - `git status` output (shows current branch name, added, modified, deleted, renamed, untracked files)
       - unified git diff for all changes (including new files)
-      - last 5 git commit one-line messages to understand project context
+      - last 15 git commit one-line messages to understand project context
       - last 5 shell commands from the user's terminal history for additional context
     HEREDOC
 
@@ -155,6 +144,95 @@ class GitExplainer
   end
 end
 
+def run_interactive_questions(initial_explanation, debug_mode)
+  display_interactive_prompt
+  explainer = GitExplainer.new(debug: debug_mode)
+  messages = initialize_conversation_messages(initial_explanation)
+
+  loop do
+    question = get_user_question
+    break unless question
+
+    process_user_question(explainer, messages, question)
+  end
+end
+
+def display_interactive_prompt
+  puts "\n💬 Ask follow-up questions about the changes (Ctrl+D to exit):"
+  puts "   • Type your questions about specific files, implementation details, or suggestions"
+  puts "   • Press Enter twice to submit your question\n"
+end
+
+def initialize_conversation_messages(initial_explanation)
+  [
+    {role: "system", content: build_followup_system_instruction},
+    {role: "assistant", content: initial_explanation}
+  ]
+end
+
+def get_user_question
+  lines = []
+
+  loop do
+    line = Reline.readline(lines.empty? ? "? " : "  ", true)
+    return nil if line.nil?
+
+    line = line.strip
+    if line.empty?
+      break unless lines.empty?
+      return nil
+    end
+
+    lines << line
+  end
+
+  lines.join("\n")
+end
+
+def process_user_question(explainer, messages, question)
+  messages << {role: "user", content: question}
+
+  answer = explainer.ask(messages)
+  messages << {role: "assistant", content: answer}
+
+  display_with_glow(answer)
+  puts "\n"
+end
+
+def build_followup_system_instruction
+  <<~HEREDOC
+    You are helping a developer understand git changes through a Q&A session. The user has already received a comprehensive initial analysis with detailed structure. Now they want focused follow-up answers.
+
+    CRITICAL: For follow-up questions, provide SHORT, FOCUSED responses. The big detailed structure was for the initial analysis only.
+
+    Your role for follow-ups:
+    - Answer specific questions directly and concisely
+    - Clarify points from the initial analysis
+    - Provide targeted code examples when needed
+    - Suggest specific improvements for particular concerns
+
+    Response format for follow-ups:
+    - 1-3 paragraphs maximum for complex topics
+    - 1-2 sentences for simple questions
+    - Use bullet points only when listing multiple distinct items
+    - Avoid repeating the comprehensive structure from initial analysis
+    - Focus only on what the user specifically asked
+
+    Examples:
+    Q: "Why was this method extracted?"
+    A: "The method was extracted to reduce complexity and improve testability. It now has a single responsibility for processing user input, making the code more maintainable."
+
+    Q: "What about error handling?"
+    A: "The extracted method includes input validation and raises ArgumentError for invalid data. Error cases are handled at the boundary rather than scattered throughout the original method."
+
+    Guidelines:
+    - Be direct and to the point
+    - Reference specific files/lines when relevant
+    - Provide minimal but sufficient code examples
+    - Focus on the specific question asked
+  HEREDOC
+end
+
 # Helper functions
 def run_cmd(cmd, capture_output: true)
   if capture_output
@@ -187,12 +265,50 @@ def parse_arguments(args)
 end
 
 def get_recent_commands
-  history_file = ENV["HISTFILE"] || File.expand_path("~/.bash_history")
-  if File.exist?(history_file)
-    lines = File.readlines(history_file, chomp: true)
-    lines.last(5).join("\n")
+  history_file = detect_history_file
+  return "" unless history_file && File.exist?(history_file)
+
+  lines = read_history_file(history_file)
+  return "" if lines.empty?
+
+  commands = extract_commands_from_history(lines, history_file)
+  commands.last(5).join("\n")
+end
+
+def read_history_file(history_file)
+  begin
+    File.readlines(history_file, chomp: true, encoding: "UTF-8")
+  rescue ArgumentError
+    # Fallback for encoding issues
+    File.readlines(history_file, chomp: true).select { |line| line.valid_encoding? }
+  end
+end
+
+def detect_history_file
+  # First try HISTFILE environment variable (set by zsh and modern bash)
+  return ENV["HISTFILE"] if ENV["HISTFILE"] && File.exist?(ENV["HISTFILE"])
+
+  # Try common zsh history location
+  zsh_history = File.expand_path("~/.zsh_history")
+  return zsh_history if File.exist?(zsh_history)
+
+  # Fallback to bash history
+  bash_history = File.expand_path("~/.bash_history")
+  return bash_history if File.exist?(bash_history)
+
+  nil
+end
+
+def extract_commands_from_history(lines, history_file)
+  if history_file.include?("zsh_history")
+    # Zsh history format: : timestamp:duration;command
+    lines.map { |line|
+      next "" unless line.valid_encoding?
+      line.sub(/^: \d+:\d+;/, "")
+    }.reject(&:empty?)
   else
-    ""
+    # Bash history format: plain commands
+    lines.select { |line| line.valid_encoding? }
   end
 end
 
@@ -245,7 +361,7 @@ if status_output.strip.empty? ||
   exit 0
 end
 
-recent_commits = `git log -5 --pretty=%s 2>/dev/null`.strip
+recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
 # Get all untracked files and filter out excluded ones before adding to tracking
@@ -287,3 +403,4 @@ explanation = GitExplainer.new(debug: debug_mode).explain_changes(
 )
 
 display_with_glow(explanation)
+run_interactive_questions(explanation, debug_mode) if $stdin.tty?
