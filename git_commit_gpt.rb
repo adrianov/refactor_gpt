@@ -344,6 +344,9 @@ def display_single_commit(commit, idx)
   file_stats = get_file_stats(files)
   max_filename_length = files.map(&:length).max
 
+  # Display total statistics for the commit
+  display_commit_total_stats(file_stats, files)
+
   files.each { |file| display_file_with_stats(file, file_stats, max_filename_length) }
   puts
 end
@@ -367,6 +370,22 @@ def format_colored_stats(stat_info)
   return "" unless additions && deletions
 
   "[".white + "+#{additions}".green + " ".white + "-#{deletions}".red + "]".white
+end
+
+def display_commit_total_stats(file_stats, files)
+  total_additions = 0
+  total_deletions = 0
+
+  file_stats.each_value do |stat|
+    additions, deletions = stat.match(/(\d+)\+(\d+)-/)&.captures
+    next unless additions && deletions
+
+    total_additions += additions.to_i
+    total_deletions += deletions.to_i
+  end
+
+  total_changes = total_additions + total_deletions
+  puts "  Total: #{total_changes} changes (#{total_additions} additions, #{total_deletions} deletions)".yellow
 end
 
 def get_user_confirmation

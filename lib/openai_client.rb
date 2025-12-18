@@ -114,7 +114,8 @@ class OpenAiClient
     exit 1
   rescue NoMethodError
     # Handle HTTPX::ErrorResponse which doesn't have status method
-    pretty_print_error("API Error", "Unknown", response.inspect)
+    error_details = format_error_response(response)
+    pretty_print_error("API Error", "Unknown", error_details)
     exit 1
   end
 
@@ -282,15 +283,28 @@ class OpenAiClient
   end
 
   def print_error_details(details)
-    # Truncate very long error details for readability
-    if details.length > 200
-      puts "│ Details: #{details[0..197]}..."
-    else
-      puts "│ Details: #{details}"
-    end
+    puts "│ Details:"
+    details.split("\n").each { |line| puts "│ #{line}" }
 
     puts "└─ #{"─" * 50}"
     puts
+  end
+
+  def format_error_response(response)
+    parts = []
+    parts << "Class: #{response.class}"
+    parts << "Error: #{response.error}" if response.respond_to?(:error) && response.error
+    parts << "Message: #{response.message}" if response.respond_to?(:message) && response.message
+    parts << "Request: #{response.request}" if response.respond_to?(:request) && response.request
+
+    if response.respond_to?(:response) && response.response
+      parts << "Response Status: #{response.response.status}" if response.response.respond_to?(:status)
+      parts << "Response Body: #{response.response.body}" if response.response.respond_to?(:body) && response.response.body
+    end
+
+    parts << "Full Inspect:"
+    parts << response.inspect
+    parts.join("\n")
   end
 
   def print_error_suggestions(error_type)
