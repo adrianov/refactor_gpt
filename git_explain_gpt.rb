@@ -29,13 +29,11 @@ class GitExplainer
   private
 
   def build_user_content(status_output, diff_output, recent_commits, recent_commands)
-    content_parts = []
-
-    content_parts.concat([
+    content_parts = [
       "Here is the git status:\n#{status_output.strip}\n\n",
       "Here is the git diff for all changes:\n#{diff_output.strip}\n\n",
       "Here are the last 15 git commit one-line messages (most recent first):\n#{recent_commits.strip}\n\n"
-    ])
+    ]
 
     unless recent_commands.empty?
       content_parts << "Here are the last 5 shell commands from the user's terminal history " \
@@ -49,17 +47,17 @@ class GitExplainer
     agents_content = load_agents_file
     has_agents = !agents_content.empty?
 
-    instruction_parts = []
+    instruction_parts = [
+      <<~HEREDOC
+        You are a tool that analyzes git changes and creates comprehensive explanations in Markdown format.
 
-    instruction_parts << <<~HEREDOC
-      You are a tool that analyzes git changes and creates comprehensive explanations in Markdown format.
-
-      Input:
-      - `git status` output (shows current branch name, added, modified, deleted, renamed, untracked files)
-      - unified git diff for all changes (including new files)
-      - last 15 git commit one-line messages to understand project context
-      - last 5 shell commands from the user's terminal history for additional context
-    HEREDOC
+        Input:
+        - `git status` output (shows current branch name, added, modified, deleted, renamed, untracked files)
+        - unified git diff for all changes (including new files)
+        - last 15 git commit one-line messages to understand project context
+        - last 5 shell commands from the user's terminal history for additional context
+      HEREDOC
+    ]
 
     instruction_parts << "- Ruby development guidelines from AGENTS.md\n" if has_agents
 
@@ -366,9 +364,9 @@ end
 recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
-# Get all untracked files and filter out excluded ones before adding to tracking
-all_untracked = `git ls-files --others`.split("\n")
-excluded_files = `git ls-files --others --exclude-standard`.split("\n")
+# Get untracked files not in .gitignore
+# --exclude-standard respects .gitignore, .git/info/exclude, and core.excludesfile
+untracked_files = `git ls-files --others --exclude-standard --directory`.split("\n")
 
 # Additional patterns to exclude from git add -N (temporary, binary, debug files)
 additional_exclusions = [
@@ -379,10 +377,9 @@ additional_exclusions = [
   ".DS_Store", "Thumbs.db"
 ]
 
-# Filter out files matching exclusion patterns
-files_to_add = all_untracked.reject do |file|
-  excluded_files.include?(file) ||
-    additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
+# Filter out files matching additional exclusion patterns
+files_to_add = untracked_files.reject do |file|
+  additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
 end
 
 unless files_to_add.empty?
