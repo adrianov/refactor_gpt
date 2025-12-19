@@ -64,10 +64,24 @@ class OpenAi
     agents_content = load_agents_file
     has_agents = !agents_content.empty?
 
-    instruction_parts = []
+    build_instruction_sections(has_agents, agents_content)
+  end
 
-    instruction_parts << <<~HEREDOC
-      You are a tool that groups changed files into meaningful git commits.
+  def build_instruction_sections(has_agents, agents_content)
+    sections = []
+    
+    sections << build_input_section
+    sections << "- Ruby development guidelines from AGENTS.md\n" if has_agents
+    sections << build_task_section(has_agents)
+    sections << build_agents_section(agents_content) if has_agents
+    sections << build_output_format_section
+    
+    sections.join
+  end
+
+  def build_input_section
+    <<~HEREDOC
+      You are a tool that analyzes and groups changed files into meaningful git commits.
 
       Input:
       - `git status` output (shows current branch name, added, modified, deleted, renamed, untracked files)
@@ -76,20 +90,31 @@ class OpenAi
       - last 15 git commit one-line messages to help you match existing style
       - last 5 shell commands from the user's terminal history to give you extra context
     HEREDOC
+  end
 
-    instruction_parts << "- Ruby development guidelines from AGENTS.md\n" if has_agents
-
-    instruction_parts << <<~HEREDOC
-
+  def build_task_section(has_agents)
+    error_detection = " following development guidelines from AGENTS.md" if has_agents
+    
+    <<~HEREDOC
       Task:
-      - Analyze the status and diff and infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
+      - Analyze the status and diff to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
+      - **Code Assessment**: Thoroughly review all changes for potential issues#{error_detection}:
+        - Syntax errors or typos
+        - Logic errors or incorrect implementations
+        - Unused methods, variables, or constants left after refactoring
+        - References to undefined methods, functions, or variables
+        - Calls to deleted or moved code elements
+        - Dead code that serves no purpose
+        - Potential runtime errors or exceptions
+        - Security vulnerabilities or unsafe practices
+        - Performance issues or anti-patterns
       - **Language Detection**: Analyze recent commit messages to determine the primary language. Use the same language for new commits to maintain consistency. Default to English if no recent commits exist.
-      - Prefer commit messages that are consistent with the style and language of the provided recent commit messages.
-      - Respect and incorporate user-provided hints when choosing commit messages, grouping files, or prioritizing certain changes, as long as this does not conflict with the actual diffs.
-      - Check the current branch name (available in git status output) and recent commit messages for JIRA task references (patterns like PT-4668, ABC-123, etc.).
-      - If a JIRA task reference is found in the branch name or recent commits, use the same reference format at the beginning of commit messages (e.g., "[PT-4668] type: short description").
-      - For each group, produce:
-        - a one-line, conventional-style commit message (no trailing period) that describes the specific atomic change,
+      - Create commit messages consistent with the style and language of provided recent commit messages.
+      - Respect user-provided hints when choosing commit messages or grouping files, unless they conflict with actual diffs.
+      - Check branch name and recent commits for JIRA task references (patterns like PT-4668, ABC-123, etc.).
+      - If a JIRA reference is found, use the same format at the beginning of commit messages (e.g., "[PT-4668] type: description").
+      - For each logical group, produce:
+        - A one-line, conventional-style commit message (no trailing period) describing the atomic change
         - **Language principles**:
           - **English**: Use imperative verbs - "add X", "fix Y", "remove Z"
           - **Russian**: Use verbal nouns - "добавление X", "исправление Y", "удаление Z"
@@ -98,56 +123,58 @@ class OpenAi
           - Be specific about what changed and why
           - Avoid vague terms like "optimization", "improvement", "fix issues"
           - Focus on concrete actions and outcomes
-        - a list of file paths to include in that commit.
-      - Every changed file from the status output must appear in exactly one group.
-      - Use only relative file paths exactly as they appear in the status output (after the status flags).
-      - Prefer a small number of coherent commits over many tiny ones.
-       - Additionally, carefully review the provided diffs for potential errors or issues (such as obvious bugs, suspicious logic, or likely regressions)#{has_agents ? " based on the development guidelines provided in AGENTS.md" : ""}.
-       - **Special attention to unused code and reference errors**: Pay special attention to detecting:
-         - Unused methods that were left behind after refactoring
-         - Unused variables or constants that are no longer referenced
-         - Calls to undefined methods, functions, or variables
-         - References to deleted or moved code elements
-         - Dead code that serves no purpose
-       - If you detect any potential error in a file or diff hunk, include a warning entry describing:
-         - the affected file path,
-         - a short description of the possible error,
-         - a probability (0.0–1.0) indicating how sure you are that this is a real issue.
+        - A list of file paths to include in that commit
+       - Every changed file from status must appear in exactly one group
+       - Use relative file paths exactly as shown in status output (after status flags)
+       - Prefer coherent commits over many tiny ones
+       - **Overall Code Quality Assessment**: Analyze all changes and provide:
+         - Whether overall code quality has increased or decreased
+         - A brief explanation of why (focus on code organization, clarity, maintainability, bug fixes, or potential issues)
+         - Keep assessment concise (2-3 sentences maximum)
+       - For each detected issue, create a warning entry with:
+         - The affected file path
+         - A clear description of the potential error
+         - A probability (0.0-1.0) indicating confidence this is a real issue
     HEREDOC
+  end
 
-    if has_agents
-      instruction_parts << <<~HEREDOC
+  def build_agents_section(agents_content)
+    <<~HEREDOC
 
-        AGENTS.md content (development guidelines to follow):
-        #{agents_content}
-      HEREDOC
-    end
-
-    instruction_parts << <<~HEREDOC
-
-      Output format (strict JSON):
-      {
-        "commits": [
-          {
-            "message": "type: short description",
-            "files": ["path/one.rb", "path/two.rb"]
-          }
-        ],
-        "warnings": [
-          {
-            "file": "path/one.rb",
-            "description": "Possible off-by-one error in loop bounds",
-            "probability": 0.8
-          }
-        ]
-      }
-
-      If you do not see any likely errors, return "warnings": [].
-
-      Do not include any text outside of the JSON.
+      AGENTS.md content (development guidelines to follow):
+      #{agents_content}
     HEREDOC
+  end
 
-    instruction_parts.join
+  def build_output_format_section
+    <<~HEREDOC
+
+       Output format (strict JSON):
+       {
+         "quality_assessment": {
+           "direction": "increased" | "decreased" | "unchanged",
+           "explanation": "Brief explanation of why (2-3 sentences maximum)"
+         },
+         "commits": [
+           {
+             "message": "type: short description",
+             "files": ["path/one.rb", "path/two.rb"]
+           }
+         ],
+         "warnings": [
+           {
+             "file": "path/one.rb",
+             "description": "Possible off-by-one error in loop bounds",
+             "probability": 0.8
+           }
+         ]
+       }
+
+       If no issues are detected, return "warnings": [].
+       If code quality assessment is neutral/unclear, use "unchanged" for direction.
+
+       Do not include any text outside of the JSON.
+    HEREDOC
   end
 end
 
@@ -171,17 +198,9 @@ end
 
 # Main execution
 def parse_arguments(args)
-  debug_mode = false
-  cli_hint_parts = []
-
-  args.each do |arg|
-    case arg
-    when "--debug" then debug_mode = true
-                        next
-    end
-    cli_hint_parts << arg
-  end
-
+  debug_mode = args.include?("--debug")
+  cli_hint_parts = args.reject { |arg| arg == "--debug" }
+  
   [debug_mode, cli_hint_parts.join(" ").to_s.strip]
 end
 
@@ -236,25 +255,14 @@ def execute_commits(commits)
 end
 
 def execute_single_commit(commit)
-  files = extract_commit_files(commit)
+  files = Array(commit["files"]).map(&:to_s).reject(&:empty?)
   return if files.empty?
 
-  add_files_to_index(files)
-  commit_files(commit["message"])
-end
-
-def extract_commit_files(commit)
-  Array(commit["files"]).map(&:to_s).reject(&:empty?)
-end
-
-def add_files_to_index(files)
   add_cmd = ["git", "add", *files].map { |p| Shellwords.escape(p) }.join(" ")
   puts "Running: #{add_cmd}".green
   system(add_cmd)
-end
 
-def commit_files(commit_message)
-  commit_msg = commit_message.to_s.strip
+  commit_msg = commit["message"].to_s.strip
   return if commit_msg.empty?
 
   commit_cmd = "git commit -m #{Shellwords.escape(commit_msg)}"
@@ -262,8 +270,9 @@ def commit_files(commit_message)
   system(commit_cmd)
 end
 
-def display_commits_and_ask(commits, warnings)
+def display_commits_and_ask(commits, warnings, quality_assessment = nil)
   display_warnings(warnings)
+  display_quality_assessment(quality_assessment) if quality_assessment
   display_planned_commits(commits)
   get_user_confirmation
 end
@@ -271,26 +280,24 @@ end
 def get_file_stats(files)
   return {} unless files.any?
 
-  # Get diff stats for the specific files
   stat_cmd = "git diff --stat -- #{files.map { |f| Shellwords.escape(f) }.join(" ")}"
   stat_output = `#{stat_cmd} 2>/dev/null`
 
   return {} unless $?.success?
 
-  parse_stats_output(stat_output, files)
-end
-
-def parse_stats_output(output, files)
   stats = {}
+  output_lines = stat_output.lines.reject { |line| summary_line?(line) }
 
-  output.lines.each { |line| process_stat_line(line, stats) }
-  ensure_all_files_have_stats(files, stats)
+  output_lines.each { |line| process_stat_line(line, stats) }
+  files.each { |file| stats[file] ||= "" }
   stats
 end
 
-def process_stat_line(line, stats)
-  return if summary_line?(line)
+def summary_line?(line)
+  line.include?("changed") || line.include?("insertion") || line.include?("deletion")
+end
 
+def process_stat_line(line, stats)
   match = line.match(/^\s*(.+?)\s+\|\s*(\d+)\s*([+-]+)?\s*$/)
   return unless match
 
@@ -303,14 +310,6 @@ def process_stat_line(line, stats)
   additions = plus_minus.count("+")
   deletions = plus_minus.count("-")
   stats[filename] = "#{additions}+#{deletions}-"
-end
-
-def summary_line?(line)
-  line.include?("changed") || line.include?("insertion") || line.include?("deletion")
-end
-
-def ensure_all_files_have_stats(files, stats)
-  files.each { |file| stats[file] ||= "" }
 end
 
 def display_warnings(warnings)
@@ -327,6 +326,23 @@ def display_single_warning(warning)
   probability = warning["probability"]
   probability_str = probability.nil? ? "n/a" : probability.to_s
   puts "Warning in #{file}: #{description} (probability: #{probability_str})".yellow
+end
+
+def display_quality_assessment(assessment)
+  direction = assessment["direction"]&.downcase
+  explanation = assessment["explanation"]&.strip
+  
+  return if !direction || !explanation
+  
+  case direction
+  when "increased"
+    puts "Code quality assessment: #{'Increased'.green} - #{explanation}"
+  when "decreased"
+    puts "Code quality assessment: #{'Decreased'.red} - #{explanation}"
+  else
+    puts "Code quality assessment: #{'Unchanged'.yellow} - #{explanation}"
+  end
+  puts
 end
 
 def display_planned_commits(commits)
@@ -460,13 +476,14 @@ plan = OpenAi.new(debug: debug_mode).commit_plan(
 )
 commits = plan["commits"] || []
 warnings = plan["warnings"] || []
+quality_assessment = plan["quality_assessment"]
 
 if commits.empty?
   puts "No commits suggested by the model.".yellow
   exit 0
 end
 
-display_commits_and_ask(commits, warnings)
+display_commits_and_ask(commits, warnings, quality_assessment)
 execute_commits(commits)
 
 # Check if there's a remote before asking to push
