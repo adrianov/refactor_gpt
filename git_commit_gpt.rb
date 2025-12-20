@@ -135,6 +135,7 @@ class OpenAi
          - The affected file path
          - A clear description of the potential error
          - A probability (0.0-1.0) indicating confidence this is a real issue
+         - Any flaws in intended functionality implementation
     HEREDOC
   end
 
