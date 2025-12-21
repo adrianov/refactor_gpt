@@ -6,6 +6,7 @@ require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
 require "shellwords"
 require "json"
+require "digest"
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -29,11 +30,14 @@ class OpenAi
     system_instruction_parts = []
 
     system_instruction_parts << <<~HEREDOC
-      Return a JSON response with the refactored code modules. Strictly preserve existing
-      comments unless implemented TODOs or changed code fragment business logic,
-      if not asked otherwise. When making bug fixes or applying specific requested
-      changes, keep the diff as small as reasonably possible in terms of changed
-      lines.
+      Return a JSON response with patch data in unified diff format. Do not
+      return full file contents. Generate patches in compact patch format
+      without context lines unless necessary. Follow standard unified diff
+      format with @@ line numbers @@.
+      Strictly preserve existing comments unless implemented TODOs or changed
+      code fragment business logic, if not asked otherwise. When making bug fixes
+      or applying specific requested changes, keep the diff as small as
+      reasonably possible in terms of changed lines.
       Do not suggest changes that are purely stylistic choices - e.g. type of
       quotes, alternative method names. Only suggest real structural changes.
     HEREDOC
@@ -44,20 +48,21 @@ class OpenAi
 
       When multiple files are provided, respond with JSON in the following format:
       {
-        "files": [
+        "patches": [
           {
             "path": "<relative-or-given-path-1>",
-            "content": "<full file content 1>"
+            "patch": "<unified diff patch content>"
           },
           {
             "path": "<relative-or-given-path-2>",
-            "content": "<full file content 2>"
+            "patch": "<unified diff patch content>"
           }
         ]
       }
 
-      Some files may be used only as context and left unchanged - include all
-      provided files in the response with their original or modified content.
+      Some files may be used only as context and leave them unchanged - only
+      include files that need changes in the patches array.
+      If no changes are needed, return an empty patches array.
     HEREDOC
 
     if has_agents
@@ -141,6 +146,58 @@ class OpenAi
   end
 end
 
+class PatchApplicator
+  def initialize(file_codes)
+    @file_codes = file_codes
+  end
+
+  def apply_patches(patch_data)
+    return {} if patch_data["patches"].nil? || patch_data["patches"].empty?
+
+    patch_data["patches"].each_with_object({}) do |patch_info, applied|
+      path = patch_info["path"]
+      patch_content = patch_info["patch"]
+
+      next unless path && patch_content && @file_codes.key?(path)
+
+      original_content = @file_codes[path]
+      patched_content = apply_unified_diff(original_content, patch_content)
+      applied[path] = patched_content if patched_content
+    end
+  end
+
+  private
+
+  def apply_unified_diff(original_content, patch_content)
+    original_lines = original_content.split("\n")
+    patched_lines = original_lines.dup
+    current_line = 0
+
+    patch_content.each_line do |line|
+      case line[0]
+      when "@@"
+        # Parse hunk header: @@ -start,count +start,count @@
+        matches = line.match(/@@\s*-\d+(?:,\d+)?\s*\+(\d+)(?:,\d+)?\s*@@/)
+        if matches
+          current_line = matches[1].to_i - 1  # Convert to 0-based index
+        end
+      when " "
+        # Context line - just advance
+        current_line += 1 if current_line < patched_lines.size
+      when "-"
+        # Deletion line
+        patched_lines.delete_at(current_line)
+      when "+"
+        # Addition line
+        patched_lines.insert(current_line, line[1..-1])
+        current_line += 1
+      end
+    end
+
+    patched_lines.join("\n")
+  end
+end
+
 if ARGV.empty?
   puts(
     "Usage: #{File.basename($PROGRAM_NAME)} <file1> [file2 ...] " \
@@ -185,64 +242,22 @@ raw_response = OpenAi.new.refactor(file_codes, user_instruction).to_s
 
 end_time = Time.now
 
-def parse_files_from_response(response, expected_paths)
-  result = {}
-  
+def parse_patches_from_response(response)
   begin
     json_response = JSON.parse(response)
-    if json_response["files"] && json_response["files"].is_a?(Array)
-      json_response["files"].each do |file|
-        path = file["path"]
-        content = file["content"]
-        result[path] = content if path && content
-      end
+    if json_response["patches"] && json_response["patches"].is_a?(Array)
+      return json_response
     end
   rescue JSON::ParserError
-    # Fallback to original text parsing if JSON parsing fails
-    result = parse_text_response(response, expected_paths)
+    # Fallback - try to extract patch if response looks like a single patch
+    return { "patches" => [{ "path" => "", "patch" => response }] }
   end
-  
-  apply_single_file_fallback(result, response, expected_paths)
-  result
+  { "patches" => [] }
 end
 
-def parse_text_response(response, expected_paths)
-  result = {}
-  current_path = nil
-  buffer = []
-
-  response.each_line do |line|
-    if line.start_with?("=== FILE: ")
-      finalize_current_file(result, current_path, buffer)
-      current_path = extract_file_path(line)
-      buffer = []
-    elsif current_path
-      buffer << line
-    end
-  end
-
-  finalize_current_file(result, current_path, buffer)
-  result
-end
-
-def finalize_current_file(result, current_path, buffer)
-  return unless current_path
-
-  result[current_path] = buffer.join
-end
-
-def extract_file_path(line)
-  line.sub("=== FILE: ", "").strip
-end
-
-def apply_single_file_fallback(result, response, expected_paths)
-  return unless result.empty? && expected_paths.size == 1
-
-  result[expected_paths.first] = response
-  result
-end
-
-refactored_files = parse_files_from_response(raw_response, file_paths)
+patch_data = parse_patches_from_response(raw_response)
+applier = PatchApplicator.new(file_codes)
+refactored_files = applier.apply_patches(patch_data)
 
 refactored_files.each do |path, content|
   next unless file_codes.key?(path)
@@ -296,4 +311,8 @@ refactored_files.each do |path, content|
       "#{Shellwords.shellescape(path)}"
     )
   end
+end
+
+if refactored_files.empty?
+  puts "\nNo files were modified."
 end
