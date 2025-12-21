@@ -23,12 +23,33 @@ class OpenAi
 
   # Method to refactor code based on user instructions
   def refactor(file_codes, user_instruction = nil)
+    system_instruction = build_system_instruction
+    prompt = build_refactor_prompt(file_codes, user_instruction)
+    
+    ask(
+      [
+        {role: "system", content: system_instruction},
+        {role: "user", content: prompt}
+      ]
+    )
+  end
+
+  private
+
+  def build_system_instruction
     agents_content = load_agents_file
     has_agents = !agents_content.empty?
+    
+    parts = [base_system_instruction]
+    parts << "Follow Ruby development guidelines from AGENTS.md." if has_agents
+    parts << json_format_instruction
+    parts << agents_guideline_section(agents_content) if has_agents
+    
+    parts.join
+  end
 
-    system_instruction_parts = []
-
-    system_instruction_parts << <<~HEREDOC
+  def base_system_instruction
+    <<~HEREDOC
       Return a JSON response with the refactored code modules. Strictly preserve existing
       comments unless implemented TODOs or changed code fragment business logic,
       if not asked otherwise. When making bug fixes or applying specific requested
@@ -37,10 +58,10 @@ class OpenAi
       Do not suggest changes that are purely stylistic choices - e.g. type of
       quotes, alternative method names. Only suggest real structural changes.
     HEREDOC
+  end
 
-    system_instruction_parts << "Follow Ruby development guidelines from AGENTS.md." if has_agents
-
-    system_instruction_parts << <<~HEREDOC
+  def json_format_instruction
+    <<~HEREDOC
 
       When multiple files are provided, respond with JSON in the following format:
       {
@@ -59,18 +80,31 @@ class OpenAi
       Some files may be used only as context and left unchanged - include all
       provided files in the response with their original or modified content.
     HEREDOC
+  end
 
-    if has_agents
-      system_instruction_parts << <<~HEREDOC
+  def agents_guideline_section(agents_content)
+    <<~HEREDOC
 
         AGENTS.md content (development guidelines to follow):
         #{agents_content}
 
       HEREDOC
-    end
+  end
 
-    system_instruction = system_instruction_parts.join
-    default_user_instruction = <<~HEREDOC
+  def build_refactor_prompt(file_codes, user_instruction)
+    files_block = file_codes.map { |path, code| "File: #{path}\n#{code}" }.join("\n\n")
+    
+    <<~HEREDOC
+      #{user_instruction || default_user_instruction}
+
+      You may use some files only as context and leave them unchanged.
+
+      #{files_block}
+    HEREDOC
+  end
+
+  def default_user_instruction
+    <<~HEREDOC
       You are refactoring the following code. Apply these rules unless the user
       explicitly overrides them:
 
@@ -119,28 +153,208 @@ class OpenAi
          - Do not change code behavior unless the user specifically asks for it
          or a change is required to fix a clear bug.
     HEREDOC
-
-    files_block = file_codes.map do |path, code|
-      "File: #{path}\n#{code}"
-    end.join("\n\n")
-
-    prompt = <<~HEREDOC
-      #{user_instruction || default_user_instruction}
-
-      You may use some files only as context and leave them unchanged.
-
-      #{files_block}
-    HEREDOC
-
-    ask(
-      [
-        {role: "system", content: system_instruction},
-        {role: "user", content: prompt}
-      ]
-    )
   end
 end
 
+# Helper class to parse OpenAI response
+class ResponseParser
+  def self.parse_files_from_response(response, expected_paths)
+    result = try_parse_json(response) || parse_text_response(response, expected_paths)
+    apply_single_file_fallback(result, response, expected_paths) || result
+  end
+
+  def self.try_parse_json(response)
+    json_response = JSON.parse(response)
+    return unless json_response["files"]&.is_a?(Array)
+    
+    json_response["files"].each_with_object({}) do |file, hash|
+      path = file["path"]
+      content = file["content"]
+      hash[path] = content if path && content
+    end
+  rescue JSON::ParserError
+    nil
+  end
+
+  def self.parse_text_response(response, expected_paths)
+    result = {}
+    current_path = nil
+    buffer = []
+
+    response.each_line do |line|
+      if line.start_with?("=== FILE: ")
+        finalize_current_file(result, current_path, buffer)
+        current_path = extract_file_path(line)
+        buffer = []
+      elsif current_path
+        buffer << line
+      end
+    end
+
+    finalize_current_file(result, current_path, buffer)
+    result
+  end
+
+  def self.finalize_current_file(result, current_path, buffer)
+    return unless current_path
+
+    result[current_path] = buffer.join
+  end
+
+  def self.extract_file_path(line)
+    line.sub("=== FILE: ", "").strip
+  end
+
+  def self.apply_single_file_fallback(result, response, expected_paths)
+    return if !result.empty? || expected_paths.size != 1
+
+    { expected_paths.first => response }
+  end
+end
+
+# Class to handle file operations and diff display
+class FileProcessor
+  def initialize(file_codes)
+    @file_codes = file_codes
+  end
+
+  def process_refactored_files(refactored_files, elapsed_time)
+    refactored_files.each do |path, content|
+      next unless @file_codes.key?(path)
+
+      content = ensure_trailing_newline(content)
+      original_code = @file_codes[path]
+
+      display_file_stats(path, content, elapsed_time)
+      next if original_code == content
+
+      handle_file_modification(path, original_code, content)
+    end
+  end
+
+  private
+
+  def ensure_trailing_newline(content)
+    return content if content.empty? || content[-1] == "\n"
+    content + "\n"
+  end
+
+  def display_file_stats(path, refactored_code, elapsed_time)
+    puts "\nFile: #{path}"
+    puts "Code size: #{refactored_code.size} characters"
+    puts "Elapsed time: #{elapsed_time.round(2)} seconds"
+    speed = elapsed_time.positive? ? (refactored_code.size / elapsed_time).round(2) : 0
+    puts "Speed: #{speed} characters per second"
+  end
+
+  def handle_file_modification(path, original_code, refactored_code)
+    is_git_repository = check_git_repository(path)
+    create_backup(path, original_code) unless is_git_repository
+    write_refactored_file(path, refactored_code)
+    display_diff(path, is_git_repository)
+  end
+
+  def check_git_repository(path)
+    system(
+      "git ls-files --error-unmatch " \
+      "#{Shellwords.shellescape(path)} > #{File::NULL} 2>&1"
+    )
+  end
+
+  def create_backup(path, original_code)
+    backup_file_path = "#{path}.bak"
+    File.binwrite(backup_file_path, original_code)
+  rescue SystemCallError => e
+    warn "Failed to write backup file #{backup_file_path}: #{e.message}"
+    exit 1
+  end
+
+  def write_refactored_file(path, refactored_code)
+    File.binwrite(path, refactored_code)
+  rescue SystemCallError => e
+    warn "Failed to write refactored file #{path}: #{e.message}"
+    exit 1
+  end
+
+  def display_diff(path, is_git_repository)
+    if is_git_repository
+      system("git diff -w #{Shellwords.shellescape(path)}")
+    else
+      backup_file_path = "#{path}.bak"
+      system(
+        "diff -u --color #{Shellwords.shellescape(backup_file_path)} " \
+        "#{Shellwords.shellescape(path)}"
+      )
+    end
+  end
+end
+
+# Main runner class
+class RefactorGptRunner
+  def initialize
+    @file_paths = []
+    @user_instruction_parts = []
+  end
+
+  def run(args)
+    parse_arguments(args)
+    validate_files
+    
+    file_codes = read_files
+    
+    raw_response, elapsed_time = with_timing do
+      OpenAi.new.refactor(file_codes, user_instruction).to_s
+    end
+    
+    refactored_files = ResponseParser.parse_files_from_response(raw_response, @file_paths)
+    FileProcessor.new(file_codes).process_refactored_files(refactored_files, elapsed_time)
+  end
+
+  private
+
+  def with_timing
+    start_time = Time.now
+    result = yield
+    elapsed_time = Time.now - start_time
+    [result, elapsed_time]
+  end
+
+  def parse_arguments(args)
+    args.each do |arg|
+      if File.exist?(arg)
+        @file_paths << arg
+      else
+        @user_instruction_parts << arg
+      end
+    end
+  end
+
+  def validate_files
+    return unless @file_paths.empty?
+
+    puts "No valid files provided."
+    exit 1
+  end
+
+  def user_instruction
+    return if @user_instruction_parts.empty?
+    @user_instruction_parts.join(" ")
+  end
+
+  def read_files
+    @file_paths.each_with_object({}) do |file_path, file_codes|
+      begin
+        code = File.binread(file_path).force_encoding("UTF-8")
+      rescue SystemCallError => e
+        warn "Failed to read file #{file_path}: #{e.message}"
+        exit 1
+      end
+      file_codes[file_path] = code
+    end
+  end
+end
+
+# Script entry point
 if ARGV.empty?
   puts(
     "Usage: #{File.basename($PROGRAM_NAME)} <file1> [file2 ...] " \
@@ -149,151 +363,4 @@ if ARGV.empty?
   exit 1
 end
 
-file_paths = []
-user_instruction_parts = []
-
-ARGV.each do |arg|
-  if File.exist?(arg)
-    file_paths << arg
-  else
-    user_instruction_parts << arg
-  end
-end
-
-if file_paths.empty?
-  puts "No valid files provided."
-  exit 1
-end
-
-user_instruction = user_instruction_parts.join(" ") unless user_instruction_parts.empty?
-
-file_codes = {}
-
-file_paths.each do |file_path|
-  begin
-    code = File.binread(file_path).force_encoding("UTF-8")
-  rescue SystemCallError => e
-    warn "Failed to read file #{file_path}: #{e.message}"
-    exit 1
-  end
-  file_codes[file_path] = code
-end
-
-start_time = Time.now
-
-raw_response = OpenAi.new.refactor(file_codes, user_instruction).to_s
-
-end_time = Time.now
-
-def parse_files_from_response(response, expected_paths)
-  result = {}
-  
-  begin
-    json_response = JSON.parse(response)
-    if json_response["files"] && json_response["files"].is_a?(Array)
-      json_response["files"].each do |file|
-        path = file["path"]
-        content = file["content"]
-        result[path] = content if path && content
-      end
-    end
-  rescue JSON::ParserError
-    # Fallback to original text parsing if JSON parsing fails
-    result = parse_text_response(response, expected_paths)
-  end
-  
-  apply_single_file_fallback(result, response, expected_paths)
-  result
-end
-
-def parse_text_response(response, expected_paths)
-  result = {}
-  current_path = nil
-  buffer = []
-
-  response.each_line do |line|
-    if line.start_with?("=== FILE: ")
-      finalize_current_file(result, current_path, buffer)
-      current_path = extract_file_path(line)
-      buffer = []
-    elsif current_path
-      buffer << line
-    end
-  end
-
-  finalize_current_file(result, current_path, buffer)
-  result
-end
-
-def finalize_current_file(result, current_path, buffer)
-  return unless current_path
-
-  result[current_path] = buffer.join
-end
-
-def extract_file_path(line)
-  line.sub("=== FILE: ", "").strip
-end
-
-def apply_single_file_fallback(result, response, expected_paths)
-  return unless result.empty? && expected_paths.size == 1
-
-  result[expected_paths.first] = response
-  result
-end
-
-refactored_files = parse_files_from_response(raw_response, file_paths)
-
-refactored_files.each do |path, content|
-  next unless file_codes.key?(path)
-
-  content += "\n" if !content.empty? && content[-1] != "\n"
-
-  original_code = file_codes[path]
-  refactored_code = content
-
-  puts "\nFile: #{path}"
-  puts "Code size: #{refactored_code.size} characters"
-  puts "Elapsed time: #{(end_time - start_time).round(2)} seconds"
-  elapsed = end_time - start_time
-  speed = elapsed.positive? ? (refactored_code.size / elapsed).round(2) : 0
-  puts "Speed: #{speed} characters per second"
-
-  if original_code == refactored_code
-    puts "No changes made."
-    next
-  end
-
-  is_git_repository = system(
-    "git ls-files --error-unmatch " \
-    "#{Shellwords.shellescape(path)} > #{File::NULL} 2>&1"
-  )
-
-  backup_file_path = "#{path}.bak"
-  unless is_git_repository
-    begin
-      File.binwrite(backup_file_path, original_code)
-    rescue SystemCallError => e
-      warn "Failed to write backup file #{backup_file_path}: #{e.message}"
-      exit 1
-    end
-  end
-
-  begin
-    File.binwrite(path, refactored_code)
-  rescue SystemCallError => e
-    warn "Failed to write refactored file #{path}: #{e.message}"
-    exit 1
-  end
-
-  if is_git_repository
-    system(
-      "git diff -w #{Shellwords.shellescape(path)}"
-    )
-  else
-    system(
-      "diff -u --color #{Shellwords.shellescape(backup_file_path)} " \
-      "#{Shellwords.shellescape(path)}"
-    )
-  end
-end
+RefactorGptRunner.new.run(ARGV)
