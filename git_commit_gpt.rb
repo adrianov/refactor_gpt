@@ -197,6 +197,16 @@ def run_cmd(cmd, capture_output: true)
   end
 end
 
+# Get the git root directory
+def get_git_root
+  root = `git rev-parse --show-toplevel 2>/dev/null`.strip
+  unless $?.success?
+    puts "Not in a git repository".red
+    exit 1
+  end
+  root
+end
+
 # Main execution
 def parse_arguments(args)
   debug_mode = args.include?("--debug")
@@ -417,6 +427,10 @@ end
 
 # Entry point
 debug_mode, cli_hint = parse_arguments(ARGV)
+
+# Change to git root directory to ensure consistent path handling
+git_root = get_git_root
+Dir.chdir(git_root)
 
 status_output = run_cmd("git status")
 
