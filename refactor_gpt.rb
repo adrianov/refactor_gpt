@@ -5,6 +5,7 @@ require "colorize"
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
 require "shellwords"
+require "json"
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -28,7 +29,7 @@ class OpenAi
     system_instruction_parts = []
 
     system_instruction_parts << <<~HEREDOC
-      Return the complete refactored code module only. Strictly preserve existing
+      Return a JSON response with the refactored code modules. Strictly preserve existing
       comments unless implemented TODOs or changed code fragment business logic,
       if not asked otherwise. When making bug fixes or applying specific requested
       changes, keep the diff as small as reasonably possible in terms of changed
@@ -41,15 +42,22 @@ class OpenAi
 
     system_instruction_parts << <<~HEREDOC
 
-      When multiple files are provided, respond with the full content for each
-      file in the following structure, in order:
+      When multiple files are provided, respond with JSON in the following format:
+      {
+        "files": [
+          {
+            "path": "<relative-or-given-path-1>",
+            "content": "<full file content 1>"
+          },
+          {
+            "path": "<relative-or-given-path-2>",
+            "content": "<full file content 2>"
+          }
+        ]
+      }
 
-      === FILE: <relative-or-given-path-1>
-      <full file content 1>
-      === FILE: <relative-or-given-path-2>
-      <full file content 2>
-      ...
-
+      Some files may be used only as context and left unchanged - include all
+      provided files in the response with their original or modified content.
     HEREDOC
 
     if has_agents
@@ -113,7 +121,7 @@ class OpenAi
     HEREDOC
 
     files_block = file_codes.map do |path, code|
-      "=== FILE: #{path}\n```\n#{code}\n```"
+      "File: #{path}\n#{code}"
     end.join("\n\n")
 
     prompt = <<~HEREDOC
@@ -179,6 +187,27 @@ end_time = Time.now
 
 def parse_files_from_response(response, expected_paths)
   result = {}
+  
+  begin
+    json_response = JSON.parse(response)
+    if json_response["files"] && json_response["files"].is_a?(Array)
+      json_response["files"].each do |file|
+        path = file["path"]
+        content = file["content"]
+        result[path] = content if path && content
+      end
+    end
+  rescue JSON::ParserError
+    # Fallback to original text parsing if JSON parsing fails
+    result = parse_text_response(response, expected_paths)
+  end
+  
+  apply_single_file_fallback(result, response, expected_paths)
+  result
+end
+
+def parse_text_response(response, expected_paths)
+  result = {}
   current_path = nil
   buffer = []
 
@@ -193,7 +222,6 @@ def parse_files_from_response(response, expected_paths)
   end
 
   finalize_current_file(result, current_path, buffer)
-  apply_single_file_fallback(result, response, expected_paths)
   result
 end
 
@@ -214,44 +242,11 @@ def apply_single_file_fallback(result, response, expected_paths)
   result
 end
 
-def strip_edge_backticks(content)
-  lines = content.lines
-  return content if lines.empty?
-
-  first_line, last_line = extract_edge_lines(lines)
-  stripped_lines = build_stripped_lines(lines, first_line, last_line)
-
-  stripped_lines.join.sub(/\A[\r\n]+/, "").sub(/[\r\n]+\z/, "")
-end
-
-def extract_edge_lines(lines)
-  first = lines.first
-  last = lines.last
-
-  first = nil if backtick_line?(first)
-  last = nil if backtick_line?(last)
-
-  [first, last]
-end
-
-def backtick_line?(line)
-  line.strip == "```" || line.strip.start_with?("```")
-end
-
-def build_stripped_lines(lines, first_line, last_line)
-  stripped_lines = []
-  stripped_lines << first_line if first_line
-  stripped_lines.concat(lines[1..-2]) if lines.size > 2
-  stripped_lines << last_line if last_line && lines.size > 1
-  stripped_lines
-end
-
 refactored_files = parse_files_from_response(raw_response, file_paths)
 
 refactored_files.each do |path, content|
   next unless file_codes.key?(path)
 
-  content = strip_edge_backticks(content)
   content += "\n" if !content.empty? && content[-1] != "\n"
 
   original_code = file_codes[path]
