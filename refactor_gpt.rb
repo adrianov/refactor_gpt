@@ -46,7 +46,7 @@ class OpenAi
   def base_system_instruction
     <<~HEREDOC
       Return refactored files using this format:
-      <replace filename="path/to/file.rb">complete file content</replace>
+      <replace filename="[REPLACE_WITH_ACTUAL_FILE_PATH]">complete file content</replace>
 
       Files provided as context use this format in the prompt and must NOT be
       returned:
