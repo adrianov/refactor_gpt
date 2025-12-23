@@ -69,13 +69,13 @@ class OpenAi
 
   def build_instruction_sections(has_agents, agents_content)
     sections = []
-    
+
     sections << build_input_section
     sections << "- Ruby development guidelines from AGENTS.md\n" if has_agents
     sections << build_task_section(has_agents)
     sections << build_agents_section(agents_content) if has_agents
     sections << build_output_format_section
-    
+
     sections.join
   end
 
@@ -94,7 +94,7 @@ class OpenAi
 
   def build_task_section(has_agents)
     error_detection = " following development guidelines from AGENTS.md" if has_agents
-    
+
     <<~HEREDOC
       Task:
       - Analyze the status and diff to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
@@ -113,20 +113,25 @@ class OpenAi
       - Respect user-provided hints when choosing commit messages or grouping files, unless they conflict with actual diffs.
       - Check branch name and recent commits for JIRA task references (patterns like PT-4668, ABC-123, etc.).
       - If a JIRA reference is found, use the same format at the beginning of commit messages (e.g., "[PT-4668] type: description").
-      - For each logical group, produce:
-        - A one-line, conventional-style commit message (no trailing period) describing the atomic change
-        - **Language principles**:
-          - **English**: Use imperative verbs - "add X", "fix Y", "remove Z"
-          - **Russian**: Use verbal nouns - "добавление X", "исправление Y", "удаление Z"
-          - **Other languages**: Follow standard commit message conventions for that language
-        - **Universal principles**:
-          - Be specific about what changed and why
-          - Avoid vague terms like "optimization", "improvement", "fix issues"
-          - Focus on concrete actions and outcomes
-        - A list of file paths to include in that commit
-       - Every changed file from status must appear in exactly one group
-       - Use relative file paths exactly as shown in status output (after status flags)
-       - Prefer coherent commits over many tiny ones
+       - For each logical group, produce:
+         - A one-line, conventional-style commit message (no trailing period) describing the atomic change
+         - **Language principles**:
+           - **English**: Use imperative verbs - "add X", "fix Y", "remove Z"
+           - **Russian**: Use verbal nouns - "добавление X", "исправление Y", "удаление Z"
+           - **Other languages**: Follow standard commit message conventions for that language
+         - **Universal principles**:
+           - Be specific about what changed and why
+           - Avoid vague terms like "optimization", "improvement", "fix issues"
+           - Focus on concrete actions and outcomes
+         - A list of file paths to include in that commit
+       - **Commit Ordering**: Organize commits to follow Test-Driven Development principles:
+         - When implementing a new feature or fixing a bug, place test commits before implementation commits
+         - If the original development followed TDD (tests written before code), preserve this sequence in commit ordering
+         - Example ordering: "add failing tests for user authentication" → "implement user authentication logic"
+         - When tests were written after implementation, group implementation and tests together in a single commit
+        - Every changed file from status must appear in exactly one group
+        - Use relative file paths exactly as shown in status output (after status flags)
+        - Prefer coherent commits over many tiny ones
        - **Overall Code Quality Assessment**: Analyze all changes and provide:
          - Whether overall code quality has increased or decreased
          - A brief explanation of why (focus on code organization, clarity, maintainability, bug fixes, or potential issues)
@@ -150,31 +155,31 @@ class OpenAi
   def build_output_format_section
     <<~HEREDOC
 
-       Output format (strict JSON):
-       {
-         "quality_assessment": {
-           "direction": "increased" | "decreased" | "unchanged",
-           "explanation": "Brief explanation of why (2-3 sentences maximum)"
-         },
-         "commits": [
-           {
-             "message": "type: short description",
-             "files": ["path/one.rb", "path/two.rb"]
-           }
-         ],
-         "warnings": [
-           {
-             "file": "path/one.rb",
-             "description": "Possible off-by-one error in loop bounds",
-             "probability": 0.8
-           }
-         ]
-       }
+      Output format (strict JSON):
+      {
+        "quality_assessment": {
+          "direction": "increased" | "decreased" | "unchanged",
+          "explanation": "Brief explanation of why (2-3 sentences maximum)"
+        },
+        "commits": [
+          {
+            "message": "type: short description",
+            "files": ["path/one.rb", "path/two.rb"]
+          }
+        ],
+        "warnings": [
+          {
+            "file": "path/one.rb",
+            "description": "Possible off-by-one error in loop bounds",
+            "probability": 0.8
+          }
+        ]
+      }
 
-       If no issues are detected, return "warnings": [].
-       If code quality assessment is neutral/unclear, use "unchanged" for direction.
+      If no issues are detected, return "warnings": [].
+      If code quality assessment is neutral/unclear, use "unchanged" for direction.
 
-       Do not include any text outside of the JSON.
+      Do not include any text outside of the JSON.
     HEREDOC
   end
 end
@@ -211,7 +216,7 @@ end
 def parse_arguments(args)
   debug_mode = args.include?("--debug")
   cli_hint_parts = args.reject { |arg| arg == "--debug" }
-  
+
   [debug_mode, cli_hint_parts.join(" ").to_s.strip]
 end
 
@@ -266,17 +271,29 @@ def execute_commits(commits)
 end
 
 def execute_single_commit(commit)
-  files = Array(commit["files"]).map(&:to_s).reject(&:empty?)
+  files = extract_commit_files(commit)
   return if files.empty?
 
-  add_cmd = ["git", "add", *files].map { |p| Shellwords.escape(p) }.join(" ")
-  puts "Running: #{add_cmd}".green
-  system(add_cmd)
+  run_git_add(files)
 
   commit_msg = commit["message"].to_s.strip
   return if commit_msg.empty?
 
-  commit_cmd = "git commit -m #{Shellwords.escape(commit_msg)}"
+  run_git_commit(commit_msg)
+end
+
+def extract_commit_files(commit)
+  Array(commit["files"]).map(&:to_s).reject(&:empty?)
+end
+
+def run_git_add(files)
+  add_cmd = ["git", "add", *files].map { |p| Shellwords.escape(p) }.join(" ")
+  puts "Running: #{add_cmd}".green
+  system(add_cmd)
+end
+
+def run_git_commit(message)
+  commit_cmd = "git commit -m #{Shellwords.escape(message)}"
   puts "Running: #{commit_cmd}".green
   system(commit_cmd)
 end
@@ -342,16 +359,16 @@ end
 def display_quality_assessment(assessment)
   direction = assessment["direction"]&.downcase
   explanation = assessment["explanation"]&.strip
-  
+
   return if !direction || !explanation
-  
+
   case direction
   when "increased"
-    puts "Code quality assessment: #{'Increased'.green} - #{explanation}"
+    puts "Code quality assessment: #{"Increased".green} - #{explanation}"
   when "decreased"
-    puts "Code quality assessment: #{'Decreased'.red} - #{explanation}"
+    puts "Code quality assessment: #{"Decreased".red} - #{explanation}"
   else
-    puts "Code quality assessment: #{'Unchanged'.yellow} - #{explanation}"
+    puts "Code quality assessment: #{"Unchanged".yellow} - #{explanation}"
   end
   puts
 end
@@ -399,7 +416,7 @@ def format_colored_stats(stat_info)
   "[".white + "+#{additions}".green + " ".white + "-#{deletions}".red + "]".white
 end
 
-def display_commit_total_stats(file_stats, files)
+def display_commit_total_stats(file_stats, _files)
   total_additions = 0
   total_deletions = 0
 
