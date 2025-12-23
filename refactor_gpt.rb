@@ -23,13 +23,10 @@ class OpenAi
 
   # Method to refactor code based on user instructions
   def refactor(file_codes, user_instruction = nil)
-    system_instruction = build_system_instruction
-    prompt = build_refactor_prompt(file_codes, user_instruction)
-    
     ask(
       [
-        {role: "system", content: system_instruction},
-        {role: "user", content: prompt}
+        {role: "system", content: build_system_instruction},
+        {role: "user", content: build_refactor_prompt(file_codes, user_instruction)}
       ]
     )
   end
@@ -39,12 +36,12 @@ class OpenAi
   def build_system_instruction
     agents_content = load_agents_file
     has_agents = !agents_content.empty?
-    
+
     parts = [base_system_instruction]
     parts << "Follow Ruby development guidelines from AGENTS.md." if has_agents
     parts << json_format_instruction
     parts << agents_guideline_section(agents_content) if has_agents
-    
+
     parts.join
   end
 
@@ -85,17 +82,17 @@ class OpenAi
   def agents_guideline_section(agents_content)
     <<~HEREDOC
 
-        AGENTS.md content (development guidelines to follow):
-        #{agents_content}
+      AGENTS.md content (development guidelines to follow):
+      #{agents_content}
 
-      HEREDOC
+    HEREDOC
   end
 
   def build_refactor_prompt(file_codes, user_instruction)
     files_block = file_codes.map { |path, code| "File: #{path}\n#{code}" }.join("\n\n")
-    
+
     <<~HEREDOC
-      #{user_instruction || default_user_instruction}
+      #{user_instruction || DEFAULT_USER_INSTRUCTION}
 
       You may use some files only as context and leave them unchanged.
 
@@ -103,57 +100,55 @@ class OpenAi
     HEREDOC
   end
 
-  def default_user_instruction
-    <<~HEREDOC
-      You are refactoring the following code. Apply these rules unless the user
-      explicitly overrides them:
+  DEFAULT_USER_INSTRUCTION = <<~HEREDOC
+    You are refactoring the following code. Apply these rules unless the user
+    explicitly overrides them:
 
-      1. Correctness & Robustness
-         - Identify and fix bugs or obvious mistakes.
-         - Improve error handling where it is clearly insufficient or unsafe.
-         - Prefer failing fast with clear messages over silent failures.
+    1. Correctness & Robustness
+       - Identify and fix bugs or obvious mistakes.
+       - Improve error handling where it is clearly insufficient or unsafe.
+       - Prefer failing fast with clear messages over silent failures.
 
-      2. Readability & Naming
-         - Use clear, descriptive names for variables, methods, and classes.
-         - Avoid unnecessary abbreviations unless they are domain-standard.
+    2. Readability & Naming
+       - Use clear, descriptive names for variables, methods, and classes.
+       - Avoid unnecessary abbreviations unless they are domain-standard.
 
-      3. Structure & Size
-         - Prefer small, focused methods.
-         - Where it improves clarity, extract helper methods instead of enforcing
-           an arbitrary line limit.
-         - Keep lines reasonably short (aim for <= 100 characters), but do not
-           harm readability just to satisfy a strict width.
+    3. Structure & Size
+       - Prefer small, focused methods.
+       - Where it improves clarity, extract helper methods instead of enforcing
+         an arbitrary line limit.
+       - Keep lines reasonably short (aim for <= 100 characters), but do not
+         harm readability just to satisfy a strict width.
 
-      4. Simplicity
-         - Simplify complex conditionals and branching where possible.
-         - Remove dead code and unnecessary indirection.
-         - Inline variables that are used only once when it improves clarity.
+    4. Simplicity
+       - Simplify complex conditionals and branching where possible.
+       - Remove dead code and unnecessary indirection.
+       - Inline variables that are used only once when it improves clarity.
 
-      5. Style & Consistency
-         - Follow idiomatic Ruby style (Ruby community conventions).
-         - Keep formatting consistent with the surrounding code.
+    5. Style & Consistency
+       - Follow idiomatic Ruby style (Ruby community conventions).
+       - Keep formatting consistent with the surrounding code.
 
-      6. Comments & Documentation
-         - Preserve all existing comments verbatim unless they refer to code you
-         significantly change or a TODO you implement.
-         - Do not add new comments unless the user explicitly asks for them.
+    6. Comments & Documentation
+       - Preserve all existing comments verbatim unless they refer to code you
+       significantly change or a TODO you implement.
+       - Do not add new comments unless the user explicitly asks for them.
 
-      7. Behavior Preservation
-         - Preserve existing business logic and external behavior unless there is
-           a clear bug or the user explicitly requests a change.
-         - When you must change behavior to fix a bug, keep the change as small
-           and local as possible.
+    7. Behavior Preservation
+       - Preserve existing business logic and external behavior unless there is
+         a clear bug or the user explicitly requests a change.
+       - When you must change behavior to fix a bug, keep the change as small
+         and local as possible.
 
-      8. TODOs
-         - Implement TODOs only if they are fully specified and safe to complete
-         without guessing about missing requirements.
-         - If a TODO is ambiguous, leave it in place and do not invent behavior.
+    8. TODOs
+       - Implement TODOs only if they are fully specified and safe to complete
+       without guessing about missing requirements.
+       - If a TODO is ambiguous, leave it in place and do not invent behavior.
 
-      9. Default Behavior
-         - Do not change code behavior unless the user specifically asks for it
-         or a change is required to fix a clear bug.
-    HEREDOC
-  end
+    9. Default Behavior
+       - Do not change code behavior unless the user specifically asks for it
+       or a change is required to fix a clear bug.
+  HEREDOC
 end
 
 # Helper class to parse OpenAI response
@@ -165,8 +160,8 @@ class ResponseParser
 
   def self.try_parse_json(response)
     json_response = JSON.parse(response)
-    return unless json_response["files"]&.is_a?(Array)
-    
+    return unless json_response["files"].is_a?(Array)
+
     json_response["files"].each_with_object({}) do |file, hash|
       path = file["path"]
       content = file["content"]
@@ -176,7 +171,7 @@ class ResponseParser
     nil
   end
 
-  def self.parse_text_response(response, expected_paths)
+  def self.parse_text_response(response, _expected_paths)
     result = {}
     current_path = nil
     buffer = []
@@ -197,7 +192,6 @@ class ResponseParser
 
   def self.finalize_current_file(result, current_path, buffer)
     return unless current_path
-
     result[current_path] = buffer.join
   end
 
@@ -207,8 +201,7 @@ class ResponseParser
 
   def self.apply_single_file_fallback(result, response, expected_paths)
     return if !result.empty? || expected_paths.size != 1
-
-    { expected_paths.first => response }
+    {expected_paths.first => response}
   end
 end
 
@@ -243,8 +236,13 @@ class FileProcessor
     puts "\nFile: #{path}"
     puts "Code size: #{refactored_code.size} characters"
     puts "Elapsed time: #{elapsed_time.round(2)} seconds"
-    speed = elapsed_time.positive? ? (refactored_code.size / elapsed_time).round(2) : 0
+    speed = calculate_speed(refactored_code.size, elapsed_time)
     puts "Speed: #{speed} characters per second"
+  end
+
+  def calculate_speed(size, elapsed_time)
+    return 0 unless elapsed_time.positive?
+    (size / elapsed_time).round(2)
   end
 
   def handle_file_modification(path, original_code, refactored_code)
@@ -299,13 +297,12 @@ class RefactorGptRunner
   def run(args)
     parse_arguments(args)
     validate_files
-    
+
     file_codes = read_files
-    
     raw_response, elapsed_time = with_timing do
       OpenAi.new.refactor(file_codes, user_instruction).to_s
     end
-    
+
     refactored_files = ResponseParser.parse_files_from_response(raw_response, @file_paths)
     FileProcessor.new(file_codes).process_refactored_files(refactored_files, elapsed_time)
   end
