@@ -45,14 +45,26 @@ class OpenAi
 
   def base_system_instruction
     <<~HEREDOC
-      Return the refactored code modules using this format for each file:
-      <replace filename="path/to/file.rb">full file content</replace>
-      Strictly preserve existing comments unless implemented TODOs or changed
-      code fragment business logic, if not asked otherwise. When making bug
-      fixes or applying specific requested changes, keep the diff as small as
-      reasonably possible in terms of changed lines.
-      Do not suggest changes that are purely stylistic choices - e.g. type of
-      quotes, alternative method names. Only suggest real structural changes.
+      Return refactored files using this format:
+      <replace filename="path/to/file.rb">complete file content</replace>
+
+      Files provided as context use this format in the prompt and must NOT be
+      returned:
+      <content filename="path/to/file.rb">complete file content</content>
+
+      Content between <replace> and </replace> tags MUST be the complete file
+      content from the first line to the last line. Never abbreviate, cut, or
+      use placeholders like "...". Always include all lines of the file.
+
+      Content between <content> and </content> tags in the prompt is provided as
+      reference only. Never return files that were marked as <content>. Only
+      return files you actually modify.
+
+      Preserve all existing comments unless they describe code you change or
+      you implement a TODO. When making bug fixes or applying specific requested
+      changes, keep the diff as small as possible (minimal changed lines).
+      Never suggest purely stylistic changes (quote style, alternative method
+      names). Only make necessary structural improvements.
     HEREDOC
   end
 
@@ -66,12 +78,13 @@ class OpenAi
   end
 
   def build_refactor_prompt(file_codes, user_instruction)
-    files_block = file_codes.map { |path, code| "File: #{path}\n#{code}" }.join("\n\n")
+    files_block = file_codes.map { |path, code| "<content filename=\"#{path}\">#{code}</content>" }.join("\n\n")
 
     <<~HEREDOC
       #{user_instruction || DEFAULT_USER_INSTRUCTION}
 
-      You may use some files only as context and leave them unchanged.
+      Files are provided below using <content> tags. You may use some files only as
+      context and leave them unchanged. Only return files you actually modify.
 
       #{files_block}
     HEREDOC
@@ -132,6 +145,7 @@ end
 class ResponseParser
   def self.parse_files_from_response(response, expected_paths)
     result = parse_text_response(response, expected_paths)
+    validate_parsed_files(result, expected_paths)
     apply_single_file_fallback(result, response, expected_paths) || result
   end
 
@@ -158,6 +172,18 @@ class ResponseParser
     result
   end
 
+  def self.validate_parsed_files(result, expected_paths)
+    result.each do |filename, content|
+      unless expected_paths.include?(filename)
+        warn "Warning: Parsed file '#{filename}' was not in expected files: #{expected_paths.join(", ")}"
+      end
+
+      if content.strip.empty?
+        warn "Warning: Empty content for file '#{filename}'"
+      end
+    end
+  end
+
   def self.apply_single_file_fallback(result, response, expected_paths)
     return if !result.empty? || expected_paths.size != 1
     {expected_paths.first => response}
@@ -171,32 +197,55 @@ class FileProcessor
   end
 
   def process_refactored_files(refactored_files, elapsed_time)
+    log_file_counts(refactored_files)
+    process_each_file(refactored_files, elapsed_time)
+    report_missing_files(refactored_files)
+  end
+
+  private
+
+  def log_file_counts(refactored_files)
+    return unless @file_codes.size > 1 || refactored_files.size > 1
+    warn "Expected files: #{@file_codes.keys.join(", ")}"
+    warn "Parsed files: #{refactored_files.keys.join(", ")}"
+  end
+
+  def process_each_file(refactored_files, elapsed_time)
     refactored_files.each do |path, content|
       next unless @file_codes.key?(path)
 
       content = ensure_trailing_newline(content)
       original_code = @file_codes[path]
 
-      display_file_stats(path, content, elapsed_time)
+      display_file_stats(path, content, elapsed_time, original_code)
       next if original_code == content
 
       handle_file_modification(path, original_code, content)
     end
   end
 
-  private
+  def report_missing_files(refactored_files)
+    missing_files = @file_codes.keys - refactored_files.keys
+    return if missing_files.empty?
+    warn "No replacement content for files: #{missing_files.join(", ")}"
+  end
 
   def ensure_trailing_newline(content)
     return content if content.empty? || content[-1] == "\n"
     content + "\n"
   end
 
-  def display_file_stats(path, refactored_code, elapsed_time)
+  def display_file_stats(path, refactored_code, elapsed_time, original_code)
     puts "\nFile: #{path}"
-    puts "Code size: #{refactored_code.size} characters"
+    puts "Original size: #{original_code.size} characters"
+    puts "Refactored size: #{refactored_code.size} characters"
     puts "Elapsed time: #{elapsed_time.round(2)} seconds"
     speed = calculate_speed(refactored_code.size, elapsed_time)
     puts "Speed: #{speed} characters per second"
+
+    if refactored_code.size < original_code.size * 0.5
+      warn "Warning: Refactored code is much smaller than original (possible truncation)"
+    end
   end
 
   def calculate_speed(size, elapsed_time)
@@ -227,6 +276,7 @@ class FileProcessor
   end
 
   def write_refactored_file(path, refactored_code)
+    warn "Writing file: #{path} (#{refactored_code.size} bytes)"
     File.binwrite(path, refactored_code)
   rescue SystemCallError => e
     warn "Failed to write refactored file #{path}: #{e.message}"
