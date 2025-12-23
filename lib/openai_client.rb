@@ -93,7 +93,8 @@ class OpenAiClient
     http = HTTPX.plugin(:proxy).with(
       timeout: {read_timeout: @request_timeout,
                 write_timeout: @request_timeout},
-      ssl: {verify_mode: OpenSSL::SSL::VERIFY_NONE}
+      ssl: {verify_mode: OpenSSL::SSL::VERIFY_NONE},
+      fallback_protocol: "http/1.1"
     )
 
     # Set up proxy if configured
@@ -292,19 +293,35 @@ class OpenAiClient
 
   def format_error_response(response)
     parts = []
+    add_error_details(parts, response)
+    add_response_details(parts, response)
+    add_full_inspect(parts, response)
+    parts.join("\n")
+  end
+
+  def add_error_details(parts, response)
     parts << "Class: #{response.class}"
     parts << "Error: #{response.error}" if response.respond_to?(:error) && response.error
     parts << "Message: #{response.message}" if response.respond_to?(:message) && response.message
     parts << "Request: #{response.request}" if response.respond_to?(:request) && response.request
+  end
 
-    if response.respond_to?(:response) && response.response
-      parts << "Response Status: #{response.response.status}" if response.response.respond_to?(:status)
-      parts << "Response Body: #{response.response.body}" if response.response.respond_to?(:body) && response.response.body
-    end
+  def add_response_details(parts, response)
+    return unless response.respond_to?(:response) && response.response
 
+    parts << "Response Status: #{response.response.status}" if response.response.respond_to?(:status)
+    add_response_body(parts, response)
+  end
+
+  def add_response_body(parts, response)
+    return unless response.response.respond_to?(:body) && response.response.body
+
+    parts << "Response Body: #{response.response.body}"
+  end
+
+  def add_full_inspect(parts, response)
     parts << "Full Inspect:"
     parts << response.inspect
-    parts.join("\n")
   end
 
   def print_error_suggestions(error_type)
