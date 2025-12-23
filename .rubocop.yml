@@ -11,21 +11,89 @@ Metrics/AbcSize:
   Enabled: true
   Max: 17
 
-Metrics/ModuleLength:
-  Enabled: true
-  Max: 400
-
 Metrics/ClassLength:
   Enabled: true
   Max: 400
-  CountComments: false
   CountAsOne: []
+
+Metrics/ModuleLength:
+  Enabled: true
+  Max: 400
+Lint:
+  AmbiguousBlockAssociation:
+    Enabled: true
+  AmbiguousOperator:
+    Enabled: true
+  AmbiguousRegexpLiteral:
+    Enabled: true
+  DuplicateBranch:
+    Enabled: true
+  DuplicateCaseCondition:
+    Enabled: true
+  DuplicateHashKey:
+    Enabled: true
+  DuplicateMethods:
+    Enabled: true
+  EmptyBlock:
+    Enabled: true
+  EmptyConditionalBody:
+    Enabled: true
+  EmptyWhen:
+    Enabled: true
+  EnsureReturn:
+    Enabled: true
+  FloatComparison:
+    Enabled: true
+  FormatParameterMismatch:
+    Enabled: true
+  InterpolationCheck:
+    Enabled: true
+  LiteralAsCondition:
+    Enabled: true
+  LiteralInInterpolation:
+    Enabled: true
+  Loop:
+    Enabled: true
+  MissingSuper:
+    Enabled: true
+  NextWithoutAccumulator:
+    Enabled: true
+  RedundantSafeNavigation:
+    Enabled: true
+  SafeNavigationConsistency:
+    Enabled: true
+  SafeNavigationWithEmpty:
+    Enabled: true
+  SelfAssignment:
+    Enabled: true
+  ShadowedArgument:
+    Enabled: true
+  ShadowedException:
+    Enabled: true
+  ShadowingOuterLocalVariable:
+    Enabled: true
+  Syntax:
+    Enabled: true
+  UnreachableCode:
+    Enabled: true
+  UnreachableLoop:
+    Enabled: true
+  UnusedBlockArgument:
+    Enabled: true
+  UnusedMethodArgument:
+    Enabled: true
+  UselessAssignment:
+    Enabled: true
+  UselessNumericOperation:
+    Enabled: true
+  UselessSetterCall:
+    Enabled: true
+  UnexpectedBlockArity:
+    Enabled: true
 
 Bundler:
   Enabled: false
 Gemspec:
-  Enabled: false
-Lint:
   Enabled: false
 Migration:
   Enabled: false
