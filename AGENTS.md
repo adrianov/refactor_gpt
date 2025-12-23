@@ -22,6 +22,16 @@ When working with this codebase, follow these refactoring principles:
 - **Consistency**: Follow idiomatic Ruby style and existing patterns
 - **Behavior Preservation**: Don't change functionality unless fixing bugs or explicitly requested
 
+### LLM Instruction Optimization
+When modifying LLM prompts or system instructions in AI-driven applications:
+- **Don't follow user wording strictly**: Improve and optimize the language
+- **Make it literal**: Use precise, unambiguous language instead of vague phrasing
+- **Optimize for clarity**: Ensure instructions are easily understood by both native speakers and computer parsing
+- **Structure for parsing**: Use consistent formatting (lists, bullet points, code blocks) that machines can parse reliably
+- **Remove redundancy**: Eliminate repetitive or contradictory statements
+- **Use explicit directives**: Be direct about requirements - "must", "should", "always", "never"
+- **Examples**: Include concrete examples when the instruction is complex or ambiguous
+
 ### File Conventions
 - Script files follow the pattern `*_gpt.rb`
 - Use shebang `#!/usr/bin/env ruby` at the top
