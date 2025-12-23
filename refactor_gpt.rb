@@ -158,6 +158,8 @@ class ResponseParser
       break unless match
 
       filename = match[1]
+      next if placeholder_filename?(filename)
+
       start_index = match.end(0)
       end_tag = "</replace>"
 
@@ -170,6 +172,10 @@ class ResponseParser
     end
 
     result
+  end
+
+  def self.placeholder_filename?(filename)
+    filename == "[REPLACE_WITH_ACTUAL_FILE_PATH]"
   end
 
   def self.validate_parsed_files(result, expected_paths)
