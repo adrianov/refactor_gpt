@@ -5,7 +5,6 @@ require "colorize"
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
 require "shellwords"
-require "json"
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -39,7 +38,6 @@ class OpenAi
 
     parts = [base_system_instruction]
     parts << "Follow Ruby development guidelines from AGENTS.md." if has_agents
-    parts << json_format_instruction
     parts << agents_guideline_section(agents_content) if has_agents
 
     parts.join
@@ -47,35 +45,14 @@ class OpenAi
 
   def base_system_instruction
     <<~HEREDOC
-      Return a JSON response with the refactored code modules. Strictly preserve existing
-      comments unless implemented TODOs or changed code fragment business logic,
-      if not asked otherwise. When making bug fixes or applying specific requested
-      changes, keep the diff as small as reasonably possible in terms of changed
-      lines.
+      Return the refactored code modules using this format for each file:
+      <replace filename="path/to/file.rb">full file content</replace>
+      Strictly preserve existing comments unless implemented TODOs or changed
+      code fragment business logic, if not asked otherwise. When making bug
+      fixes or applying specific requested changes, keep the diff as small as
+      reasonably possible in terms of changed lines.
       Do not suggest changes that are purely stylistic choices - e.g. type of
       quotes, alternative method names. Only suggest real structural changes.
-    HEREDOC
-  end
-
-  def json_format_instruction
-    <<~HEREDOC
-
-      When multiple files are provided, respond with JSON in the following format:
-      {
-        "files": [
-          {
-            "path": "<relative-or-given-path-1>",
-            "content": "<full file content 1>"
-          },
-          {
-            "path": "<relative-or-given-path-2>",
-            "content": "<full file content 2>"
-          }
-        ]
-      }
-
-      Some files may be used only as context and left unchanged - include all
-      provided files in the response with their original or modified content.
     HEREDOC
   end
 
@@ -154,49 +131,31 @@ end
 # Helper class to parse OpenAI response
 class ResponseParser
   def self.parse_files_from_response(response, expected_paths)
-    result = try_parse_json(response) || parse_text_response(response, expected_paths)
+    result = parse_text_response(response, expected_paths)
     apply_single_file_fallback(result, response, expected_paths) || result
-  end
-
-  def self.try_parse_json(response)
-    json_response = JSON.parse(response)
-    return unless json_response["files"].is_a?(Array)
-
-    json_response["files"].each_with_object({}) do |file, hash|
-      path = file["path"]
-      content = file["content"]
-      hash[path] = content if path && content
-    end
-  rescue JSON::ParserError
-    nil
   end
 
   def self.parse_text_response(response, _expected_paths)
     result = {}
-    current_path = nil
-    buffer = []
+    remaining = response.dup
 
-    response.each_line do |line|
-      if line.start_with?("=== FILE: ")
-        finalize_current_file(result, current_path, buffer)
-        current_path = extract_file_path(line)
-        buffer = []
-      elsif current_path
-        buffer << line
-      end
+    while remaining
+      match = remaining.match(%r{<replace filename="([^"]+)">})
+      break unless match
+
+      filename = match[1]
+      start_index = match.end(0)
+      end_tag = "</replace>"
+
+      end_index = remaining.index(end_tag, start_index)
+      break unless end_index
+
+      content = remaining[start_index...end_index]
+      result[filename] = content
+      remaining = remaining[(end_index + end_tag.length)..]
     end
 
-    finalize_current_file(result, current_path, buffer)
     result
-  end
-
-  def self.finalize_current_file(result, current_path, buffer)
-    return unless current_path
-    result[current_path] = buffer.join
-  end
-
-  def self.extract_file_path(line)
-    line.sub("=== FILE: ", "").strip
   end
 
   def self.apply_single_file_fallback(result, response, expected_paths)
