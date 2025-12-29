@@ -13,10 +13,11 @@ class OpenAi
   def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug,
       progress_title: "Planning commits".cyan)
+    @debug = debug
   end
 
-  def ask(prompts)
-    @client.ask(prompts)
+  def ask(prompts, json: false)
+    @client.ask(prompts, json: json)
   end
 
   def commit_plan(status_output, diff_output, cli_hint, recent_commits,
@@ -26,7 +27,7 @@ class OpenAi
       {role: "user",
        content: build_user_content(status_output, diff_output, cli_hint, recent_commits,
          recent_commands)}
-    ])
+    ], json: true)
     parse_commit_plan_response(raw_response)
   end
 
@@ -111,8 +112,14 @@ class OpenAi
       - **Language Detection**: Analyze recent commit messages to determine the primary language. Use the same language for new commits to maintain consistency. Default to English if no recent commits exist.
       - Create commit messages consistent with the style and language of provided recent commit messages.
       - Respect user-provided hints when choosing commit messages or grouping files, unless they conflict with actual diffs.
-      - Check branch name and recent commits for JIRA task references (patterns like PT-4668, ABC-123, etc.).
-      - If a JIRA reference is found, use the same format at the beginning of commit messages (e.g., "[PT-4668] type: description").
+      - **JIRA Issue Reference Consistency** (critical rule):
+        - Check branch name and recent commits for JIRA task references (patterns like PT-4668, ABC-123, etc.).
+        - When multiple commits are created in one batch, MUST use the SAME JIRA issue reference for ALL commits
+        - If branch name contains JIRA reference, ALL commits MUST reference that same issue
+        - If recent commits show different JIRA issues, prefer the one from the branch name
+        - If no JIRA reference exists in branch name or recent commits, do NOT add one
+        - JIRA reference MUST be placed at the beginning of commit messages (e.g., "[PT-4668] type: description")
+        - NEVER mix different JIRA issue references in the same commit batch
        - For each logical group, produce:
           - A one-line, conventional-style commit message (no trailing period) describing the atomic change
           - **Language principles**:
@@ -163,7 +170,7 @@ class OpenAi
   def build_output_format_section
     <<~HEREDOC
 
-      Output format (strict JSON):
+      Return value format: strict JSON with these fields:
       {
         "quality_assessment": {
           "direction": "increased" | "decreased" | "unchanged",
