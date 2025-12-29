@@ -114,33 +114,41 @@ class OpenAi
       - Check branch name and recent commits for JIRA task references (patterns like PT-4668, ABC-123, etc.).
       - If a JIRA reference is found, use the same format at the beginning of commit messages (e.g., "[PT-4668] type: description").
        - For each logical group, produce:
-         - A one-line, conventional-style commit message (no trailing period) describing the atomic change
-         - **Language principles**:
-           - **English**: Use imperative verbs - "add X", "fix Y", "remove Z"
-           - **Russian**: Use verbal nouns - "добавление X", "исправление Y", "удаление Z"
-           - **Other languages**: Follow standard commit message conventions for that language
-         - **Universal principles**:
-           - Be specific about what changed and why
-           - Avoid vague terms like "optimization", "improvement", "fix issues"
-           - Focus on concrete actions and outcomes
-         - A list of file paths to include in that commit
-       - **Commit Ordering**: Organize commits to follow Test-Driven Development principles:
-         - When implementing a new feature or fixing a bug, place test commits before implementation commits
-         - If the original development followed TDD (tests written before code), preserve this sequence in commit ordering
-         - Example ordering: "add failing tests for user authentication" → "implement user authentication logic"
-         - When tests were written after implementation, group implementation and tests together in a single commit
-        - Every changed file from status must appear in exactly one group
-        - Use relative file paths exactly as shown in status output (after status flags)
-        - Prefer coherent commits over many tiny ones
-       - **Overall Code Quality Assessment**: Analyze all changes and provide:
-         - Whether overall code quality has increased or decreased
-         - A brief explanation of why (focus on code organization, clarity, maintainability, bug fixes, or potential issues)
-         - Keep assessment concise (2-3 sentences maximum)
-       - For each detected issue, create a warning entry with:
-         - The affected file path
-         - A clear description of the potential error
-         - A probability (0.0-1.0) indicating confidence this is a real issue
-         - Any flaws in intended functionality implementation
+          - A one-line, conventional-style commit message (no trailing period) describing the atomic change
+          - **Language principles**:
+            - **English**: Use imperative verbs - "add X", "fix Y", "remove Z"
+            - **Russian**: Use verbal nouns - "добавление X", "исправление Y", "удаление Z"
+            - **Other languages**: Follow standard commit message conventions for that language
+          - **Universal principles**:
+            - Be specific about what changed and why
+            - Avoid vague terms like "optimization", "improvement", "fix issues"
+            - Focus on concrete actions and outcomes
+          - A list of file paths to include in that commit
+        - **Commit Ordering**: Organize commits to follow Test-Driven Development principles:
+          - When implementing a new feature or fixing a bug, place test commits before implementation commits
+          - If the original development followed TDD (tests written before code), preserve this sequence in commit ordering
+          - Example ordering: "add failing tests for user authentication" → "implement user authentication logic"
+          - When tests were written after implementation, group implementation and tests together in a single commit
+         - Every changed file from status must appear in exactly one group OR in excluded_files
+         - Use relative file paths exactly as shown in status output (after status flags)
+         - Prefer coherent commits over many tiny ones
+        - **File Exclusion Rules**:
+          - **schema.rb**: Exclude from commits if there are no database migration files in the changeset. Migration files are typically in `db/migrate/` directory with timestamps.
+          - **Temporary and debug files**: Exclude from commits if changes are clearly temporary or debug-only, such as:
+            - Files in `tmp/` directory
+            - Files with `.log`, `.tmp`, `.temp`, `.bak`, `.swp`, `.swo` extensions
+            - Debug console output added with `puts`, `p`, `pp`, or `debugger` statements that are not part of actual functionality
+            - Test stub files in `spec/stubs/`, `test/stubs/`, `test/fixtures/` when unrelated to test code changes
+          - For each excluded file, provide a clear reason in the excluded_files section.
+        - **Overall Code Quality Assessment**: Analyze all changes and provide:
+          - Whether overall code quality has increased or decreased
+          - A brief explanation of why (focus on code organization, clarity, maintainability, bug fixes, or potential issues)
+          - Keep assessment concise (2-3 sentences maximum)
+        - For each detected issue, create a warning entry with:
+          - The affected file path
+          - A clear description of the potential error
+          - A probability (0.0-1.0) indicating confidence this is a real issue
+          - Any flaws in intended functionality implementation
     HEREDOC
   end
 
@@ -173,10 +181,17 @@ class OpenAi
             "description": "Possible off-by-one error in loop bounds",
             "probability": 0.8
           }
+        ],
+        "excluded_files": [
+          {
+            "path": "db/schema.rb",
+            "reason": "No database migrations in this changeset"
+          }
         ]
       }
 
       If no issues are detected, return "warnings": [].
+      If no files are excluded, return "excluded_files": [].
       If code quality assessment is neutral/unclear, use "unchanged" for direction.
 
       Do not include any text outside of the JSON.
@@ -298,8 +313,9 @@ def run_git_commit(message)
   system(commit_cmd)
 end
 
-def display_commits_and_ask(commits, warnings, quality_assessment = nil)
+def display_commits_and_ask(commits, warnings, quality_assessment = nil, excluded_files = [])
   display_warnings(warnings)
+  display_excluded_files(excluded_files)
   display_quality_assessment(quality_assessment) if quality_assessment
   display_planned_commits(commits)
   get_user_confirmation
@@ -354,6 +370,20 @@ def display_single_warning(warning)
   probability = warning["probability"]
   probability_str = probability.nil? ? "n/a" : probability.to_s
   puts "Warning in #{file}: #{description} (probability: #{probability_str})".yellow
+end
+
+def display_excluded_files(excluded_files)
+  return if excluded_files.empty?
+
+  puts "Excluded files:".magenta
+  excluded_files.each { |file| display_single_excluded_file(file) }
+  puts
+end
+
+def display_single_excluded_file(file)
+  path = file["path"].to_s
+  reason = file["reason"].to_s
+  puts "  - #{path}: #{reason}".magenta
 end
 
 def display_quality_assessment(assessment)
@@ -509,13 +539,14 @@ plan = OpenAi.new(debug: debug_mode).commit_plan(
 commits = plan["commits"] || []
 warnings = plan["warnings"] || []
 quality_assessment = plan["quality_assessment"]
+excluded_files = plan["excluded_files"] || []
 
 if commits.empty?
   puts "No commits suggested by the model.".yellow
   exit 0
 end
 
-display_commits_and_ask(commits, warnings, quality_assessment)
+display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
 execute_commits(commits)
 
 # Check if there's a remote before asking to push
