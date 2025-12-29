@@ -287,8 +287,8 @@ class AskGptClient
       {role: "user", content: question}])
   end
 
-  def ask(messages)
-    @client.ask(messages)
+  def ask(messages, json: false)
+    @client.ask(messages, json: json)
   end
 end
 

@@ -15,8 +15,8 @@ class GitExplainer
       progress_title: "Analyzing changes")
   end
 
-  def ask(prompts)
-    @client.ask(prompts)
+  def ask(prompts, json: false)
+    @client.ask(prompts, json: json)
   end
 
   def explain_changes(status_output, diff_output, recent_commits, recent_commands)

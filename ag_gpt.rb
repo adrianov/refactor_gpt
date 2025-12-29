@@ -11,8 +11,8 @@ class OpenAi
   end
 
   # Method to send prompts to OpenAI and get a response
-  def ask(prompts)
-    @client.ask(prompts)
+  def ask(prompts, json: false)
+    @client.ask(prompts, json: json)
   end
 
   # Method to refactor code based on user instructions
