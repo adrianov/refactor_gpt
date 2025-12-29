@@ -62,7 +62,7 @@ class OpenAi
       use placeholders like "...". Always include all lines of the file.
 
       Content between <content> and </content> tags in the prompt is provided as
-      reference only. Never return files that were marked as <content>. Only
+      reference only. Never return files that were marked with <content>. Only
       return files you actually modify.
 
       Preserve all existing comments unless they describe code you change or
@@ -83,15 +83,13 @@ class OpenAi
   end
 
   def build_refactor_prompt(file_codes, user_instruction)
-    files_block = file_codes.map { |path, code| "<content filename=\"#{path}\">#{code}</content>" }.join("\n\n")
-
     <<~HEREDOC
       #{user_instruction || DEFAULT_USER_INSTRUCTION}
 
       Files are provided below using <content> tags. You may use some files only as
       context and leave them unchanged. Only return files you actually modify.
 
-      #{files_block}
+      #{file_codes.map { |path, code| "<content filename=\"#{path}\">#{code}</content>" }.join("\n\n")}
     HEREDOC
   end
 
@@ -159,7 +157,7 @@ class ResponseParser
     remaining = response.dup
 
     while remaining
-      match = remaining.match(%r{<replace filename="([^"]+)">(.*?)</replace>}m)
+      match = remaining.match(%r{^<replace filename="([^"]+)">(.*?)\n</replace>}m)
       break unless match
 
       filename = match[1]
@@ -355,12 +353,11 @@ class RefactorGptRunner
   def read_files
     @file_paths.each_with_object({}) do |file_path, file_codes|
       begin
-        code = File.binread(file_path).force_encoding("UTF-8")
+        file_codes[file_path] = File.binread(file_path).force_encoding("UTF-8")
       rescue SystemCallError => e
         warn "Failed to read file #{file_path}: #{e.message}"
         exit 1
       end
-      file_codes[file_path] = code
     end
   end
 end
