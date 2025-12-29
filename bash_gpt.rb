@@ -6,6 +6,7 @@ require_relative "lib/agents_file_handler"
 require "shellwords"
 require "rbconfig"
 require "colorize"
+require "json"
 
 # Simple system information detection with memoization
 class SystemInfo
@@ -86,16 +87,73 @@ class OpenAi
   def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug,
       progress_title: "Generating command")
+    @debug = debug
   end
 
   # Method to send prompts to OpenAI and get a response
-  def ask(prompts)
-    @client.ask(prompts)
+  def ask(prompts, json: false)
+    @client.ask(prompts, json: json)
+  end
+
+  def analyze_request(user_instruction)
+    system_instruction = <<~HEREDOC
+      Analyze the user's request and determine if additional context is needed.
+
+      Available context:
+      #{system_context}
+
+      Return value format: JSON object with these optional fields:
+      - context_commands: array of command strings to gather additional context
+      - bash_command: the bash command to execute
+
+      Critical rules:
+      - NEVER return {"context_commands": [], "bash_command": null} - this is invalid
+      - If request can be answered with available context, return bash_command directly
+      - If you need additional system output, return context_commands (non-empty array)
+      - If context_commands provided, omit bash_command field entirely
+      - If bash_command provided, omit context_commands field entirely
+      - If both fields omitted, return empty JSON object {}
+      - context_commands array MUST be non-empty if provided
+      - bash_command MUST be non-empty string if provided
+      - Use context_commands only when available context is insufficient
+
+      Examples:
+      - User: "create git commit" → {"context_commands": ["git status", "git diff"]}
+      - User: "list files" → {"bash_command": "ls -la"}
+      - User: "run tests" → {"context_commands": ["ls", "cat package.json"]}
+      - User: "show current directory" → {"bash_command": "pwd"}
+      - User: "what os am I running" → {"bash_command": "uname -a"}
+    HEREDOC
+
+    response = ask([
+      {role: "system", content: system_instruction},
+      {role: "user", content: user_instruction}
+    ], json: true)
+
+    JSON.parse(response || "{}")
+  rescue JSON::ParserError => e
+    warn "JSON parsing error: #{e.message}" if @debug
+    warn "Raw response: #{response}" if @debug
+    {}
+  end
+
+  def collect_context_output(commands)
+    return "" if commands.empty?
+
+    output = commands.map do |cmd|
+      puts "Collecting context: #{cmd}".cyan
+      result = `#{cmd} 2>&1` rescue ""
+      puts result unless result.empty?
+      truncated = result.lines.first(20).join
+      "#{cmd}\n#{truncated}"
+    end
+
+    output.join("\n\n---\n\n")
   end
 
   # Method to refactor code based on user instructions
-  def bash_command(user_instruction)
-    system_instruction = build_system_instruction
+  def bash_command(user_instruction, context_output = "")
+    system_instruction = build_system_instruction(context_output)
     ask([
       {role: "system", content: system_instruction},
       {role: "user", content: user_instruction}
@@ -104,11 +162,21 @@ class OpenAi
 
   private
 
-  def build_system_instruction
+  def build_system_instruction(context_output = "")
     parts = [base_instruction]
     parts << agents_instruction if has_agents?
+    parts << context_section(context_output) unless context_output.empty?
     parts << system_context
     parts.join
+  end
+
+  def context_section(output)
+    <<~HEREDOC
+
+      Context from system commands:
+      #{output}
+
+    HEREDOC
   end
 
   def base_instruction
@@ -176,7 +244,23 @@ if user_instruction_parts.empty?
 end
 
 user_instruction = user_instruction_parts.join(" ")
-bash_command = OpenAi.new(debug: debug_mode).bash_command(user_instruction)
+ai = OpenAi.new(debug: debug_mode)
+
+result = ai.analyze_request(user_instruction)
+
+if debug_mode
+  puts "AI Response:".yellow
+  puts JSON.pretty_generate(result)
+end
+
+if result["context_commands"]&.any?
+  context_output = ai.collect_context_output(result["context_commands"])
+  bash_command = ai.bash_command(user_instruction, context_output)
+elsif result["bash_command"]
+  bash_command = result["bash_command"]
+else
+  bash_command = ai.bash_command(user_instruction)
+end
 
 safe_commands = %w[grep ag ls df cat less head tail sed awk tr uniq wc cut]
 
