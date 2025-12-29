@@ -54,8 +54,11 @@ class OpenAi
   end
 
   def parse_commit_plan_response(raw_response)
-    json_str = raw_response.gsub(/^```.*\n?/, "").gsub(/```$/, "").strip
+    json_str = raw_response.strip
     Oj.load(json_str)
+  rescue Oj::ParseError
+    stripped_json_str = raw_response.gsub(/^```.*\n?/, "").gsub(/```$/, "").strip
+    Oj.load(stripped_json_str)
   rescue Oj::ParseError
     puts "Failed to parse model response as JSON. Raw response:\n#{raw_response}".red
     exit 1
