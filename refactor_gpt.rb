@@ -48,6 +48,11 @@ class OpenAi
       Return refactored files using this format:
       <replace filename="[REPLACE_WITH_ACTUAL_FILE_PATH]">complete file content</replace>
 
+      The <replace> tags and the complete file content between them must be
+      output on separate lines. The file content between the opening and
+      closing tags can span multiple lines and must include every line of the
+      file exactly as it should appear.
+
       Files provided as context use this format in the prompt and must NOT be
       returned:
       <content filename="path/to/file.rb">complete file content</content>
@@ -154,21 +159,15 @@ class ResponseParser
     remaining = response.dup
 
     while remaining
-      match = remaining.match(%r{<replace filename="([^"]+)">})
+      match = remaining.match(%r{<replace filename="([^"]+)">(.*?)</replace>}m)
       break unless match
 
       filename = match[1]
       next if placeholder_filename?(filename)
 
-      start_index = match.end(0)
-      end_tag = "</replace>"
-
-      end_index = remaining.index(end_tag, start_index)
-      break unless end_index
-
-      content = remaining[start_index...end_index]
+      content = match[2]
       result[filename] = content
-      remaining = remaining[(end_index + end_tag.length)..]
+      remaining = remaining[(match.end(0))..]
     end
 
     result
