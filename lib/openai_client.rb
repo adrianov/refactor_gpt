@@ -25,11 +25,11 @@ class OpenAiClient
     @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
   end
 
-  def ask(messages)
-    return ask_with_progress(messages) if @progress_title
+  def ask(messages, json: false)
+    return ask_with_progress(messages, json: json) if @progress_title
 
     retry_with_backoff do
-      body = build_request_body(messages)
+      body = build_request_body(messages, json: json)
       debug_request(body) if @debug
 
       response = make_api_request(body)
@@ -66,12 +66,10 @@ class OpenAiClient
     end
   end
 
-  def build_request_body(messages)
+  def build_request_body(messages, json: false)
     body = {model: @model, messages: messages}
-    if @max_completion_tokens
-      body[:max_completion_tokens] =
-        @max_completion_tokens
-    end
+    body[:response_format] = {type: "json_object"} if json
+    body[:max_completion_tokens] = @max_completion_tokens if @max_completion_tokens
     body
   end
 
@@ -154,15 +152,15 @@ class OpenAiClient
     default
   end
 
-  def ask_with_progress(messages)
-    setup_progress_tracking(messages)
+  def ask_with_progress(messages, json: false)
+    setup_progress_tracking(messages, json: json)
   rescue HTTPX::Error => e
     handle_http_error(e)
   rescue Oj::ParseError => e
     handle_parse_error(e, response)
   end
 
-  def setup_progress_tracking(messages)
+  def setup_progress_tracking(messages, json: false)
     total_size = [messages.to_s.bytesize, 6000].max
     progress_speed = load_progress_speed
 
@@ -172,7 +170,7 @@ class OpenAiClient
 
     begin
       retry_with_backoff do
-        body = build_request_body(messages)
+        body = build_request_body(messages, json: json)
         debug_request(body) if @debug
 
         response = make_api_request(body)
