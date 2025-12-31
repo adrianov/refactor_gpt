@@ -46,9 +46,9 @@ class OpenAi
   def base_system_instruction
     <<~HEREDOC
       Return refactored files using this format:
-      <replace filename="[REPLACE_WITH_ACTUAL_FILE_PATH]">complete file content</replace>
+      <full_file_contents_to_replace filename="[REPLACE_WITH_ACTUAL_FILE_PATH]">complete file content</full_file_contents_to_replace>
 
-      The <replace> tags and the complete file content between them must be
+      The <full_file_contents_to_replace> tags and the complete file content between them must be
       output on separate lines. The file content between the opening and
       closing tags can span multiple lines and must include every line of the
       file exactly as it should appear.
@@ -57,13 +57,16 @@ class OpenAi
       returned:
       <content filename="path/to/file.rb">complete file content</content>
 
-      Content between <replace> and </replace> tags MUST be the complete file
+      Content between <full_file_contents_to_replace> and </full_file_contents_to_replace> tags MUST be the complete file
       content from the first line to the last line. Never abbreviate, cut, or
       use placeholders like "...". Always include all lines of the file.
 
       Content between <content> and </content> tags in the prompt is provided as
       reference only. Never return files that were marked with <content>. Only
       return files you actually modify.
+
+      ALWAYS use <full_file_contents_to_replace> tags for ALL returned files, including single-file responses.
+      Never return raw text without tags. This is required for both single-file and multi-file responses.
 
       Preserve all existing comments unless they describe code you change or
       you implement a TODO. When making bug fixes or applying specific requested
@@ -146,10 +149,18 @@ end
 
 # Helper class to parse OpenAI response
 class ResponseParser
+  FILE_REPLACE_PATTERN = %r{^<full_file_contents_to_replace filename="([^"]+)">(.*?)\n</full_file_contents_to_replace>}m
+
   def self.parse_files_from_response(response, expected_paths)
     result = parse_text_response(response, expected_paths)
     validate_parsed_files(result, expected_paths)
-    apply_single_file_fallback(result, response, expected_paths) || result
+
+    if result.empty?
+      warn "Error: No files were parsed from response. Response must use <full_file_contents_to_replace> tags."
+      exit 1
+    end
+
+    result
   end
 
   def self.parse_text_response(response, _expected_paths)
@@ -157,22 +168,16 @@ class ResponseParser
     remaining = response.dup
 
     while remaining
-      match = remaining.match(%r{^<replace filename="([^"]+)">(.*?)\n</replace>}m)
+      match = remaining.match(FILE_REPLACE_PATTERN)
       break unless match
 
       filename = match[1]
-      next if placeholder_filename?(filename)
-
       content = match[2]
       result[filename] = content
       remaining = remaining[(match.end(0))..]
     end
 
     result
-  end
-
-  def self.placeholder_filename?(filename)
-    filename == "[REPLACE_WITH_ACTUAL_FILE_PATH]"
   end
 
   def self.validate_parsed_files(result, expected_paths)
@@ -185,11 +190,6 @@ class ResponseParser
         warn "Warning: Empty content for file '#{filename}'"
       end
     end
-  end
-
-  def self.apply_single_file_fallback(result, response, expected_paths)
-    return if !result.empty? || expected_paths.size != 1
-    {expected_paths.first => response}
   end
 end
 
@@ -352,12 +352,10 @@ class RefactorGptRunner
 
   def read_files
     @file_paths.each_with_object({}) do |file_path, file_codes|
-      begin
-        file_codes[file_path] = File.binread(file_path).force_encoding("UTF-8")
-      rescue SystemCallError => e
-        warn "Failed to read file #{file_path}: #{e.message}"
-        exit 1
-      end
+      file_codes[file_path] = File.binread(file_path).force_encoding("UTF-8")
+    rescue SystemCallError => e
+      warn "Failed to read file #{file_path}: #{e.message}"
+      exit 1
     end
   end
 end
