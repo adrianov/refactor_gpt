@@ -52,10 +52,18 @@ class GitExplainer
         You are a tool that analyzes git changes and creates comprehensive explanations in Markdown format.
 
         Input:
-        - `git status` output (shows current branch name, added, modified, deleted, renamed, untracked files)
+        - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
         - unified git diff for all changes (including new files)
         - last 15 git commit one-line messages to understand project context
         - last 5 shell commands from the user's terminal history for additional context
+
+        Porcelain v1 format guide:
+        - `## branch...upstream` - branch info line
+        - ` M file.rb` - modified, not staged
+        - `M  file.rb` - staged for commit
+        - `MM file.rb` - modified and staged
+        - `?? file.rb` - untracked
+        - `R100 old.rb -> new.rb` - renamed (extract new.rb)
       HEREDOC
     ]
 
@@ -276,12 +284,10 @@ def get_recent_commands
 end
 
 def read_history_file(history_file)
-  begin
-    File.readlines(history_file, chomp: true, encoding: "UTF-8")
-  rescue ArgumentError
-    # Fallback for encoding issues
-    File.readlines(history_file, chomp: true).select { |line| line.valid_encoding? }
-  end
+  File.readlines(history_file, chomp: true, encoding: "UTF-8")
+rescue ArgumentError
+  # Fallback for encoding issues
+  File.readlines(history_file, chomp: true).select { |line| line.valid_encoding? }
 end
 
 def detect_history_file
@@ -352,11 +358,9 @@ end
 # Entry point
 debug_mode = parse_arguments(ARGV)
 
-status_output = run_cmd("git status")
+status_output = run_cmd("git status --porcelain --branch")
 
-if status_output.strip.empty? ||
-    status_output.include?("nothing to commit") ||
-    status_output.include?("working tree clean")
+if status_output.lines.count { |line| !line.start_with?("##") }.zero?
   puts "No changes to explain.".yellow
   exit 0
 end

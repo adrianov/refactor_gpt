@@ -91,11 +91,19 @@ class OpenAi
       You are a tool that analyzes and groups changed files into meaningful git commits.
 
       Input:
-      - `git status` output (shows current branch name, added, modified, deleted, renamed, untracked files)
+      - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
       - unified git diff for all changes (including new files)
       - optional user-provided hints or preferences from the command line
       - last 15 git commit one-line messages to help you match existing style
       - last 5 shell commands from the user's terminal history to give you extra context
+
+      Porcelain v1 format guide:
+      - `## branch...upstream` - branch info line
+      - ` M file.rb` - modified, not staged
+      - `M  file.rb` - staged for commit
+      - `MM file.rb` - modified and staged
+      - `?? file.rb` - untracked
+      - `R100 old.rb -> new.rb` - renamed (extract new.rb)
     HEREDOC
   end
 
@@ -243,17 +251,14 @@ end
 
 def extract_porcelain_filenames(porcelain_output)
   porcelain_output.split("\n").map do |line|
-    next nil if line.strip.empty?
+    next nil if line.strip.empty? || line.start_with?("##")
 
-    parts = line.split(" ", 2)
-    next nil if parts.length < 2
+    status_and_path = line.sub(/^.. /, "")
 
-    path_info = parts[1].strip
-
-    if path_info.include?("->")
-      path_info.split("->").last.strip
+    if status_and_path.include?("->")
+      status_and_path.split("->").last.strip
     else
-      path_info
+      status_and_path
     end
   end.compact
 end
@@ -535,12 +540,9 @@ debug_mode, cli_hint = parse_arguments(ARGV)
 git_root = get_git_root
 Dir.chdir(git_root)
 
-status_output = run_cmd("git status")
-porcelain_output = run_cmd("git status --porcelain")
+status_output = run_cmd("git status --porcelain --branch")
 
-if status_output.strip.empty? ||
-    status_output.include?("nothing to commit") ||
-    status_output.include?("working tree clean")
+if status_output.lines.count { |line| !line.start_with?("##") }.zero?
   puts "No changes to commit.".yellow
   exit 0
 end
@@ -603,7 +605,7 @@ if commits.empty?
   exit 0
 end
 
-status_filenames = extract_porcelain_filenames(porcelain_output)
+status_filenames = extract_porcelain_filenames(status_output)
 commits = fix_json_truncation_in_commits(commits, status_filenames)
 
 display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
