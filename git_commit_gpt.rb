@@ -55,10 +55,13 @@ class OpenAi
 
   def parse_commit_plan_response(raw_response)
     json_str = raw_response.strip
-    Oj.load(json_str)
-  rescue Oj::ParseError
     stripped_json_str = raw_response.gsub(/^```.*\n?/, "").gsub(/```$/, "").strip
-    Oj.load(stripped_json_str)
+
+    begin
+      Oj.load(json_str)
+    rescue Oj::ParseError
+      Oj.load(stripped_json_str)
+    end
   rescue Oj::ParseError
     puts "Failed to parse model response as JSON. Raw response:\n#{raw_response}".red
     exit 1
@@ -139,9 +142,10 @@ class OpenAi
           - If the original development followed TDD (tests written before code), preserve this sequence in commit ordering
           - Example ordering: "add failing tests for user authentication" → "implement user authentication logic"
           - When tests were written after implementation, group implementation and tests together in a single commit
-         - Every changed file from status must appear in exactly one group OR in excluded_files
-         - Use relative file paths exactly as shown in status output (after status flags)
-         - Prefer coherent commits over many tiny ones
+          - Every changed file from status must appear in exactly one group OR in excluded_files
+          - Extract complete file paths from status output by taking the full path after status flags (e.g., from "new file:   manifest.json", extract "manifest.json")
+          - Never truncate or modify file paths - always use the complete filename including extensions
+          - Prefer coherent commits over many tiny ones
         - **File Exclusion Rules**:
           - **schema.rb**: Exclude from commits if there are no database migration files in the changeset. Migration files are typically in `db/migrate/` directory with timestamps.
           - **Temporary and debug files**: Exclude from commits if changes are clearly temporary or debug-only, such as:
@@ -235,6 +239,48 @@ def get_git_root
     exit 1
   end
   root
+end
+
+def extract_porcelain_filenames(porcelain_output)
+  porcelain_output.split("\n").map do |line|
+    next nil if line.strip.empty?
+
+    parts = line.split(" ", 2)
+    next nil if parts.length < 2
+
+    path_info = parts[1].strip
+
+    if path_info.include?("->")
+      path_info.split("->").last.strip
+    else
+      path_info
+    end
+  end.compact
+end
+
+def fix_json_truncation_in_commits(commits, status_filenames)
+  status_set = status_filenames.to_set
+
+  commits.each do |commit|
+    next unless commit["files"]
+
+    commit["files"] = commit["files"].map do |filename|
+      if status_set.include?(filename)
+        filename
+      elsif filename.end_with?(".")
+        fixed_filename = filename.sub(/\.$/, "")
+        if status_set.include?("#{fixed_filename}.json")
+          "#{fixed_filename}.json"
+        else
+          filename
+        end
+      else
+        filename
+      end
+    end
+  end
+
+  commits
 end
 
 # Main execution
@@ -490,6 +536,7 @@ git_root = get_git_root
 Dir.chdir(git_root)
 
 status_output = run_cmd("git status")
+porcelain_output = run_cmd("git status --porcelain")
 
 if status_output.strip.empty? ||
     status_output.include?("nothing to commit") ||
@@ -555,6 +602,9 @@ if commits.empty?
   puts "No commits suggested by the model.".yellow
   exit 0
 end
+
+status_filenames = extract_porcelain_filenames(porcelain_output)
+commits = fix_json_truncation_in_commits(commits, status_filenames)
 
 display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
 execute_commits(commits)
