@@ -34,7 +34,9 @@ class OpenAiClient
 
       response = make_api_request(body)
       handle_response_errors(response)
-      extract_answer(response)
+      answer = extract_answer(response)
+      debug_response(answer) if @debug
+      answer
     end
   rescue HTTPX::Error => e
     handle_http_error(e)
@@ -85,6 +87,20 @@ class OpenAiClient
     warn Oj.dump(body.merge(messages: pretty_messages), mode: :compat,
       indent: 2)
     warn "--- end payload ---"
+  end
+
+  def debug_response(answer)
+    warn "\n--- OpenAI response content ---"
+    if answer
+      if answer.is_a?(String)
+        warn answer
+      else
+        warn Oj.dump(answer, mode: :compat, indent: 2)
+      end
+    else
+      warn "(empty response)"
+    end
+    warn "--- end response ---\n"
   end
 
   def make_api_request(body)
@@ -169,16 +185,22 @@ class OpenAiClient
     progress_thread = start_progress_thread(progressbar, start_time, progress_speed, total_size)
 
     begin
-      retry_with_backoff do
-        body = build_request_body(messages, json: json)
-        debug_request(body) if @debug
-
-        response = make_api_request(body)
-        handle_response_errors(response)
-        extract_answer(response)
-      end
+      make_request_with_debug(messages, json: json)
     ensure
       finish_progress(progress_thread, progressbar, start_time, total_size)
+    end
+  end
+
+  def make_request_with_debug(messages, json: false)
+    retry_with_backoff do
+      body = build_request_body(messages, json: json)
+      debug_request(body) if @debug
+
+      response = make_api_request(body)
+      handle_response_errors(response)
+      answer = extract_answer(response)
+      debug_response(answer) if @debug
+      answer
     end
   end
 
