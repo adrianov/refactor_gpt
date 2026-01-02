@@ -253,7 +253,7 @@ def extract_porcelain_filenames(porcelain_output)
   porcelain_output.split("\n").map do |line|
     next nil if line.strip.empty? || line.start_with?("##")
 
-    status_and_path = line.sub(/^.. /, "")
+    status_and_path = line.sub(/^.{2}\s+/, "")
 
     if status_and_path.include?("->")
       status_and_path.split("->").last.strip
