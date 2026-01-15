@@ -239,9 +239,12 @@ class FileProcessor
   end
 
   def display_file_stats(path, refactored_code, elapsed_time, original_code)
+    original_lines = original_code.lines.count
+    refactored_lines = refactored_code.lines.count
+
     puts "\nFile: #{path}"
-    puts "Original size: #{original_code.size} characters"
-    puts "Refactored size: #{refactored_code.size} characters"
+    puts "Original size: #{original_code.size} characters, #{original_lines} lines"
+    puts "Refactored size: #{refactored_code.size} characters, #{refactored_lines} lines"
     puts "Elapsed time: #{elapsed_time.round(2)} seconds"
     speed = calculate_speed(refactored_code.size, elapsed_time)
     puts "Speed: #{speed} characters per second"

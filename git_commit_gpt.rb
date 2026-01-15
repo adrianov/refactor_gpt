@@ -449,17 +449,17 @@ end
 def count_file_lines(file)
   return 0 unless File.exist?(file)
 
-  `wc -l < #{Shellwords.escape(file)}`.strip.to_i
+  File.readlines(file).size
 rescue
   0
 end
 
 def get_deleted_file_line_count(file)
-  show_cmd = "git show HEAD:#{Shellwords.escape(file)} 2>/dev/null | wc -l"
+  show_cmd = "git show HEAD:#{Shellwords.escape(file)} 2>/dev/null"
   output = `#{show_cmd}`
   return 0 unless $?.success?
 
-  output.strip.to_i
+  output.lines.size
 rescue
   0
 end
