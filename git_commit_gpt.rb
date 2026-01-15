@@ -385,36 +385,101 @@ end
 def get_file_stats(files)
   return {} unless files.any?
 
-  stat_cmd = "git diff --stat -- #{files.map { |f| Shellwords.escape(f) }.join(" ")}"
-  stat_output = `#{stat_cmd} 2>/dev/null`
-
-  return {} unless $?.success?
-
   stats = {}
-  output_lines = stat_output.lines.reject { |line| summary_line?(line) }
 
-  output_lines.each { |line| process_stat_line(line, stats) }
-  files.each { |file| stats[file] ||= "" }
+  files.each do |file|
+    stats[file] = get_single_file_stats(file)
+  end
+
   stats
+end
+
+def get_single_file_stats(file)
+  status = `git status --porcelain "#{file}" 2>/dev/null`.strip
+  return "" unless $?.success?
+
+  case status
+  when /^D /, /^ D/
+    get_deleted_file_stats(file)
+  when /^A/
+    get_added_file_stats(file)
+  when /^M/, /^ M/
+    get_modified_file_stats(file)
+  when /^?/
+    get_new_file_stats(file)
+  else
+    ""
+  end
+end
+
+def get_added_file_stats(file)
+  line_count = count_file_lines(file)
+  return "" unless line_count > 0
+
+  "#{line_count}+0-"
+end
+
+def get_new_file_stats(file)
+  line_count = count_file_lines(file)
+  return "" unless line_count > 0
+
+  "#{line_count}+0-"
+end
+
+def get_deleted_file_stats(file)
+  deleted_lines = get_deleted_file_line_count(file)
+  return "" unless deleted_lines > 0
+
+  "0+#{deleted_lines}-"
+end
+
+def get_modified_file_stats(file)
+  get_stat_from_command("git diff --cached --stat -- #{Shellwords.escape(file)}") ||
+    get_stat_from_command("git diff --stat -- #{Shellwords.escape(file)}")
+end
+
+def get_stat_from_command(command)
+  stat_output = `#{command} 2>/dev/null`
+  return "" unless $?.success?
+
+  output_lines = stat_output.lines.reject { |line| summary_line?(line) }
+  process_stat_line_for_file(output_lines.first) if output_lines.any?
+end
+
+def count_file_lines(file)
+  return 0 unless File.exist?(file)
+
+  `wc -l < #{Shellwords.escape(file)}`.strip.to_i
+rescue
+  0
+end
+
+def get_deleted_file_line_count(file)
+  show_cmd = "git show HEAD:#{Shellwords.escape(file)} 2>/dev/null | wc -l"
+  output = `#{show_cmd}`
+  return 0 unless $?.success?
+
+  output.strip.to_i
+rescue
+  0
 end
 
 def summary_line?(line)
   line.include?("changed") || line.include?("insertion") || line.include?("deletion")
 end
 
-def process_stat_line(line, stats)
+def process_stat_line_for_file(line)
   match = line.match(/^\s*(.+?)\s+\|\s*(\d+)\s*([+-]+)?\s*$/)
-  return unless match
+  return "" unless match
 
-  filename = match[1].strip
   total_changes = match[2].to_i
   plus_minus = match[3] || ""
 
-  return unless total_changes > 0
+  return "" unless total_changes > 0
 
   additions = plus_minus.count("+")
   deletions = plus_minus.count("-")
-  stats[filename] = "#{additions}+#{deletions}-"
+  "#{additions}+#{deletions}-"
 end
 
 def display_warnings(warnings)
