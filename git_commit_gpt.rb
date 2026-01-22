@@ -22,38 +22,83 @@ class OpenAi
 
   def commit_plan(status_output, diff_output, cli_hint, recent_commits,
     recent_commands)
-    raw_response = ask([
+    messages = [
       {role: "system", content: system_instruction},
       {role: "user",
        content: build_user_content(status_output, diff_output, cli_hint, recent_commits,
          recent_commands)}
-    ], json: true)
-    parse_commit_plan_response(raw_response)
+    ]
+    payload_size_kb = calculate_payload_size(messages)
+    raw_response = ask(messages, json: true)
+    parse_commit_plan_response(raw_response, payload_size_kb)
   end
 
   private
 
+  MAX_CONTENT_SIZE_KB = 20
+
   def build_user_content(status_output, diff_output, cli_hint, recent_commits,
     recent_commands)
     content_parts = []
+    current_size_bytes = 0
+    max_size_bytes = MAX_CONTENT_SIZE_KB * 1024
 
-    content_parts << "Here are hints or preferences from the user:\n\n#{cli_hint}\n" unless cli_hint.empty?
+    unless cli_hint.empty?
+      hint_text = "Here are hints or preferences from the user:\n\n#{cli_hint}\n"
+      if current_size_bytes + hint_text.bytesize <= max_size_bytes
+        content_parts << hint_text
+        current_size_bytes += hint_text.bytesize
+      end
+    end
 
-    content_parts.concat([
-      "Here is the git status:\n\n#{status_output}\n",
-      "Here is the git diff for all changes:\n\n#{diff_output}\n",
-      "Here are the last 15 git commit one-line messages (most recent first):\n\n#{recent_commits}\n"
-    ])
+    status_text = "Here is the git status:\n\n#{status_output}\n"
+    if current_size_bytes + status_text.bytesize <= max_size_bytes
+      content_parts << status_text
+      current_size_bytes += status_text.bytesize
+    end
+
+    diff_text = "Here is the git diff for all changes:\n\n"
+    remaining_bytes = max_size_bytes - current_size_bytes - diff_text.bytesize
+    if remaining_bytes > 0
+      truncated_diff = truncate_to_size(diff_output, remaining_bytes)
+      diff_text += truncated_diff
+      content_parts << diff_text
+      current_size_bytes += diff_text.bytesize
+    else
+      content_parts << "#{diff_text}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_KB} KB limit)\n"
+    end
+
+    commits_text = "Here are the last 15 git commit one-line messages (most recent first):\n\n#{recent_commits}\n"
+    if current_size_bytes + commits_text.bytesize <= max_size_bytes
+      content_parts << commits_text
+      current_size_bytes += commits_text.bytesize
+    end
 
     unless recent_commands.empty?
-      content_parts << "Here are the last 5 shell commands from the user's terminal history " \
+      commands_text = "Here are the last 5 shell commands from the user's terminal history " \
         "(most recent last):\n\n#{recent_commands}\n"
+      if current_size_bytes + commands_text.bytesize <= max_size_bytes
+        content_parts << commands_text
+      end
     end
 
     content_parts.join("\n")
   end
 
-  def parse_commit_plan_response(raw_response)
+  def truncate_to_size(text, max_bytes)
+    return "" if max_bytes <= 0
+
+    text_bytes = text.bytesize
+    return text if text_bytes <= max_bytes
+
+    truncated = text.byteslice(0, max_bytes)
+    last_newline = truncated.rindex("\n")
+    return truncated if last_newline.nil?
+
+    truncated.byteslice(0, last_newline + 1) + "\n... (truncated due to size limit)\n"
+  end
+
+  def parse_commit_plan_response(raw_response, payload_size_kb)
     json_str = raw_response.strip
     stripped_json_str = raw_response.gsub(/^```.*\n?/, "").gsub(/```$/, "").strip
 
@@ -63,8 +108,17 @@ class OpenAi
       Oj.load(stripped_json_str)
     end
   rescue Oj::ParseError
-    puts "Failed to parse model response as JSON. Raw response:\n#{raw_response}".red
+    puts "Failed to parse model response as JSON.".red
+    puts "Payload size: #{payload_size_kb} KB".yellow
+    puts "Raw response:\n#{raw_response}".red
     exit 1
+  end
+
+  def calculate_payload_size(messages)
+    model = @client.instance_variable_get(:@model)
+    body = {model: model, messages: messages, response_format: {type: "json_object"}}
+    json_payload = Oj.dump(body, mode: :compat)
+    (json_payload.bytesize / 1024.0).round(2)
   end
 
   def system_instruction
@@ -388,7 +442,7 @@ def get_file_stats(files)
   stats = {}
 
   files.each do |file|
-    stats[file] = get_single_file_stats(file)
+    stats[file] = get_single_file_stats(file) || ""
   end
 
   stats
@@ -577,6 +631,8 @@ def display_commit_total_stats(file_stats, _files)
   total_deletions = 0
 
   file_stats.each_value do |stat|
+    next unless stat
+
     additions, deletions = stat.match(/(\d+)\+(\d+)-/)&.captures
     next unless additions && deletions
 
