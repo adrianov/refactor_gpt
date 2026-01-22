@@ -35,7 +35,7 @@ class OpenAi
 
   private
 
-  MAX_CONTENT_SIZE_KB = 20
+  MAX_CONTENT_SIZE_KB = 100
 
   def build_user_content(status_output, diff_output, cli_hint, recent_commits,
     recent_commands)
@@ -179,19 +179,13 @@ class OpenAi
   end
 
   def extract_file_path_from_diff_header(line)
-    match = line.match(/diff --git (?:a\/)?(.+?) (?:b\/)?(.+?)$/)
-    return nil unless match
+    return nil unless line.start_with?("diff --git ")
 
-    old_path = match[1].strip
-    new_path = match[2].strip
+    rest = line.sub("diff --git ", "")
+    b_index = rest.rindex(" b/")
+    return nil unless b_index
 
-    if old_path == "/dev/null"
-      new_path
-    elsif new_path == "/dev/null"
-      old_path
-    else
-      new_path
-    end
+    rest[(b_index + 3)..]
   end
 
   def parse_file_statuses(status_output)
@@ -199,11 +193,12 @@ class OpenAi
     status_output.lines.each do |line|
       next if line.strip.empty? || line.start_with?("##")
 
-      status_flag = line[0..1].strip
-      file_path = line[3..].strip
+      status_flag = line[0..1]
+      file_path = line[3..]&.strip
+      next if file_path.nil? || file_path.empty?
 
-      if file_path.include?("->")
-        file_path = file_path.split("->").last.strip
+      if file_path.include?(" -> ")
+        file_path = file_path.split(" -> ").last
       end
 
       statuses[file_path] = status_flag
@@ -226,11 +221,11 @@ class OpenAi
 
   def file_priority_value(status)
     case status
-    when /^M/, /^MM/
+    when /M/, /MM/
       1
-    when /^A/, "??"
+    when /A/, "??"
       2
-    when /^D/
+    when /D/
       3
     else
       4
