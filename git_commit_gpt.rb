@@ -60,8 +60,8 @@ class OpenAi
     diff_text = "Here is the git diff for all changes:\n\n"
     remaining_bytes = max_size_bytes - current_size_bytes - diff_text.bytesize
     if remaining_bytes > 0
-      truncated_diff = truncate_to_size(diff_output, remaining_bytes)
-      diff_text += truncated_diff
+      sorted_diff = build_sorted_diff(diff_output, status_output, remaining_bytes)
+      diff_text += sorted_diff
       content_parts << diff_text
       current_size_bytes += diff_text.bytesize
     else
@@ -85,17 +85,156 @@ class OpenAi
     content_parts.join("\n")
   end
 
-  def truncate_to_size(text, max_bytes)
+  def build_sorted_diff(diff_output, status_output, max_bytes)
+    return "" if diff_output.empty?
+
+    file_diffs = parse_file_diffs(diff_output)
+    return diff_output if file_diffs.empty?
+
+    file_statuses = parse_file_statuses(status_output)
+    sorted_files = sort_files_by_importance(file_diffs, file_statuses)
+
+    included_diffs = []
+    current_size = 0
+    skipped_count = 0
+
+    sorted_files.each do |file_path, diff_content|
+      status = file_statuses[file_path] || "??"
+      is_new_file = status.match?(/^A/) || status == "??"
+      diff_size = diff_content.bytesize
+
+      if diff_size > max_bytes
+        if try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes,
+          included_diffs)
+          skipped_count += 1
+          current_size = included_diffs.sum { |d| d.bytesize }
+        else
+          skipped_count += 1
+        end
+        next
+      end
+
+      if current_size + diff_size <= max_bytes
+        included_diffs << diff_content
+        current_size += diff_size
+      else
+        if is_new_file
+          try_include_truncated_new_file(true, diff_content, current_size, max_bytes,
+            included_diffs)
+          current_size = included_diffs.sum { |d| d.bytesize }
+        end
+        skipped_count += sorted_files.size - included_diffs.size - skipped_count
+        break
+      end
+    end
+
+    result = included_diffs.join("\n")
+    if skipped_count > 0
+      result += "\n\n... (#{skipped_count} more file(s) skipped or truncated due to size limit)\n"
+    end
+    result
+  end
+
+  def try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes,
+    included_diffs)
+    return false unless is_new_file && current_size < max_bytes
+
+    remaining = max_bytes - current_size
+    truncated = truncate_file_diff(diff_content, remaining)
+    return false if truncated.bytesize.zero?
+
+    included_diffs << truncated
+    true
+  end
+
+  def truncate_file_diff(diff_content, max_bytes)
     return "" if max_bytes <= 0
 
-    text_bytes = text.bytesize
-    return text if text_bytes <= max_bytes
-
-    truncated = text.byteslice(0, max_bytes)
+    truncated = diff_content.byteslice(0, max_bytes)
     last_newline = truncated.rindex("\n")
     return truncated if last_newline.nil?
 
-    truncated.byteslice(0, last_newline + 1) + "\n... (truncated due to size limit)\n"
+    truncated.byteslice(0, last_newline + 1) + "\n... (file truncated due to size limit)\n"
+  end
+
+  def parse_file_diffs(diff_output)
+    return {} if diff_output.empty?
+
+    file_diffs = {}
+    current_file = nil
+    current_diff = []
+
+    diff_output.lines.each do |line|
+      if line.start_with?("diff --git")
+        file_diffs[current_file] = current_diff.join if current_file
+        current_file = extract_file_path_from_diff_header(line)
+        current_diff = [line]
+      elsif current_file
+        current_diff << line
+      end
+    end
+
+    file_diffs[current_file] = current_diff.join if current_file
+    file_diffs
+  end
+
+  def extract_file_path_from_diff_header(line)
+    match = line.match(/diff --git (?:a\/)?(.+?) (?:b\/)?(.+?)$/)
+    return nil unless match
+
+    old_path = match[1].strip
+    new_path = match[2].strip
+
+    if old_path == "/dev/null"
+      new_path
+    elsif new_path == "/dev/null"
+      old_path
+    else
+      new_path
+    end
+  end
+
+  def parse_file_statuses(status_output)
+    statuses = {}
+    status_output.lines.each do |line|
+      next if line.strip.empty? || line.start_with?("##")
+
+      status_flag = line[0..1].strip
+      file_path = line[3..].strip
+
+      if file_path.include?("->")
+        file_path = file_path.split("->").last.strip
+      end
+
+      statuses[file_path] = status_flag
+    end
+    statuses
+  end
+
+  def sort_files_by_importance(file_diffs, file_statuses)
+    file_priorities = file_diffs.keys.map do |file_path|
+      status = file_statuses[file_path] || "??"
+      priority = file_priority_value(status)
+      size = file_diffs[file_path].bytesize
+      [file_path, {priority: priority, size: size, diff: file_diffs[file_path]}]
+    end
+
+    file_priorities.sort_by { |_path, info| [info[:priority], info[:size]] }.map do |file_path, info|
+      [file_path, info[:diff]]
+    end
+  end
+
+  def file_priority_value(status)
+    case status
+    when /^M/, /^MM/
+      1
+    when /^A/, "??"
+      2
+    when /^D/
+      3
+    else
+      4
+    end
   end
 
   def parse_commit_plan_response(raw_response, payload_size_kb)
