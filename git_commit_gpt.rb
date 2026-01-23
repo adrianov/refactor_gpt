@@ -207,21 +207,27 @@ class OpenAi
   end
 
   def sort_files_by_importance(file_diffs, file_statuses)
-    file_priorities = file_diffs.keys.map do |file_path|
+    file_diffs.keys.map do |file_path|
       status = file_statuses[file_path] || "??"
-      priority = file_priority_value(status)
-      size = file_diffs[file_path].bytesize
-      [file_path, {priority: priority, size: size, diff: file_diffs[file_path]}]
-    end
-
-    file_priorities.sort_by { |_path, info| [info[:priority], info[:size]] }.map do |file_path, info|
-      [file_path, info[:diff]]
+      [file_path, calculate_file_score(file_path, status, file_diffs[file_path].bytesize)]
+    end.sort_by { |_path, score| score }.map do |file_path, _score|
+      [file_path, file_diffs[file_path]]
     end
   end
 
-  def file_priority_value(status)
+  def calculate_file_score(file_path, status, diff_size)
+    status_score = status_priority(status)
+    depth_score = file_path.count("/")
+    extension_score = extension_priority(File.extname(file_path).downcase)
+    name_length_score = File.basename(file_path).length
+    size_score = diff_size / 1000
+
+    [status_score, depth_score, extension_score, name_length_score, size_score]
+  end
+
+  def status_priority(status)
     case status
-    when /M/, /MM/
+    when /M/
       1
     when /A/, "??"
       2
@@ -229,6 +235,26 @@ class OpenAi
       3
     else
       4
+    end
+  end
+
+  CODE_EXTENSIONS = %w[
+    .rb .c .h .cpp .hpp .cc .cxx .java .py .js .ts .jsx .tsx .go .rs .swift
+    .kt .scala .cs .php .pl .pm .sh .bash .zsh .lua .r .m .mm .sql .graphql
+    .vue .svelte .css .scss .sass .less .html .htm .xml .json .yaml .yml
+    .toml .ini .conf .md .markdown .txt .rake .gemspec
+  ].freeze
+
+  def extension_priority(ext)
+    return 0 if CODE_EXTENSIONS.include?(ext)
+
+    case ext
+    when ".lock", ".sum", ".mod"
+      5
+    when ".log", ".tmp", ".bak"
+      9
+    else
+      3
     end
   end
 
