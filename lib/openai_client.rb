@@ -5,6 +5,26 @@ require "httpx"
 require "oj"
 require "ruby-progressbar"
 
+# Custom error for rate limiting (429)
+class RateLimitError < StandardError
+  attr_reader :retry_after
+
+  def initialize(message = "Rate limited", retry_after: nil)
+    @retry_after = retry_after
+    super(message)
+  end
+end
+
+# Custom error for server errors (5xx)
+class ServerError < StandardError
+  attr_reader :status
+
+  def initialize(message = "Server error", status: 500)
+    @status = status
+    super(message)
+  end
+end
+
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
   DEFAULT_MODEL = "glm-4.6"
@@ -64,6 +84,28 @@ class OpenAiClient
         retry
       else
         raise e
+      end
+    rescue RateLimitError => e
+      retries += 1
+      if retries <= max_retries
+        delay = e.retry_after || [30, base_delay * (4**(retries - 1))].max
+        warn "⚠️  Rate limited (429), retrying in #{delay}s... (#{retries}/#{max_retries})"
+        sleep(delay)
+        retry
+      else
+        warn "❌ Rate limit exceeded after #{max_retries} retries"
+        exit 1
+      end
+    rescue ServerError => e
+      retries += 1
+      if retries <= max_retries
+        delay = base_delay * (2**(retries - 1))
+        warn "⚠️  Server error (#{e.status}), retrying in #{delay}s... (#{retries}/#{max_retries})"
+        sleep(delay)
+        retry
+      else
+        warn "❌ Server error persisted after #{max_retries} retries"
+        exit 1
       end
     end
   end
@@ -125,13 +167,43 @@ class OpenAiClient
   def handle_response_errors(response)
     return if response.status == 200
 
+    if response.status == 429
+      retry_after = extract_retry_after(response)
+      raise RateLimitError.new("Rate limited by API", retry_after: retry_after)
+    end
+
+    if response.status >= 500 && response.status < 600
+      raise ServerError.new("Server error", status: response.status)
+    end
+
     pretty_print_error("API Error", response.status, response.body)
     exit 1
   rescue NoMethodError
     # Handle HTTPX::ErrorResponse which doesn't have status method
+    error_status = extract_error_response_status(response)
+
+    raise RateLimitError.new("Rate limited by API") if error_status == 429
+    raise ServerError.new("Server error", status: error_status) if error_status && error_status >= 500
+
     error_details = format_error_response(response)
     pretty_print_error("API Error", "Unknown", error_details)
     exit 1
+  end
+
+  def extract_retry_after(response)
+    retry_header = response.headers["retry-after"]&.first
+    return nil unless retry_header
+
+    Integer(retry_header)
+  rescue ArgumentError
+    nil
+  end
+
+  def extract_error_response_status(response)
+    return nil unless response.respond_to?(:response) && response.response
+    return nil unless response.response.respond_to?(:status)
+
+    response.response.status
   end
 
   def extract_answer(response)
