@@ -415,7 +415,9 @@ class OpenAi
           {
             "file": "path/one.rb",
             "description": "Possible off-by-one error in loop bounds",
-            "probability": 0.8
+            "probability": 0.8,
+            "start_line": 42,
+            "end_line": 45
           }
         ],
         "excluded_files": [
@@ -427,6 +429,7 @@ class OpenAi
       }
 
       If no issues are detected, return "warnings": [].
+      For warnings: include start_line and end_line only when the issue can be pinpointed to specific lines in the diff. Omit these fields if the issue is general or spans the entire file.
       If no files are excluded, return "excluded_files": [].
       If code quality assessment is neutral/unclear, use "unchanged" for direction.
 
@@ -709,7 +712,18 @@ def display_single_warning(warning)
   description = warning["description"].to_s
   probability = warning["probability"]
   probability_str = probability.nil? ? "n/a" : probability.to_s
-  puts "Warning in #{file}: #{description} (probability: #{probability_str})".yellow
+  location = format_warning_location(file, warning["start_line"], warning["end_line"])
+  puts "Warning in #{location}: #{description} (probability: #{probability_str})".yellow
+end
+
+def format_warning_location(file, start_line, end_line)
+  return file if start_line.nil?
+
+  if end_line.nil? || end_line == start_line
+    "#{file}:#{start_line}"
+  else
+    "#{file}:#{start_line}-#{end_line}"
+  end
 end
 
 def display_excluded_files(excluded_files)
