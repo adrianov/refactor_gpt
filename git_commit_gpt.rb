@@ -139,28 +139,45 @@ class OpenAi
     diff_size = diff_content.bytesize
 
     if diff_size > max_bytes
-      if try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes, included_diffs)
-        skipped_count += 1
-        current_size = included_diffs.sum { |d| d.bytesize }
-      else
-        skipped_count += 1
-      end
-      return [current_size, skipped_count, false]
+      return handle_oversized_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs,
+        skipped_count)
     end
 
-    if current_size + diff_size <= max_bytes
-      included_diffs << diff_content
-      current_size += diff_size
+    handle_normal_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs, sorted_files_size,
+      skipped_count)
+  end
+
+  def handle_oversized_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs, skipped_count)
+    if try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes, included_diffs)
+      skipped_count += 1
+      current_size = included_diffs.sum { |d| d.bytesize }
     else
-      if is_new_file
-        try_include_truncated_new_file(true, diff_content, current_size, max_bytes, included_diffs)
-        current_size = included_diffs.sum { |d| d.bytesize }
-      end
-      skipped_count += sorted_files_size - included_diffs.size - skipped_count
-      return [current_size, skipped_count, true]
+      skipped_count += 1
     end
+    [current_size, skipped_count, false]
+  end
 
-    [current_size, skipped_count, nil]
+  def handle_normal_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs, sorted_files_size,
+    skipped_count)
+    if current_size + diff_content.bytesize <= max_bytes
+      included_diffs << diff_content
+      current_size += diff_content.bytesize
+      [current_size, skipped_count, nil]
+    else
+      [current_size, skipped_count, true].tap do |result|
+        result[0] = handle_remaining_space(is_new_file, diff_content, current_size, max_bytes, included_diffs)
+        result[1] += sorted_files_size - included_diffs.size - result[1]
+      end
+    end
+  end
+
+  def handle_remaining_space(is_new_file, diff_content, current_size, max_bytes, included_diffs)
+    if is_new_file
+      try_include_truncated_new_file(true, diff_content, current_size, max_bytes, included_diffs)
+      included_diffs.sum { |d| d.bytesize }
+    else
+      current_size
+    end
   end
 
   def collect_diffs(sorted_files, file_statuses, max_bytes)
