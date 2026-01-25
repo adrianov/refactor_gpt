@@ -33,9 +33,9 @@ class OpenAiClient
   PROGRESS_SPEED_FILE = File.join(Dir.home, ".refactor_gpt").freeze
 
   def initialize(model: nil, debug: false, max_completion_tokens: nil,
-    progress_title: nil)
-    @api_base_url = fetch_env("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    @api_key = fetch_env("OPENAI_ACCESS_TOKEN")
+    progress_title: nil, api_base_url: nil, api_key: nil)
+    @api_base_url = api_base_url || fetch_env("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    @api_key = api_key || fetch_env("OPENAI_ACCESS_TOKEN")
     @proxy_url = fetch_env("PROXY_URL", nil)
     @model = model || fetch_env("DEFAULT_MODEL", DEFAULT_MODEL)
     @debug = debug
@@ -45,8 +45,9 @@ class OpenAiClient
     @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
   end
 
-  def ask(messages, json: false)
-    return ask_with_progress(messages, json: json) if @progress_title
+  def ask(messages, json: false, title: nil)
+    title ||= @progress_title
+    return ask_with_progress(messages, json: json, title: title) if title
 
     retry_with_backoff do
       body = build_request_body(messages, json: json)
@@ -304,24 +305,24 @@ class OpenAiClient
     default
   end
 
-  def ask_with_progress(messages, json: false)
-    setup_progress_tracking(messages, json: json)
+  def ask_with_progress(messages, json: false, title: nil)
+    setup_progress_tracking(messages, json: json, title: title)
   rescue HTTPX::Error => e
     handle_http_error(e)
   rescue Oj::ParseError => e
     handle_parse_error(e, response)
   end
 
-  def setup_progress_tracking(messages, json: false)
+  def setup_progress_tracking(messages, json: false, title: nil)
     total_size = [messages.to_s.bytesize, 6000].max
     progress_speed = load_progress_speed
 
-    progressbar = create_progress_bar(total_size)
+    progressbar = create_progress_bar(total_size, title)
     start_time = Time.now
     progress_thread = start_progress_thread(progressbar, start_time, progress_speed, total_size)
 
     begin
-      return make_request_with_debug(messages, json: json)
+      make_request_with_debug(messages, json: json)
     ensure
       finish_progress(progress_thread, progressbar, start_time, total_size)
     end
@@ -381,12 +382,12 @@ class OpenAiClient
     exit 1
   end
 
-  def create_progress_bar(total_size)
+  def create_progress_bar(total_size, title)
     ProgressBar.create(
-      title: @progress_title,
+      title: title || @progress_title,
       total: total_size,
       format: "%t: |%B| %p%% %e",
-      length: 60
+      length: 100
     )
   end
 

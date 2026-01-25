@@ -4,33 +4,208 @@
 require "colorize"
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
+require_relative "lib/refactor_gpt_utils"
 require "shellwords"
+require "oj"
+require "tempfile"
 
 # Class to interact with OpenAI API
 class OpenAi
   include AgentsFileHandler
 
   def initialize(model: nil, debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug,
-      progress_title: "Refactoring code".cyan)
+    @debug = debug
+    @env_vars = load_env_vars
+    setup_config(model)
+    setup_clients
   end
 
   # Method to send prompts to OpenAI and get a response
   def ask(prompts, json: false)
-    @client.ask(prompts, json: json)
+    # This ask method is used by the first client in the chain for generic requests
+    @clients.first.ask(prompts, json: json)
   end
 
   # Method to refactor code based on user instructions
   def refactor(file_codes, user_instruction = nil)
-    ask(
-      [
-        {role: "system", content: build_system_instruction},
-        {role: "user", content: build_refactor_prompt(file_codes, user_instruction)}
-      ]
-    )
+    current_file_codes = file_codes.dup
+    any_stage_successful = false
+
+    @clients.each_with_index do |client, index|
+      refactored_files = process_stage(client, index, current_file_codes, user_instruction)
+      next if refactored_files.empty?
+
+      any_stage_successful = true
+      refactored_files.each { |path, new_code| current_file_codes[path] = new_code }
+
+      assessment = perform_assessment(file_codes, current_file_codes, user_instruction)
+      if assessment["warnings"]&.any?
+        fixed_files = attempt_to_fix_warnings(client, current_file_codes, assessment["warnings"], user_instruction)
+        unless fixed_files.empty?
+          fixed_files.each { |path, code| current_file_codes[path] = code }
+          assessment = perform_assessment(file_codes, current_file_codes, user_instruction)
+        end
+      end
+
+      break if assessment["satisfied"] && (assessment["warnings"].nil? || assessment["warnings"].empty?)
+      break if last_stage?(index)
+    end
+
+    warn "Warning: All stages failed to produce output. Returning original files." unless any_stage_successful
+    build_final_response(current_file_codes)
   end
 
   private
+
+  def attempt_to_fix_warnings(client, current_file_codes, warnings, user_instruction)
+    model_name = client.instance_variable_get(:@model)
+    puts "Attempting to fix warnings with #{model_name}...".blue
+
+    warning_text = warnings.map { |w| "- #{w["message"]} (probability: #{w["probability"]})" }.join("\n")
+    fix_instruction = "Fix these issues from the previous refactoring step:\n#{warning_text}"
+    fix_instruction += "\n\nOriginal instruction: #{user_instruction}" if user_instruction
+
+    raw_response = client.ask(refactor_messages(current_file_codes, fix_instruction))
+    ResponseParser.parse_files_from_response(raw_response, current_file_codes.keys, exit_on_error: false)
+  end
+
+  def last_stage?(index)
+    index == @clients.size - 1
+  end
+
+  def perform_assessment(original_file_codes, current_file_codes, user_instruction)
+    puts "--- Assessing if instruction is fulfilled ---".blue
+    prompt = build_assessment_prompt(original_file_codes, current_file_codes, user_instruction)
+    messages = [
+      {role: "system", content: "You are an expert code reviewer. Assess if the user's refactoring instruction " \
+                               "has been fully fulfilled. Respond ONLY with a JSON object: " \
+                               "{\"satisfied\": true/false, \"reason\": \"brief explanation\", " \
+                               "\"warnings\": [{\"message\": \"...\", \"probability\": 0..1}]}"},
+      {role: "user", content: prompt}
+    ]
+
+    response = @clients.first.ask(messages, json: true, title: "Assessing refactoring".cyan)
+    result = ResponseParser.extract_json(response)
+
+    display_assessment_result(result)
+    result
+  rescue => e
+    warn "Warning: Self-assessment failed: #{e.message}"
+    {"satisfied" => false, "reason" => "Assessment failed: #{e.message}", "warnings" => []}
+  end
+
+  def display_assessment_result(result)
+    status_color = result["satisfied"] ? :green : :yellow
+    puts "Assessment: #{result["reason"]}".colorize(status_color)
+
+    return unless result["warnings"]&.any?
+
+    puts "Warnings:".yellow
+    result["warnings"].each do |warning|
+      prob = warning["probability"] || 0
+      puts "  - #{warning["message"]} (probability: #{prob})".yellow
+    end
+  end
+
+  def build_assessment_prompt(original_file_codes, current_file_codes, user_instruction)
+    instruction = user_instruction || DEFAULT_USER_INSTRUCTION
+    prompt = "User Instruction: #{instruction}\n\n"
+    prompt += "Review the following changes (in unified diff format) and determine if they fulfill the instruction:\n\n"
+
+    current_file_codes.each do |path, current_code|
+      original_code = original_file_codes[path]
+      next if original_code == current_code
+
+      prompt += generate_diff(path, original_code, current_code)
+      prompt += "\n"
+    end
+    prompt
+  end
+
+  def generate_diff(path, original, current)
+    Tempfile.create(["original", File.extname(path)]) do |f1|
+      f1.binmode
+      f1.write(original)
+      f1.close
+      Tempfile.create(["current", File.extname(path)]) do |f2|
+        f2.binmode
+        f2.write(current)
+        f2.close
+        diff = `diff -u #{Shellwords.shellescape(f1.path)} #{Shellwords.shellescape(f2.path)}`
+        # Clean up the diff header to show the actual filename
+        diff.sub(/^--- .*\n\+\+\+ .*\n/, "--- a/#{path}\n+++ b/#{path}\n")
+      end
+    end
+  rescue => e
+    warn "Warning: Diff generation failed for #{path}: #{e.message}"
+    "--- a/#{path}\n+++ b/#{path}\n@@ -0,0 +0,0 @@\n(Diff failed, original and refactored versions differ)\n"
+  end
+
+  def process_stage(client, index, current_file_codes, user_instruction)
+    display_stage_info(client, index)
+    raw_response = client.ask(refactor_messages(current_file_codes, user_instruction))
+    refactored_files = ResponseParser.parse_files_from_response(raw_response, current_file_codes.keys,
+      exit_on_error: false)
+
+    if refactored_files.empty?
+      model_name = client.instance_variable_get(:@model)
+      warn "Warning: Stage #{index + 1} (#{model_name}) returned no refactored files."
+    end
+
+    refactored_files
+  end
+
+  def setup_config(model)
+    @base_url = fetch_config("REFACTOR_BASE_URL", "OPENAI_BASE_URL")
+    @api_key = fetch_config("REFACTOR_ACCESS_TOKEN", "OPENAI_ACCESS_TOKEN")
+    @models = [
+      fetch_env_var("REFACTOR_MODEL_1"),
+      fetch_env_var("REFACTOR_MODEL_2"),
+      fetch_env_var("REFACTOR_MODEL_3")
+    ].compact
+
+    @models = [model || fetch_env_var("DEFAULT_MODEL") || OpenAiClient::DEFAULT_MODEL] if @models.empty?
+  end
+
+  def fetch_config(primary, secondary)
+    fetch_env_var(primary) || fetch_env_var(secondary)
+  end
+
+  def fetch_env_var(key)
+    @env_vars[key] || ENV[key]
+  end
+
+  def setup_clients
+    @clients = @models.map do |m|
+      OpenAiClient.new(
+        model: m,
+        debug: @debug,
+        progress_title: "Refactoring code (#{m})".cyan,
+        api_base_url: @base_url,
+        api_key: @api_key
+      )
+    end
+  end
+
+  def display_stage_info(client, index)
+    return unless @debug || @clients.size > 1
+
+    model_name = client.instance_variable_get(:@model)
+    puts "\n--- Stage #{index + 1}/#{@clients.size}: Refactoring with #{model_name} ---".blue
+  end
+
+  def refactor_messages(file_codes, user_instruction)
+    [
+      {role: "system", content: build_system_instruction},
+      {role: "user", content: build_refactor_prompt(file_codes, user_instruction)}
+    ]
+  end
+
+  def build_final_response(file_codes)
+    file_codes.map do |path, code|
+      "<full_file_contents_to_replace filename=\"#{path}\">#{code}</full_file_contents_to_replace>"
+    end.join("\n")
+  end
 
   def build_system_instruction
     agents_content = load_agents_file
@@ -67,6 +242,9 @@ class OpenAi
 
       ALWAYS use <full_file_contents_to_replace> tags for ALL returned files, including single-file responses.
       Never return raw text without tags. This is required for both single-file and multi-file responses.
+
+      CRITICAL: DO NOT create new files. Only refactor the files provided in the prompt.
+      If you think a new file is needed, refactor the existing code instead.
 
       Preserve all existing comments unless they describe code you change or
       you implement a TODO. When making bug fixes or applying specific requested
@@ -147,172 +325,6 @@ class OpenAi
   HEREDOC
 end
 
-# Helper class to parse OpenAI response
-class ResponseParser
-  FILE_REPLACE_PATTERN = %r{^<full_file_contents_to_replace filename="([^"]+)">(.*?)\n</full_file_contents_to_replace>}m
-
-  def self.parse_files_from_response(response, expected_paths)
-    result = parse_text_response(response, expected_paths)
-    validate_parsed_files(result, expected_paths)
-
-    if result.empty?
-      warn "Error: No files were parsed from response. Response must use <full_file_contents_to_replace> tags."
-      exit 1
-    end
-
-    result
-  end
-
-  def self.parse_text_response(response, _expected_paths)
-    result = {}
-    remaining = response.dup
-
-    while remaining
-      match = remaining.match(FILE_REPLACE_PATTERN)
-      break unless match
-
-      filename = match[1]
-      content = match[2]
-      result[filename] = content
-      remaining = remaining[(match.end(0))..]
-    end
-
-    result
-  end
-
-  def self.validate_parsed_files(result, expected_paths)
-    result.each do |filename, content|
-      unless expected_paths.include?(filename)
-        warn "Warning: Parsed file '#{filename}' was not in expected files: #{expected_paths.join(", ")}"
-      end
-
-      if content.strip.empty?
-        warn "Warning: Empty content for file '#{filename}'"
-      end
-    end
-  end
-end
-
-# Class to handle file operations and diff display
-class FileProcessor
-  def initialize(file_codes)
-    @file_codes = file_codes
-  end
-
-  def process_refactored_files(refactored_files, elapsed_time)
-    log_file_counts(refactored_files)
-    process_each_file(refactored_files, elapsed_time)
-    report_missing_files(refactored_files)
-  end
-
-  private
-
-  def log_file_counts(refactored_files)
-    return unless @file_codes.size > 1 || refactored_files.size > 1
-    warn "Expected files: #{@file_codes.keys.join(", ")}"
-    warn "Parsed files: #{refactored_files.keys.join(", ")}"
-  end
-
-  def process_each_file(refactored_files, elapsed_time)
-    refactored_files.each do |path, content|
-      next unless @file_codes.key?(path)
-
-      content = ensure_trailing_newline(content)
-      original_code = @file_codes[path]
-
-      display_file_stats(path, content, elapsed_time, original_code)
-      next if original_code == content
-
-      handle_file_modification(path, original_code, content)
-    end
-  end
-
-  def report_missing_files(refactored_files)
-    missing_files = @file_codes.keys - refactored_files.keys
-    return if missing_files.empty?
-    warn "No replacement content for files: #{missing_files.join(", ")}"
-  end
-
-  def ensure_trailing_newline(content)
-    return content if content.empty? || content[-1] == "\n"
-    content + "\n"
-  end
-
-  def display_file_stats(path, refactored_code, elapsed_time, original_code)
-    original_lines = original_code.lines.count
-    refactored_lines = refactored_code.lines.count
-
-    display_basic_stats(path, original_code, original_lines, refactored_code, refactored_lines)
-    display_timing_stats(refactored_code, elapsed_time)
-    warn_truncation_warning(refactored_code, original_code)
-  end
-
-  def display_basic_stats(path, original_code, original_lines, refactored_code, refactored_lines)
-    puts "\nFile: #{path}"
-    puts "Original size: #{original_code.size} characters, #{original_lines} lines"
-    puts "Refactored size: #{refactored_code.size} characters, #{refactored_lines} lines"
-  end
-
-  def display_timing_stats(refactored_code, elapsed_time)
-    speed = calculate_speed(refactored_code.size, elapsed_time)
-    puts "Elapsed time: #{elapsed_time.round(2)} seconds"
-    puts "Speed: #{speed} characters per second"
-  end
-
-  def warn_truncation_warning(refactored_code, original_code)
-    if refactored_code.size < original_code.size * 0.5
-      warn "Warning: Refactored code is much smaller than original (possible truncation)"
-    end
-  end
-
-  def calculate_speed(size, elapsed_time)
-    return 0 unless elapsed_time.positive?
-    (size / elapsed_time).round(2)
-  end
-
-  def handle_file_modification(path, original_code, refactored_code)
-    is_git_repository = check_git_repository(path)
-    create_backup(path, original_code) unless is_git_repository
-    write_refactored_file(path, refactored_code)
-    display_diff(path, is_git_repository)
-  end
-
-  def check_git_repository(path)
-    system(
-      "git ls-files --error-unmatch " \
-      "#{Shellwords.shellescape(path)} > #{File::NULL} 2>&1"
-    )
-  end
-
-  def create_backup(path, original_code)
-    backup_file_path = "#{path}.bak"
-    File.binwrite(backup_file_path, original_code)
-  rescue SystemCallError => e
-    warn "Failed to write backup file #{backup_file_path}: #{e.message}"
-    exit 1
-  end
-
-  def write_refactored_file(path, refactored_code)
-    warn "Writing file: #{path} (#{refactored_code.size} bytes)"
-    File.binwrite(path, refactored_code)
-  rescue SystemCallError => e
-    warn "Failed to write refactored file #{path}: #{e.message}"
-    exit 1
-  end
-
-  def display_diff(path, is_git_repository)
-    if is_git_repository
-      system("git diff -w #{Shellwords.shellescape(path)}")
-    else
-      backup_file_path = "#{path}.bak"
-      system(
-        "diff -u --color #{Shellwords.shellescape(backup_file_path)} " \
-        "#{Shellwords.shellescape(path)}"
-      )
-    end
-  end
-end
-
 # Main runner class
 class RefactorGptRunner
   def initialize
@@ -321,12 +333,14 @@ class RefactorGptRunner
   end
 
   def run(args)
+    @debug = args.include?("--debug") || args.include?("-d")
     parse_arguments(args)
     validate_files
 
     file_codes = read_files
+
     raw_response, elapsed_time = with_timing do
-      OpenAi.new.refactor(file_codes, user_instruction).to_s
+      OpenAi.new(debug: @debug).refactor(file_codes, user_instruction).to_s
     end
 
     refactored_files = ResponseParser.parse_files_from_response(raw_response, @file_paths)
@@ -344,6 +358,8 @@ class RefactorGptRunner
 
   def parse_arguments(args)
     args.each do |arg|
+      next if ["--debug", "-d"].include?(arg)
+
       if File.exist?(arg)
         @file_paths << arg
       else
