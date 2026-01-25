@@ -242,13 +242,24 @@ class FileProcessor
     original_lines = original_code.lines.count
     refactored_lines = refactored_code.lines.count
 
+    display_basic_stats(path, original_code, original_lines, refactored_code, refactored_lines)
+    display_timing_stats(refactored_code, elapsed_time)
+    warn_truncation_warning(refactored_code, original_code)
+  end
+
+  def display_basic_stats(path, original_code, original_lines, refactored_code, refactored_lines)
     puts "\nFile: #{path}"
     puts "Original size: #{original_code.size} characters, #{original_lines} lines"
     puts "Refactored size: #{refactored_code.size} characters, #{refactored_lines} lines"
-    puts "Elapsed time: #{elapsed_time.round(2)} seconds"
-    speed = calculate_speed(refactored_code.size, elapsed_time)
-    puts "Speed: #{speed} characters per second"
+  end
 
+  def display_timing_stats(refactored_code, elapsed_time)
+    speed = calculate_speed(refactored_code.size, elapsed_time)
+    puts "Elapsed time: #{elapsed_time.round(2)} seconds"
+    puts "Speed: #{speed} characters per second"
+  end
+
+  def warn_truncation_warning(refactored_code, original_code)
     if refactored_code.size < original_code.size * 0.5
       warn "Warning: Refactored code is much smaller than original (possible truncation)"
     end
