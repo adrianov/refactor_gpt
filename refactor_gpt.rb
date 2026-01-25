@@ -30,20 +30,26 @@ class OpenAi
   def refactor(file_codes, user_instruction = nil)
     current_file_codes = file_codes.dup
     any_stage_successful = false
+    assessment = {"satisfied" => false, "warnings" => []}
 
     @clients.each_with_index do |client, index|
       refactored_files = process_stage(client, index, current_file_codes, user_instruction)
-      next if refactored_files.empty?
 
-      any_stage_successful = true
-      refactored_files.each { |path, new_code| current_file_codes[path] = new_code }
+      if refactored_files.any?
+        any_stage_successful = true
+        refactored_files.each { |path, new_code| current_file_codes[path] = new_code }
+      end
 
-      assessment = perform_assessment(file_codes, current_file_codes, user_instruction)
-      if assessment["warnings"]&.any?
+      # Skip assessment if no files changed and not the last stage
+      next if refactored_files.empty? && !last_stage?(index)
+
+      assessment = perform_assessment(file_codes, current_file_codes, user_instruction, client: client)
+
+      if assessment["warnings"]&.any? && refactored_files.any?
         fixed_files = attempt_to_fix_warnings(client, current_file_codes, assessment["warnings"], user_instruction)
         unless fixed_files.empty?
           fixed_files.each { |path, code| current_file_codes[path] = code }
-          assessment = perform_assessment(file_codes, current_file_codes, user_instruction)
+          assessment = perform_assessment(file_codes, current_file_codes, user_instruction, client: client)
         end
       end
 
@@ -73,8 +79,11 @@ class OpenAi
     index == @clients.size - 1
   end
 
-  def perform_assessment(original_file_codes, current_file_codes, user_instruction)
-    puts "--- Assessing if instruction is fulfilled ---".blue
+  def perform_assessment(original_file_codes, current_file_codes, user_instruction, client: nil)
+    client ||= @clients.first
+    model_name = client.instance_variable_get(:@model)
+    puts "--- Assessing if instruction is fulfilled (#{model_name}) ---".blue
+
     prompt = build_assessment_prompt(original_file_codes, current_file_codes, user_instruction)
     messages = [
       {role: "system", content: "You are an expert code reviewer. Assess if the user's refactoring instruction " \
@@ -84,7 +93,7 @@ class OpenAi
       {role: "user", content: prompt}
     ]
 
-    response = @clients.first.ask(messages, json: true, title: "Assessing refactoring".cyan)
+    response = client.ask(messages, json: true, title: "Assessing refactoring".cyan)
     result = ResponseParser.extract_json(response)
 
     display_assessment_result(result)
