@@ -77,10 +77,7 @@ class OpenAiClient
 
       retries += 1
       if retries <= max_retries
-        delay = base_delay * (2**(retries - 1))
-        error_name = e.class.name.split("::").last
-        warn "⚠️  Connection issue (#{error_name}), retrying in #{delay}s... (#{retries}/#{max_retries})"
-        sleep(delay)
+        handle_retry_with_exponential_backoff(e, retries, max_retries, base_delay)
         retry
       else
         raise e
@@ -88,9 +85,7 @@ class OpenAiClient
     rescue RateLimitError => e
       retries += 1
       if retries <= max_retries
-        delay = e.retry_after || [30, base_delay * (4**(retries - 1))].max
-        warn "⚠️  Rate limited (429), retrying in #{delay}s... (#{retries}/#{max_retries})"
-        sleep(delay)
+        handle_rate_limit_retry(e, retries, max_retries, base_delay)
         retry
       else
         warn "❌ Rate limit exceeded after #{max_retries} retries"
@@ -99,15 +94,32 @@ class OpenAiClient
     rescue ServerError => e
       retries += 1
       if retries <= max_retries
-        delay = base_delay * (2**(retries - 1))
-        warn "⚠️  Server error (#{e.status}), retrying in #{delay}s... (#{retries}/#{max_retries})"
-        sleep(delay)
+        handle_server_error_retry(e, retries, max_retries, base_delay)
         retry
       else
         warn "❌ Server error persisted after #{max_retries} retries"
         exit 1
       end
     end
+  end
+
+  def handle_retry_with_exponential_backoff(error, retries, max_retries, base_delay)
+    delay = base_delay * (2**(retries - 1))
+    error_name = error.class.name.split("::").last
+    warn "⚠️  Connection issue (#{error_name}), retrying in #{delay}s... (#{retries}/#{max_retries})"
+    sleep(delay)
+  end
+
+  def handle_rate_limit_retry(error, retries, max_retries, base_delay)
+    delay = error.retry_after || [30, base_delay * (4**(retries - 1))].max
+    warn "⚠️  Rate limited (429), retrying in #{delay}s... (#{retries}/#{max_retries})"
+    sleep(delay)
+  end
+
+  def handle_server_error_retry(error, retries, max_retries, base_delay)
+    delay = base_delay * (2**(retries - 1))
+    warn "⚠️  Server error (#{error.status}), retrying in #{delay}s... (#{retries}/#{max_retries})"
+    sleep(delay)
   end
 
   def build_request_body(messages, json: false)
@@ -167,19 +179,29 @@ class OpenAiClient
   def handle_response_errors(response)
     return if response.status == 200
 
-    if response.status == 429
-      retry_after = extract_retry_after(response)
-      raise RateLimitError.new("Rate limited by API", retry_after: retry_after)
-    end
+    handle_non_success_status(response)
+  rescue NoMethodError
+    handle_error_response_without_status(response)
+  end
 
-    if response.status >= 500 && response.status < 600
-      raise ServerError.new("Server error", status: response.status)
-    end
+  def handle_non_success_status(response)
+    raise_rate_limit_error(response) if response.status == 429
+    raise_server_error(response) if response.status >= 500 && response.status < 600
 
     pretty_print_error("API Error", response.status, response.body)
     exit 1
-  rescue NoMethodError
-    # Handle HTTPX::ErrorResponse which doesn't have status method
+  end
+
+  def raise_rate_limit_error(response)
+    retry_after = extract_retry_after(response)
+    raise RateLimitError.new("Rate limited by API", retry_after: retry_after)
+  end
+
+  def raise_server_error(response)
+    raise ServerError.new("Server error", status: response.status)
+  end
+
+  def handle_error_response_without_status(response)
     error_status = extract_error_response_status(response)
 
     raise RateLimitError.new("Rate limited by API") if error_status == 429
