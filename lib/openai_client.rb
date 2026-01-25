@@ -43,6 +43,7 @@ class OpenAiClient
     @progress_title = progress_title
     @env_vars = nil
     @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
+    @progress_active = false
   end
 
   def ask(messages, json: false)
@@ -313,6 +314,9 @@ class OpenAiClient
   end
 
   def setup_progress_tracking(messages, json: false)
+    return make_request_with_debug(messages, json: json) if @progress_active
+
+    @progress_active = true
     total_size = [messages.to_s.bytesize, 6000].max
     progress_speed = load_progress_speed
 
@@ -321,9 +325,10 @@ class OpenAiClient
     progress_thread = start_progress_thread(progressbar, start_time, progress_speed, total_size)
 
     begin
-      make_request_with_debug(messages, json: json)
+      return make_request_with_debug(messages, json: json)
     ensure
       finish_progress(progress_thread, progressbar, start_time, total_size)
+      @progress_active = false
     end
   end
 
@@ -399,19 +404,26 @@ class OpenAiClient
         # Allow progress to continue beyond 100% by gradually increasing total.
         # This provides better user experience than holding at 100% when we don't
         # know the real response speed, giving users continuous visual feedback.
-        # Add initial total size to get closer to 100% with each enhancement
-        progressbar.total += total_size if progressbar.total < progress
-        # Rare case: when progress far exceeds total, adding initial size isn't enough
-        progressbar.total = progress if progressbar.total < progress
+        if progress >= progressbar.total
+          # Add initial total size to get closer to 100% with each enhancement
+          progressbar.total += total_size
+          # Rare case: when progress far exceeds total, adding initial size isn't enough
+          progressbar.total = progress + 1 if progressbar.total <= progress
+        end
         progressbar.progress = progress
 
         sleep 0.1
       end
+    rescue StandardError
+      # Silently exit thread on any error
     end
   end
 
   def finish_progress(progress_thread, progressbar, start_time, total_size)
+    return unless progress_thread && progressbar
+
     progress_thread.kill
+    progressbar.progress = progressbar.total
     progressbar.finish
 
     # Save speed for next time
