@@ -959,7 +959,7 @@ elapsed = Time.now - start_time
 if elapsed > ANALYSIS_SOUND_THRESHOLD
   sound_file = "/System/Library/Sounds/Glass.aiff"
   system("afplay #{Shellwords.escape(sound_file)}") if File.exist?(sound_file)
-  print "\e]0;✅ Commit Done\a"
+  print "\e]0;✅ Commit Plan Done\a"
 end
 commits = plan["commits"] || []
 warnings = plan["warnings"] || []
