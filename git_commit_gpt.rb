@@ -37,50 +37,79 @@ class OpenAi
 
   MAX_CONTENT_SIZE_KB = 100
 
+  def append_hint_section(parts, current_size_bytes, max_size_bytes, cli_hint)
+    return current_size_bytes if cli_hint.empty?
+    hint_text = "Here are hints or preferences from the user:\n\n#{cli_hint}\n"
+    if current_size_bytes + hint_text.bytesize <= max_size_bytes
+      parts << hint_text
+      current_size_bytes + hint_text.bytesize
+    else
+      current_size_bytes
+    end
+  end
+
+  def append_status_section(parts, current_size_bytes, max_size_bytes, status_output)
+    status_text = "Here is the git status:\n\n#{status_output}\n"
+    if current_size_bytes + status_text.bytesize <= max_size_bytes
+      parts << status_text
+      current_size_bytes + status_text.bytesize
+    else
+      current_size_bytes
+    end
+  end
+
+  def append_diff_section(parts, current_size_bytes, max_size_bytes, diff_output, status_output)
+    diff_text = "Here is the git diff for all changes:\n\n"
+    remaining = max_size_bytes - current_size_bytes - diff_text.bytesize
+    if remaining > 0
+      sorted_diff = build_sorted_diff(diff_output, status_output, remaining)
+      diff_text += sorted_diff
+      parts << diff_text
+      current_size_bytes + diff_text.bytesize
+    else
+      parts << "#{diff_text}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_KB} KB limit)\n"
+      current_size_bytes
+    end
+  end
+
+  def append_commits_section(parts, current_size_bytes, max_size_bytes, recent_commits)
+    commits_text = "Here are the last 15 git commit one-line messages (most recent first):\n\n#{recent_commits}\n"
+    if current_size_bytes + commits_text.bytesize <= max_size_bytes
+      parts << commits_text
+      current_size_bytes + commits_text.bytesize
+    else
+      current_size_bytes
+    end
+  end
+
+  def append_commands_section(parts, current_size_bytes, max_size_bytes, recent_commands)
+    return current_size_bytes if recent_commands.empty?
+    commands_text = "Here are the last 5 shell commands from the user's terminal history " \
+                    "(most recent last):\n\n#{recent_commands}\n"
+    if current_size_bytes + commands_text.bytesize <= max_size_bytes
+      parts << commands_text
+      current_size_bytes + commands_text.bytesize
+    else
+      current_size_bytes
+    end
+  end
+
   def build_user_content(status_output, diff_output, cli_hint, recent_commits,
     recent_commands)
     content_parts = []
     current_size_bytes = 0
     max_size_bytes = MAX_CONTENT_SIZE_KB * 1024
 
-    unless cli_hint.empty?
-      hint_text = "Here are hints or preferences from the user:\n\n#{cli_hint}\n"
-      if current_size_bytes + hint_text.bytesize <= max_size_bytes
-        content_parts << hint_text
-        current_size_bytes += hint_text.bytesize
-      end
-    end
+    current_size_bytes = append_hint_section(content_parts, current_size_bytes, max_size_bytes, cli_hint)
 
-    status_text = "Here is the git status:\n\n#{status_output}\n"
-    if current_size_bytes + status_text.bytesize <= max_size_bytes
-      content_parts << status_text
-      current_size_bytes += status_text.bytesize
-    end
+    current_size_bytes = append_status_section(content_parts, current_size_bytes, max_size_bytes, status_output)
 
-    diff_text = "Here is the git diff for all changes:\n\n"
-    remaining_bytes = max_size_bytes - current_size_bytes - diff_text.bytesize
-    if remaining_bytes > 0
-      sorted_diff = build_sorted_diff(diff_output, status_output, remaining_bytes)
-      diff_text += sorted_diff
-      content_parts << diff_text
-      current_size_bytes += diff_text.bytesize
-    else
-      content_parts << "#{diff_text}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_KB} KB limit)\n"
-    end
+    current_size_bytes = append_diff_section(content_parts, current_size_bytes, max_size_bytes, diff_output,
+      status_output)
 
-    commits_text = "Here are the last 15 git commit one-line messages (most recent first):\n\n#{recent_commits}\n"
-    if current_size_bytes + commits_text.bytesize <= max_size_bytes
-      content_parts << commits_text
-      current_size_bytes += commits_text.bytesize
-    end
+    current_size_bytes = append_commits_section(content_parts, current_size_bytes, max_size_bytes, recent_commits)
 
-    unless recent_commands.empty?
-      commands_text = "Here are the last 5 shell commands from the user's terminal history " \
-        "(most recent last):\n\n#{recent_commands}\n"
-      if current_size_bytes + commands_text.bytesize <= max_size_bytes
-        content_parts << commands_text
-      end
-    end
+    append_commands_section(content_parts, current_size_bytes, max_size_bytes, recent_commands)
 
     content_parts.join("\n")
   end
@@ -94,45 +123,61 @@ class OpenAi
     file_statuses = parse_file_statuses(status_output)
     sorted_files = sort_files_by_importance(file_diffs, file_statuses)
 
-    included_diffs = []
-    current_size = 0
-    skipped_count = 0
-
-    sorted_files.each do |file_path, diff_content|
-      status = file_statuses[file_path] || "??"
-      is_new_file = status.match?(/^A/) || status == "??"
-      diff_size = diff_content.bytesize
-
-      if diff_size > max_bytes
-        if try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes,
-          included_diffs)
-          skipped_count += 1
-          current_size = included_diffs.sum { |d| d.bytesize }
-        else
-          skipped_count += 1
-        end
-        next
-      end
-
-      if current_size + diff_size <= max_bytes
-        included_diffs << diff_content
-        current_size += diff_size
-      else
-        if is_new_file
-          try_include_truncated_new_file(true, diff_content, current_size, max_bytes,
-            included_diffs)
-          current_size = included_diffs.sum { |d| d.bytesize }
-        end
-        skipped_count += sorted_files.size - included_diffs.size - skipped_count
-        break
-      end
-    end
+    included_diffs, skipped_count = collect_diffs(sorted_files, file_statuses, max_bytes)
 
     result = included_diffs.join("\n")
     if skipped_count > 0
       result += "\n\n... (#{skipped_count} more file(s) skipped or truncated due to size limit)\n"
     end
     result
+  end
+
+  def process_diff_entry(file_path, diff_content, file_statuses, current_size, max_bytes, included_diffs,
+    sorted_files_size, skipped_count)
+    status = file_statuses[file_path] || "??"
+    is_new_file = status.match?(/^A/) || status == "??"
+    diff_size = diff_content.bytesize
+
+    if diff_size > max_bytes
+      if try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes, included_diffs)
+        skipped_count += 1
+        current_size = included_diffs.sum { |d| d.bytesize }
+      else
+        skipped_count += 1
+      end
+      return [current_size, skipped_count, false]
+    end
+
+    if current_size + diff_size <= max_bytes
+      included_diffs << diff_content
+      current_size += diff_size
+    else
+      if is_new_file
+        try_include_truncated_new_file(true, diff_content, current_size, max_bytes, included_diffs)
+        current_size = included_diffs.sum { |d| d.bytesize }
+      end
+      skipped_count += sorted_files_size - included_diffs.size - skipped_count
+      return [current_size, skipped_count, true]
+    end
+
+    [current_size, skipped_count, nil]
+  end
+
+  def collect_diffs(sorted_files, file_statuses, max_bytes)
+    included_diffs = []
+    skipped_count = 0
+    current_size = 0
+
+    sorted_files.each do |file_path, diff_content|
+      current_size, skipped_count, break_loop = process_diff_entry(
+        file_path, diff_content, file_statuses, current_size, max_bytes,
+        included_diffs, sorted_files.size, skipped_count
+      )
+      break if break_loop == true
+      next if break_loop == false
+    end
+
+    [included_diffs, skipped_count]
   end
 
   def try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes,
@@ -883,6 +928,9 @@ unless $?.success?
   exit 1
 end
 
+ANALYSIS_SOUND_THRESHOLD = 5.0
+
+start_time = Time.now
 plan = OpenAi.new(debug: debug_mode).commit_plan(
   status_output,
   diff_output,
@@ -890,6 +938,12 @@ plan = OpenAi.new(debug: debug_mode).commit_plan(
   recent_commits,
   recent_commands
 )
+elapsed = Time.now - start_time
+if elapsed > ANALYSIS_SOUND_THRESHOLD
+  sound_file = "/System/Library/Sounds/Glass.aiff"
+  system("afplay #{Shellwords.escape(sound_file)}") if File.exist?(sound_file)
+  print "\e]0;✅ Commit Done\a"
+end
 commits = plan["commits"] || []
 warnings = plan["warnings"] || []
 quality_assessment = plan["quality_assessment"]

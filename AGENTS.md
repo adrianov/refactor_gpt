@@ -123,3 +123,4 @@ When modifying LLM prompts or system instructions in AI-driven applications:
   - Creating helper methods for repeated patterns
   - Ensure extracted methods have descriptive names that explain their purpose
   - Splitting large files into smaller, focused modules/classes when approaching 400-line limit
+  - **Never disable Metrics/AbcSize inline**; adjust code or configuration instead.
