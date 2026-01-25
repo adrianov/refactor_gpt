@@ -43,6 +43,8 @@ class OpenAiClient
     @progress_title = progress_title
     @env_vars = nil
     @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
+    @progress_mutex = Mutex.new
+    @progress_stop = false
   end
 
   def ask(messages, json: false, title: nil)
@@ -319,6 +321,8 @@ class OpenAiClient
 
     progressbar = create_progress_bar(total_size, title)
     start_time = Time.now
+
+    set_progress_stop(false)
     progress_thread = start_progress_thread(progressbar, start_time, progress_speed, total_size)
 
     begin
@@ -393,36 +397,75 @@ class OpenAiClient
 
   def start_progress_thread(progressbar, start_time, progress_speed, total_size)
     Thread.new do
-      loop do
-        elapsed_time = Time.now - start_time
-        progress = (elapsed_time * progress_speed).round
-
-        # Allow progress to continue beyond 100% by gradually increasing total.
-        # This provides better user experience than holding at 100% when we don't
-        # know the real response speed, giving users continuous visual feedback.
-        if progress >= progressbar.total
-          # Add initial total size to get closer to 100% with each enhancement
-          progressbar.total += total_size
-          # Rare case: when progress far exceeds total, adding initial size isn't enough
-          progressbar.total = progress + 1 if progressbar.total <= progress
-        end
-        progressbar.progress = progress
-
-        sleep 0.1
-      end
-    rescue StandardError
-      # Silently exit thread on any error
+      run_progress_loop(progressbar, start_time, progress_speed, total_size)
     end
+  end
+
+  def run_progress_loop(progressbar, start_time, progress_speed, total_size)
+    loop do
+      break if progress_stopped?
+      break unless update_progress_safely(progressbar, start_time, progress_speed, total_size)
+
+      sleep 0.1
+    end
+  end
+
+  def set_progress_stop(value)
+    @progress_mutex.synchronize { @progress_stop = value }
+  end
+
+  def progress_stopped?
+    @progress_mutex.synchronize { @progress_stop }
+  end
+
+  def update_progress_safely(progressbar, start_time, progress_speed, total_size)
+    return false if progressbar.finished?
+
+    elapsed_time = Time.now - start_time
+    progress = (elapsed_time * progress_speed).round
+
+    adjust_progressbar_total(progressbar, progress, total_size)
+    progressbar.progress = progress
+    true
+  rescue ProgressBar::InvalidProgressError
+    # ProgressBar::InvalidProgressError: progress set after finish or invalid value
+    warn "Progress update stopped due to progressbar state" if @debug
+    false
+  end
+
+  def adjust_progressbar_total(progressbar, progress, total_size)
+    return unless progress >= progressbar.total
+
+    # Allow progress to continue beyond 100% by gradually increasing total.
+    # This provides better user experience than holding at 100% when we don't
+    # know the real response speed, giving users continuous visual feedback.
+    progressbar.total += total_size
+    # Rare case: when progress far exceeds total, adding initial size isn't enough
+    progressbar.total = progress + 1 if progressbar.total <= progress
   end
 
   def finish_progress(progress_thread, progressbar, start_time, total_size)
     return unless progress_thread && progressbar
 
-    progress_thread.kill
+    set_progress_stop(true)
+    # Give the thread a moment to exit cleanly before forcing termination
+    progress_thread.join(0.5)
+    progress_thread.kill if progress_thread.alive?
+
+    finish_progressbar_safely(progressbar)
+    save_progress_speed_from_elapsed(start_time, total_size)
+  end
+
+  def finish_progressbar_safely(progressbar)
+    return if progressbar.finished?
+
     progressbar.progress = progressbar.total
     progressbar.finish
+  rescue ProgressBar::InvalidProgressError
+    # Progressbar already finished or in invalid state
+  end
 
-    # Save speed for next time
+  def save_progress_speed_from_elapsed(start_time, total_size)
     elapsed_time = Time.now - start_time
     return unless elapsed_time.positive?
 
