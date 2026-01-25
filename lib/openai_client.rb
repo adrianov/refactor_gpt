@@ -88,7 +88,7 @@ class OpenAiClient
         handle_rate_limit_retry(e, retries, max_retries, base_delay)
         retry
       else
-        warn "❌ Rate limit exceeded after #{max_retries} retries"
+        warn "❌ Rate limit exceeded after #{max_retries} retries: #{e.message}"
         exit 1
       end
     rescue ServerError => e
@@ -112,7 +112,10 @@ class OpenAiClient
 
   def handle_rate_limit_retry(error, retries, max_retries, base_delay)
     delay = error.retry_after || [30, base_delay * (4**(retries - 1))].max
-    warn "⚠️  Rate limited (429), retrying in #{delay}s... (#{retries}/#{max_retries})"
+    error_msg = error.message.include?("Rate limited by API:") ? error.message.split(": ", 2).last : nil
+    base_msg = "⚠️  Rate limited (429)"
+    msg = error_msg ? "#{base_msg}: #{error_msg}" : base_msg
+    warn "#{msg}, retrying in #{delay}s... (#{retries}/#{max_retries})"
     sleep(delay)
   end
 
@@ -194,7 +197,15 @@ class OpenAiClient
 
   def raise_rate_limit_error(response)
     retry_after = extract_retry_after(response)
-    raise RateLimitError.new("Rate limited by API", retry_after: retry_after)
+    error_message = extract_error_message_from_response(response)
+    message = error_message ? "Rate limited by API: #{error_message}" : "Rate limited by API"
+
+    if error_message&.include?("Insufficient balance") || error_message&.include?("no resource package")
+      pretty_print_error("API Error", response.status, message)
+      exit 1
+    end
+
+    raise RateLimitError.new(message, retry_after: retry_after)
   end
 
   def raise_server_error(response)
@@ -204,7 +215,16 @@ class OpenAiClient
   def handle_error_response_without_status(response)
     error_status = extract_error_response_status(response)
 
-    raise RateLimitError.new("Rate limited by API") if error_status == 429
+    if error_status == 429
+      error_message = extract_error_message_from_response_object(response)
+      if error_message&.include?("Insufficient balance") || error_message&.include?("no resource package")
+        error_details = format_error_response(response)
+        pretty_print_error("API Error", error_status, error_details)
+        exit 1
+      end
+      raise RateLimitError.new("Rate limited by API")
+    end
+
     raise ServerError.new("Server error", status: error_status) if error_status && error_status >= 500
 
     error_details = format_error_response(response)
@@ -218,6 +238,28 @@ class OpenAiClient
 
     Integer(retry_header)
   rescue ArgumentError
+    nil
+  end
+
+  def extract_error_message_from_response(response)
+    return nil unless response&.body
+
+    parsed = Oj.load(response.body)
+    return nil unless parsed.is_a?(Hash)
+
+    parsed.dig("error", "message")
+  rescue Oj::ParseError
+    nil
+  end
+
+  def extract_error_message_from_response_object(response)
+    return nil unless response.respond_to?(:response) && response.response.respond_to?(:body)
+
+    parsed = Oj.load(response.response.body)
+    return nil unless parsed.is_a?(Hash)
+
+    parsed.dig("error", "message")
+  rescue Oj::ParseError
     nil
   end
 
