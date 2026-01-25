@@ -43,7 +43,6 @@ class OpenAiClient
     @progress_title = progress_title
     @env_vars = nil
     @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
-    @progress_active = false
   end
 
   def ask(messages, json: false)
@@ -314,9 +313,6 @@ class OpenAiClient
   end
 
   def setup_progress_tracking(messages, json: false)
-    return make_request_with_debug(messages, json: json) if @progress_active
-
-    @progress_active = true
     total_size = [messages.to_s.bytesize, 6000].max
     progress_speed = load_progress_speed
 
@@ -328,7 +324,6 @@ class OpenAiClient
       return make_request_with_debug(messages, json: json)
     ensure
       finish_progress(progress_thread, progressbar, start_time, total_size)
-      @progress_active = false
     end
   end
 
