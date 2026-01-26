@@ -129,12 +129,18 @@ A general-purpose GPT-5.1 assistant for asking questions, getting explanations, 
 
 Usage:
 ./ask_gpt.rb "Your question or request here"
+./ask_gpt.rb --gemini "Your question or request here"  # Use Gemini 3 Flash model
+./ask_gpt.rb --search "Your question requiring web search"
 
 Features:
 - Answers programming and non-programming questions
 - Can explain code snippets or concepts
 - Works as a quick terminal-based AI assistant
 - Uses `glow` for nicely formatted Markdown output when `glow` is installed, falling back to plain text otherwise
+- Supports multiple AI models:
+  - GPT-5.1 (default)
+  - Gemini 3 Flash via `--gemini` flag
+  - GPT-4o with search via `--search` flag
 
 ### git_commit_gpt.rb
 

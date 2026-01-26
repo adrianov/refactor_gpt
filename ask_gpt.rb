@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require_relative "lib/openai_client"
+require_relative "lib/gemini_client"
 require "ruby-progressbar"
 require "rbconfig"
 require "reline"
@@ -75,7 +76,7 @@ end
 # Argument parsing and utilities
 module Utility
   FLAG_MAPPING = {"--search" => :search_mode, "--eldritch" => :eldritch_mode, "--short" => :short_mode,
-                  "--debug" => :debug_mode}.freeze
+                  "--debug" => :debug_mode, "--gemini" => :gemini_mode}.freeze
 
   def self.parse_args(base_dir)
     options = init_options
@@ -114,7 +115,7 @@ module Utility
   def self.build_question(parts, snippets)
     return parts.join(" ") if snippets.empty?
 
-    "#{parts.join(' ')}\n\nIncluded files:\n#{snippets.join("\n\n---\n\n")}\n"
+    "#{parts.join(" ")}\n\nIncluded files:\n#{snippets.join("\n\n---\n\n")}\n"
   end
 
   def self.total_size(snippets)
@@ -292,6 +293,97 @@ class AskGptClient
   end
 end
 
+class AskGeminiClient
+  DEFAULT_MODEL = "gemini-3-flash"
+
+  def initialize(model: nil, max_completion_tokens: nil, debug: false)
+    @model = model
+    @max_completion_tokens = max_completion_tokens
+    @debug = debug
+    @client = GeminiClient.new(model: model, max_completion_tokens: max_completion_tokens, debug: debug,
+      progress_title: "Thinking")
+  end
+
+  def ask(messages, json: false)
+    @client.ask(messages, json: json)
+  end
+
+  def build_system_message(style, brevity)
+    {role: "user", content: build_system_instruction(style, brevity)}
+  end
+
+  def build_system_instruction(style, brevity)
+    style_instr = build_style_instruction(style)
+    style_instr += build_brevity_instruction if brevity == :short
+
+    system_instr = base_instruction(style_instr)
+    system_info = SystemInfo.to_s
+    date_info = SystemInfo.date_info
+
+    result = system_instr.strip
+    result += "\n\nUser environment:\n#{system_info}" unless system_info.empty?
+    result += "\nCurrent date/time: #{date_info}" unless date_info.empty?
+    result
+  end
+
+  def build_style_instruction(style)
+    return "Answer in a Lovecraftian, eldritch horror tone" if style == :eldritch
+
+    <<~HEREDOC
+      - Answer in clear, concise terms, prioritizing Ruby concepts and tooling.
+      - Prefer idiomatic Ruby style in all code examples.
+      - Use Markdown formatting (headings, lists, fenced code blocks) where helpful.
+      - Default code fences to Ruby unless another language is clearly required.
+      - Always respond using Markdown formatting, even for very short answers.
+    HEREDOC
+  end
+
+  def build_brevity_instruction
+    <<~HEREDOC
+      Answer in 1–2 short, direct phrases; be as brief as possible while still being correct and useful.
+      Avoid lists, headings, or multi-sentence paragraphs unless absolutely necessary.
+      If a one-word answer would be fully correct and sufficient, answer with that one word.
+    HEREDOC
+  end
+
+  def base_instruction(style_instr)
+    <<~HEREDOC
+      You are a Ruby-focused assistant helping a Ruby programmer.
+
+      Style and format:
+      #{style_instr}
+
+      Answer length:
+      - Be succinct and avoid unnecessary theory.
+      - Include just enough detail and examples to make solution directly usable.
+      - If user asks a short, direct question and does not explicitly request detail,
+        respond with a short, direct answer (1–3 short sentences or bullet points) by default.
+      - If the user's question can be fully answered with a single word (e.g., "yes", "no", a name, a number),
+        respond with exactly that one word unless they explicitly ask for explanation.
+
+      Code and explanations:
+      - When showing code, make it copy-pastable and minimal.
+      - Briefly explain non-obvious parts of the code.
+      - If there are multiple reasonable approaches, mention the most common one first.
+
+      Translations:
+      - Provide translations to Russian, English, French, German, Spanish, and Italian
+      - Follow user-specified language pairs when provided
+      - For short phrases: include translation, phonetics, and brief etymology when relevant
+
+      Ruby gems:
+      - When you recommend Ruby gems, always include a GitHub repository URL for each gem
+        you mention, in form: `gem_name – https://github.com/owner/repo`
+        whenever such a public repository is known or can be reasonably inferred.
+    HEREDOC
+  end
+
+  def chat(question, style: nil, brevity: nil)
+    ask([{role: "user", content: build_system_instruction(style, brevity)},
+      {role: "user", content: question}])
+  end
+end
+
 # Main application
 def main
   args = Utility.parse_args(Dir.pwd)
@@ -313,16 +405,29 @@ def show_interactive_prompt(args)
 end
 
 def create_client(args)
-  AskGptClient.new(
-    model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : nil,
-    max_completion_tokens: args[:short_mode] ? 500 : nil,
-    debug: args[:debug_mode]
-  )
+  if args[:gemini_mode]
+    AskGeminiClient.new(
+      model: nil,
+      max_completion_tokens: args[:short_mode] ? 500 : nil,
+      debug: args[:debug_mode]
+    )
+  else
+    AskGptClient.new(
+      model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : nil,
+      max_completion_tokens: args[:short_mode] ? 500 : nil,
+      debug: args[:debug_mode]
+    )
+  end
 end
 
 def initialize_conversation(client, args)
-  [client.build_system_message(args[:eldritch_mode] ? :eldritch : nil,
-    args[:short_mode] ? :short : nil)]
+  if args[:gemini_mode]
+    [{role: "user", content: client.build_system_instruction(args[:eldritch_mode] ? :eldritch : nil,
+      args[:short_mode] ? :short : nil)}]
+  else
+    [client.build_system_message(args[:eldritch_mode] ? :eldritch : nil,
+      args[:short_mode] ? :short : nil)]
+  end
 end
 
 def run_conversation_loop(client, messages, args)
