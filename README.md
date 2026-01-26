@@ -32,15 +32,28 @@ A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring
    cp .env.example .env
    ```
 
-2. Edit `.env` and set your OpenAI API credentials:
+2. Edit `.env` and set your API credentials:
+
+   **For OpenAI (GPT models):**
    ```
    OPENAI_BASE_URL=https://api.openai.com/v1
    OPENAI_ACCESS_TOKEN=your-api-key-here
-   PROXY_URL=socks5h://127.0.0.1:1080
    ```
 
+   **For Gemini 3 Flash (preferred when available):**
+   ```
+   GEMINI_BASE_URL=https://opencode.ai/zen/v1
+   GEMINI_ACCESS_TOKEN=your-api-key-here
+   GEMINI_MODEL=gemini-3-flash
+   ```
+
+   **Provider Selection:**
+   - If `GEMINI_ACCESS_TOKEN` is configured, Gemini will be used by default
+   - If only `OPENAI_ACCESS_TOKEN` is configured, OpenAI will be used
+   - The `--search` flag always uses OpenAI's search model
+
    **Proxy Configuration (Optional):**
-   - Set `PROXY_URL` if you need to use a proxy to access the OpenAI API
+   - Set `PROXY_URL` if you need to use a proxy to access the API
    - Supported protocols: `http`, `https`, `socks5`
    - Example: `PROXY_URL=socks5://127.0.0.1:1080`
    - Omit or leave empty if no proxy is needed
@@ -74,6 +87,7 @@ refactor file.rb "make it more readable"
 agpt "find all database queries"
 bashgpt "list all files modified today"
 ask "explain how Ruby blocks work"
+ask --search "search the web for this"
 gcommit "plan and create structured git commits"
 ge "explain current git changes"
 
@@ -125,11 +139,10 @@ Features:
 
 ### ask_gpt.rb
 
-A general-purpose GPT-5.1 assistant for asking questions, getting explanations, or brainstorming ideas from the terminal.
+A general-purpose AI assistant for asking questions, getting explanations, or brainstorming ideas from the terminal.
 
 Usage:
 ./ask_gpt.rb "Your question or request here"
-./ask_gpt.rb --gemini "Your question or request here"  # Use Gemini 3 Flash model
 ./ask_gpt.rb --search "Your question requiring web search"
 
 Features:
@@ -137,10 +150,10 @@ Features:
 - Can explain code snippets or concepts
 - Works as a quick terminal-based AI assistant
 - Uses `glow` for nicely formatted Markdown output when `glow` is installed, falling back to plain text otherwise
-- Supports multiple AI models:
-  - GPT-5.1 (default)
-  - Gemini 3 Flash via `--gemini` flag
-  - GPT-4o with search via `--search` flag
+- Auto-detects AI provider from `.env` configuration:
+  - **Gemini 3 Flash** (preferred, if `GEMINI_ACCESS_TOKEN` is configured)
+  - **GPT models** via OpenAI API (if `OPENAI_ACCESS_TOKEN` is configured)
+  - **Search mode** (`--search` flag) always uses OpenAI's `gpt-4o-search-preview` model
 
 ### git_commit_gpt.rb
 

@@ -76,7 +76,7 @@ end
 # Argument parsing and utilities
 module Utility
   FLAG_MAPPING = {"--search" => :search_mode, "--eldritch" => :eldritch_mode, "--short" => :short_mode,
-                  "--debug" => :debug_mode, "--gemini" => :gemini_mode}.freeze
+                  "--debug" => :debug_mode}.freeze
 
   def self.parse_args(base_dir)
     options = init_options
@@ -178,6 +178,32 @@ module Utility
       exit 1
     end
     [input.strip]
+  end
+
+  def self.load_env_vars
+    env_file_path = File.join(Dir.pwd, ".env")
+
+    return {} unless File.exist?(env_file_path)
+
+    File.foreach(env_file_path).with_object({}) do |line, h|
+      key, value = line.split("=", 2)
+      h[key.strip] = value.strip if key && value
+    end
+  end
+
+  def self.gemini_configured?
+    env_vars = load_env_vars
+    env_vars.key?("GEMINI_ACCESS_TOKEN") && !env_vars["GEMINI_ACCESS_TOKEN"].empty?
+  end
+
+  def self.openai_configured?
+    env_vars = load_env_vars
+    env_vars.key?("OPENAI_ACCESS_TOKEN") && !env_vars["OPENAI_ACCESS_TOKEN"].empty?
+  end
+
+  def self.display_model_info(provider, model_name = nil)
+    display_model = model_name || ((provider == :gemini) ? "gemini-3-flash" : "default")
+    puts "Using: #{provider.to_s.capitalize} (#{display_model})"
   end
 end
 
@@ -402,26 +428,36 @@ def show_interactive_prompt(args)
   puts "Available commands: --search, --no-search"
   puts "Use arrow keys for history, Tab for completion"
   puts "For multiline input, press Enter twice to submit"
+  puts ""
+  puts "Note: Provider is auto-detected from .env (Gemini preferred)"
 end
 
 def create_client(args)
-  if args[:gemini_mode]
+  if Utility.openai_configured? || !Utility.gemini_configured?
+    AskGptClient.new(
+      model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : nil,
+      max_completion_tokens: args[:short_mode] ? 500 : nil,
+      debug: args[:debug_mode]
+    )
+  elsif Utility.gemini_configured?
     AskGeminiClient.new(
       model: nil,
       max_completion_tokens: args[:short_mode] ? 500 : nil,
       debug: args[:debug_mode]
     )
   else
-    AskGptClient.new(
-      model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : nil,
-      max_completion_tokens: args[:short_mode] ? 500 : nil,
-      debug: args[:debug_mode]
-    )
+    warn "❌ No API configuration found. Please configure either:"
+    warn "   • OpenAI: Set OPENAI_ACCESS_TOKEN in .env"
+    warn "   • Gemini: Set GEMINI_ACCESS_TOKEN in .env"
+    exit 1
   end
 end
 
 def initialize_conversation(client, args)
-  if args[:gemini_mode]
+  provider = (Utility.gemini_configured? && !args[:search_mode]) ? :gemini : :openai
+  Utility.display_model_info(provider)
+
+  if provider == :gemini
     [{role: "user", content: client.build_system_instruction(args[:eldritch_mode] ? :eldritch : nil,
       args[:short_mode] ? :short : nil)}]
   else
