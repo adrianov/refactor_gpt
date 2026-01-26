@@ -181,7 +181,9 @@ module Utility
   end
 
   def self.load_env_vars
-    env_file_path = File.join(Dir.pwd, ".env")
+    env_file_path = File.join(__dir__, ".env")
+
+    env_file_path = File.join(Dir.pwd, ".env") unless File.exist?(env_file_path)
 
     return {} unless File.exist?(env_file_path)
 
