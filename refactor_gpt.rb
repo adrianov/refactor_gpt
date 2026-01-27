@@ -16,7 +16,7 @@ class OpenAi
 
   def initialize(model: nil, debug: false)
     @debug = debug
-    @env_vars = load_env_vars
+    @env_vars = load_env_vars(Dir.pwd)
     setup_config(model)
     setup_clients
   end
