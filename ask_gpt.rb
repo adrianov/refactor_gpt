@@ -335,8 +335,8 @@ class AskGptClient
       {role: "user", content: question}])
   end
 
-  def ask(messages, json: false)
-    @client.ask(messages, json: json)
+  def ask(messages, json: false, title: nil)
+    @client.ask(messages, json: json, title: title)
   end
 end
 
@@ -352,8 +352,8 @@ class AskGeminiClient
       progress_title: progress_title)
   end
 
-  def ask(messages, json: false)
-    @client.ask(messages, json: json)
+  def ask(messages, json: false, title: nil)
+    @client.ask(messages, json: json, title: title)
   end
 
   def stream_answer(messages, &block)
@@ -580,7 +580,10 @@ def handle_mode_switch(client, input)
 end
 
 def process_question(client, messages, question, use_streaming)
-  messages << {role: "user", content: question}
+  corrected_question = correct_grammar(client, question)
+  display_corrected_question(question, corrected_question)
+
+  messages << {role: "user", content: corrected_question}
 
   if use_streaming
     process_with_streaming(client, messages)
@@ -597,21 +600,31 @@ def process_with_streaming(client, messages)
   first_chunk_received = false
 
   Utility.render_with_md2term_streaming do |io|
-    client.stream_answer(messages) do |chunk|
-      if chunk && !chunk.to_s.empty? && !first_chunk_received
-        stop_thinking_spinner(spinner, spinner_thread)
-        first_chunk_received = true
-      end
-
-      full_text += chunk.to_s
-      io.write(chunk.to_s)
-      io.flush
-    end
+    full_text, first_chunk_received = process_stream_chunks(client, messages, spinner,
+      spinner_thread, io, first_chunk_received)
   end
 
   stop_thinking_spinner(spinner, spinner_thread) unless first_chunk_received
 
   messages << {role: "assistant", content: full_text}
+end
+
+def process_stream_chunks(client, messages, spinner, spinner_thread, io, first_chunk_received)
+  full_text = ""
+  chunk_received = first_chunk_received
+
+  client.stream_answer(messages) do |chunk|
+    if chunk && !chunk.to_s.empty? && !chunk_received
+      stop_thinking_spinner(spinner, spinner_thread)
+      chunk_received = true
+    end
+
+    full_text += chunk.to_s
+    io.write(chunk.to_s)
+    io.flush
+  end
+
+  [full_text, chunk_received]
 end
 
 def start_thinking_spinner
@@ -646,6 +659,32 @@ def process_with_buffering(client, messages)
   answer = client.ask(messages)
   messages << {role: "assistant", content: answer}
   Utility.display_answer(answer)
+end
+
+def correct_grammar(client, question)
+  grammar_instruction = <<~HEREDOC
+    Correct the grammar, spelling, and clarity of the following question while preserving its exact meaning and intent.
+    Return only the corrected question without any explanations, comments, or additional text.
+    If the question is already grammatically correct, return it unchanged.
+  HEREDOC
+
+  grammar_messages = if client.is_a?(AskGeminiClient)
+    [{role: "user", content: "#{grammar_instruction}\n\n#{question}"}]
+  else
+    [{role: "system", content: grammar_instruction}, {role: "user", content: question}]
+  end
+
+  corrected = client.ask(grammar_messages, title: nil)
+  corrected&.strip || question
+rescue StandardError
+  question
+end
+
+def display_corrected_question(original, corrected)
+  return if original.strip == corrected.strip
+
+  puts "Corrected question: #{corrected}"
+  puts
 end
 
 def clear_args_for_next_iteration(args)
