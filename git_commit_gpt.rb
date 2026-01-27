@@ -3,6 +3,8 @@
 
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
+require_relative "lib/diff_processor"
+require_relative "lib/diff_compactor"
 require "shellwords"
 require "ruby-progressbar"
 require "colorize"
@@ -13,7 +15,7 @@ class OpenAi
   def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug,
       progress_title: "Planning commits".cyan)
-    @debug = debug
+    @diff_processor = DiffProcessor.new
   end
 
   def ask(prompts, json: false)
@@ -37,32 +39,29 @@ class OpenAi
 
   MAX_CONTENT_SIZE_KB = 100
 
+  def append_section(parts, current_size_bytes, max_size_bytes, text)
+    return current_size_bytes if text.empty? || current_size_bytes + text.bytesize > max_size_bytes
+
+    parts << text
+    current_size_bytes + text.bytesize
+  end
+
   def append_hint_section(parts, current_size_bytes, max_size_bytes, cli_hint)
     return current_size_bytes if cli_hint.empty?
-    hint_text = "Here are hints or preferences from the user:\n\n#{cli_hint}\n"
-    if current_size_bytes + hint_text.bytesize <= max_size_bytes
-      parts << hint_text
-      current_size_bytes + hint_text.bytesize
-    else
-      current_size_bytes
-    end
+    append_section(parts, current_size_bytes, max_size_bytes,
+      "Here are hints or preferences from the user:\n\n#{cli_hint}\n")
   end
 
   def append_status_section(parts, current_size_bytes, max_size_bytes, status_output)
-    status_text = "Here is the git status:\n\n#{status_output}\n"
-    if current_size_bytes + status_text.bytesize <= max_size_bytes
-      parts << status_text
-      current_size_bytes + status_text.bytesize
-    else
-      current_size_bytes
-    end
+    append_section(parts, current_size_bytes, max_size_bytes,
+      "Here is the git status:\n\n#{status_output}\n")
   end
 
   def append_diff_section(parts, current_size_bytes, max_size_bytes, diff_output, status_output)
     diff_text = "Here is the git diff for all changes:\n\n"
     remaining = max_size_bytes - current_size_bytes - diff_text.bytesize
     if remaining > 0
-      sorted_diff = build_sorted_diff(diff_output, status_output, remaining)
+      sorted_diff = @diff_processor.build_sorted_diff(diff_output, status_output, remaining)
       diff_text += sorted_diff
       parts << diff_text
       current_size_bytes + diff_text.bytesize
@@ -73,25 +72,15 @@ class OpenAi
   end
 
   def append_commits_section(parts, current_size_bytes, max_size_bytes, recent_commits)
-    commits_text = "Here are the last 15 git commit one-line messages (most recent first):\n\n#{recent_commits}\n"
-    if current_size_bytes + commits_text.bytesize <= max_size_bytes
-      parts << commits_text
-      current_size_bytes + commits_text.bytesize
-    else
-      current_size_bytes
-    end
+    append_section(parts, current_size_bytes, max_size_bytes,
+      "Here are the last 15 git commit one-line messages (most recent first):\n\n#{recent_commits}\n")
   end
 
   def append_commands_section(parts, current_size_bytes, max_size_bytes, recent_commands)
     return current_size_bytes if recent_commands.empty?
-    commands_text = "Here are the last 5 shell commands from the user's terminal history " \
-                    "(most recent last):\n\n#{recent_commands}\n"
-    if current_size_bytes + commands_text.bytesize <= max_size_bytes
-      parts << commands_text
-      current_size_bytes + commands_text.bytesize
-    else
-      current_size_bytes
-    end
+    append_section(parts, current_size_bytes, max_size_bytes,
+      "Here are the last 5 shell commands from the user's terminal history " \
+      "(most recent last):\n\n#{recent_commands}\n")
   end
 
   def build_user_content(status_output, diff_output, cli_hint, recent_commits,
@@ -112,372 +101,6 @@ class OpenAi
     append_commands_section(content_parts, current_size_bytes, max_size_bytes, recent_commands)
 
     content_parts.join("\n")
-  end
-
-  def build_sorted_diff(diff_output, status_output, max_bytes)
-    return "" if diff_output.empty?
-
-    file_diffs = parse_file_diffs(diff_output)
-    return diff_output if file_diffs.empty?
-
-    file_statuses = parse_file_statuses(status_output)
-    sorted_files = sort_files_by_importance(file_diffs, file_statuses)
-
-    included_diffs, skipped_count = collect_diffs(sorted_files, file_statuses, max_bytes)
-
-    result = included_diffs.join("\n")
-    if skipped_count > 0
-      result += "\n\n... (#{skipped_count} more file(s) skipped or truncated due to size limit)\n"
-    end
-    result
-  end
-
-  def process_diff_entry(file_path, diff_content, file_statuses, current_size, max_bytes, included_diffs,
-    sorted_files_size, skipped_count)
-    status = file_statuses[file_path] || "??"
-    is_new_file = status.match?(/^A/) || status == "??"
-    diff_size = diff_content.bytesize
-
-    if diff_size > max_bytes
-      return handle_oversized_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs,
-        skipped_count)
-    end
-
-    handle_normal_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs, sorted_files_size,
-      skipped_count)
-  end
-
-  def handle_oversized_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs, skipped_count)
-    remaining = max_bytes - current_size
-    return [current_size, skipped_count + 1, false] if remaining <= 0
-
-    compacted = compact_diff_context(diff_content, remaining)
-    if compacted && compacted.bytesize <= remaining
-      included_diffs << compacted
-      [current_size + compacted.bytesize, skipped_count, false]
-    elsif try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes, included_diffs)
-      [included_diffs.sum { |d| d.bytesize }, skipped_count, false]
-    else
-      [current_size, skipped_count + 1, false]
-    end
-  end
-
-  def handle_normal_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs, sorted_files_size,
-    skipped_count)
-    if current_size + diff_content.bytesize <= max_bytes
-      included_diffs << diff_content
-      current_size += diff_content.bytesize
-      [current_size, skipped_count, nil]
-    else
-      [current_size, skipped_count, true].tap do |result|
-        result[0] = handle_remaining_space(is_new_file, diff_content, current_size, max_bytes, included_diffs)
-        result[1] += sorted_files_size - included_diffs.size - result[1]
-      end
-    end
-  end
-
-  def handle_remaining_space(is_new_file, diff_content, current_size, max_bytes, included_diffs)
-    remaining = max_bytes - current_size
-    return current_size if remaining <= 0
-
-    if is_new_file
-      try_include_truncated_new_file(true, diff_content, current_size, max_bytes, included_diffs)
-      included_diffs.sum { |d| d.bytesize }
-    else
-      compacted = compact_diff_context(diff_content, remaining)
-      if compacted && compacted.bytesize <= remaining
-        included_diffs << compacted
-        current_size + compacted.bytesize
-      else
-        current_size
-      end
-    end
-  end
-
-  def collect_diffs(sorted_files, file_statuses, max_bytes)
-    included_diffs = []
-    skipped_count = 0
-    current_size = 0
-
-    sorted_files.each do |file_path, diff_content|
-      current_size, skipped_count, break_loop = process_diff_entry(
-        file_path, diff_content, file_statuses, current_size, max_bytes,
-        included_diffs, sorted_files.size, skipped_count
-      )
-      break if break_loop == true
-      next if break_loop == false
-    end
-
-    [included_diffs, skipped_count]
-  end
-
-  def try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes,
-    included_diffs)
-    return false unless is_new_file && current_size < max_bytes
-
-    remaining = max_bytes - current_size
-    truncated = truncate_file_diff(diff_content, remaining)
-    return false if truncated.bytesize.zero?
-
-    included_diffs << truncated
-    true
-  end
-
-  def truncate_file_diff(diff_content, max_bytes)
-    return "" if max_bytes <= 0
-
-    truncated = diff_content.byteslice(0, max_bytes)
-    last_newline = truncated.rindex("\n")
-    return truncated if last_newline.nil?
-
-    truncated.byteslice(0, last_newline + 1) + "\n... (file truncated due to size limit)\n"
-  end
-
-  def compact_diff_context(diff_content, max_bytes)
-    return nil if max_bytes <= 0
-
-    lines = diff_content.lines
-    return nil if lines.empty?
-
-    compacted = compact_diff_hunks(lines, max_bytes)
-    return nil unless compacted
-
-    result = compacted.join
-    result.bytesize <= max_bytes ? result : nil
-  end
-
-  def compact_diff_hunks(lines, max_bytes)
-    [10, 5, 3, 1, 0].each do |context|
-      result = build_compacted_diff(lines, context)
-      next unless result
-
-      result_size = result.join.bytesize
-      return result if result_size <= max_bytes
-    end
-
-    nil
-  end
-
-  def build_compacted_diff(lines, context)
-    result = []
-    current_hunk = []
-    in_hunk = false
-
-    lines.each do |line|
-      if diff_header_line?(line)
-        return nil unless append_completed_hunk(result, current_hunk, in_hunk, context)
-        result << line
-        in_hunk = hunk_start?(line)
-        current_hunk = []
-      elsif in_hunk
-        current_hunk << line
-      else
-        result << line
-      end
-    end
-
-    return nil unless append_completed_hunk(result, current_hunk, in_hunk, context)
-    result
-  end
-
-  def append_completed_hunk(result, current_hunk, in_hunk, context)
-    return true unless in_hunk && !current_hunk.empty?
-
-    compacted = compact_single_hunk(current_hunk, context)
-    return false if compacted.nil?
-
-    result.concat(compacted)
-    true
-  end
-
-  def diff_header_line?(line)
-    line.start_with?("diff --git") || line.start_with?("index ") || line.start_with?("---") ||
-      line.start_with?("+++") || line.start_with?("@@")
-  end
-
-  def hunk_start?(line)
-    line.start_with?("@@")
-  end
-
-  def compact_single_hunk(hunk_lines, max_context)
-    return hunk_lines if hunk_lines.empty?
-
-    state = {result: [], leading_context: [], trailing_context: [], in_changes: false}
-
-    hunk_lines.each do |line|
-      process_hunk_line(line, state, max_context)
-    end
-
-    finalize_hunk_context(state, max_context)
-    state[:result]
-  end
-
-  def process_hunk_line(line, state, max_context)
-    if change_line?(line)
-      handle_change_line(line, state, max_context)
-    elsif context_line?(line)
-      handle_context_line(line, state, max_context)
-    else
-      flush_context_buffers(state)
-      state[:result] << line
-    end
-  end
-
-  def change_line?(line)
-    line.start_with?("+") || line.start_with?("-")
-  end
-
-  def context_line?(line)
-    line.start_with?(" ")
-  end
-
-  def handle_change_line(line, state, max_context)
-    if !state[:in_changes] && state[:leading_context].size > max_context
-      state[:result].concat(state[:leading_context].last(max_context))
-      state[:leading_context] = []
-    end
-    state[:result] << line
-    state[:in_changes] = true
-    state[:trailing_context] = []
-  end
-
-  def handle_context_line(line, state, max_context)
-    if state[:in_changes]
-      add_trailing_context(line, state, max_context)
-    else
-      add_leading_context(line, state, max_context)
-    end
-  end
-
-  def add_trailing_context(line, state, max_context)
-    state[:trailing_context] << line
-    return unless state[:trailing_context].size > max_context
-
-    state[:result].concat(state[:trailing_context].first(max_context))
-    state[:trailing_context] = state[:trailing_context].last(max_context)
-  end
-
-  def add_leading_context(line, state, max_context)
-    state[:leading_context] << line
-    state[:leading_context].shift if state[:leading_context].size > max_context
-  end
-
-  def flush_context_buffers(state)
-    state[:result].concat(state[:leading_context])
-    state[:leading_context] = []
-    state[:result].concat(state[:trailing_context])
-    state[:trailing_context] = []
-  end
-
-  def finalize_hunk_context(state, max_context)
-    unless state[:in_changes]
-      state[:result].concat(state[:leading_context])
-      return
-    end
-    return if state[:trailing_context].empty?
-
-    state[:result].concat(state[:trailing_context].last(max_context))
-  end
-
-  def parse_file_diffs(diff_output)
-    return {} if diff_output.empty?
-
-    file_diffs = {}
-    current_file = nil
-    current_diff = []
-
-    diff_output.lines.each do |line|
-      if line.start_with?("diff --git")
-        file_diffs[current_file] = current_diff.join if current_file
-        current_file = extract_file_path_from_diff_header(line)
-        current_diff = [line]
-      elsif current_file
-        current_diff << line
-      end
-    end
-
-    file_diffs[current_file] = current_diff.join if current_file
-    file_diffs
-  end
-
-  def extract_file_path_from_diff_header(line)
-    return nil unless line.start_with?("diff --git ")
-
-    rest = line.sub("diff --git ", "")
-    b_index = rest.rindex(" b/")
-    return nil unless b_index
-
-    rest[(b_index + 3)..]
-  end
-
-  def parse_file_statuses(status_output)
-    statuses = {}
-    status_output.lines.each do |line|
-      next if line.strip.empty? || line.start_with?("##")
-
-      status_flag = line[0..1]
-      file_path = line[3..]&.strip
-      next if file_path.nil? || file_path.empty?
-
-      if file_path.include?(" -> ")
-        file_path = file_path.split(" -> ").last
-      end
-
-      statuses[file_path] = status_flag
-    end
-    statuses
-  end
-
-  def sort_files_by_importance(file_diffs, file_statuses)
-    file_diffs.keys.map do |file_path|
-      status = file_statuses[file_path] || "??"
-      [file_path, calculate_file_score(file_path, status, file_diffs[file_path].bytesize)]
-    end.sort_by { |_path, score| score }.map do |file_path, _score|
-      [file_path, file_diffs[file_path]]
-    end
-  end
-
-  def calculate_file_score(file_path, status, diff_size)
-    status_score = status_priority(status)
-    depth_score = file_path.count("/")
-    extension_score = extension_priority(File.extname(file_path).downcase)
-    name_length_score = File.basename(file_path).length
-    size_score = diff_size / 1000
-
-    [status_score, depth_score, extension_score, name_length_score, size_score]
-  end
-
-  def status_priority(status)
-    case status
-    when /M/
-      1
-    when /A/, "??"
-      2
-    when /D/
-      3
-    else
-      4
-    end
-  end
-
-  CODE_EXTENSIONS = %w[
-    .rb .c .h .cpp .hpp .cc .cxx .java .py .js .ts .jsx .tsx .go .rs .swift
-    .kt .scala .cs .php .pl .pm .sh .bash .zsh .lua .r .m .mm .sql .graphql
-    .vue .svelte .css .scss .sass .less .html .htm .xml .json .yaml .yml
-    .toml .ini .conf .md .markdown .txt .rake .gemspec
-  ].freeze
-
-  def extension_priority(ext)
-    return 0 if CODE_EXTENSIONS.include?(ext)
-
-    case ext
-    when ".lock", ".sum", ".mod"
-      5
-    when ".log", ".tmp", ".bak"
-      9
-    else
-      3
-    end
   end
 
   def parse_commit_plan_response(raw_response, payload_size_kb)

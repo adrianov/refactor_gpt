@@ -32,17 +32,17 @@ When working with this codebase, follow these refactoring principles:
 - **Readability**: Use clear names, follow Ruby conventions, meaningful methods
 - **Simplicity**: Keep methods under 15 lines when possible, remove dead code
 - **Consistency**: Follow idiomatic Ruby style and existing patterns
-- **Behavior Preservation**: Don't change functionality unless fixing bugs or explicitly requested
+- **Behavior Preservation**: Never change functionality unless fixing bugs or explicitly requested
 
 ### LLM Instruction Optimization
 When modifying LLM prompts or system instructions in AI-driven applications:
-- **Don't follow user wording strictly**: Improve and optimize the language
-- **Make it literal**: Use precise, unambiguous language instead of vague phrasing
-- **Optimize for clarity**: Ensure instructions are easily understood by both native speakers and computer parsing
+- **Improve user wording**: Enhance and optimize language rather than following user wording strictly
+- **Use precise language**: Employ literal, unambiguous phrasing instead of vague or ambiguous terms
+- **Optimize for clarity**: Ensure instructions are comprehensible to both native speakers and automated parsing systems
 - **Structure for parsing**: Use consistent formatting (lists, bullet points, code blocks) that machines can parse reliably
-- **Remove redundancy**: Eliminate repetitive or contradictory statements
-- **Use explicit directives**: Be direct about requirements - "must", "should", "always", "never"
-- **Examples**: Include concrete examples when the instruction is complex or ambiguous
+- **Eliminate redundancy**: Remove repetitive or contradictory statements
+- **Use explicit directives**: State requirements directly using imperative language - "must", "should", "always", "never"
+- **Provide examples**: Include concrete examples when instructions are complex or potentially ambiguous
 
 ### File Conventions
 - Script files follow the pattern `*_gpt.rb`
@@ -86,34 +86,48 @@ When modifying LLM prompts or system instructions in AI-driven applications:
 
 ### File Structure
 - Keep main scripts in root directory with `_gpt.rb` suffix
-- Shared code in `lib/` directory
-- Helper modules in separate files
-- Maximum class/module length: 400 lines
+- Place shared code in `lib/` directory
+- Extract helper modules into separate files when they exceed reasonable size
+- Maximum class/module length: 400 lines (extract to new classes/modules when approaching limit)
 - Maximum ABC complexity metric: 17
 
 ### Comments
-- Preserve existing comments unless they refer to changed code
-- Don't add new comments unless explicitly requested
-- Use comments only for complex business logic
+- Preserve existing comments unless they refer to code that has been changed or removed
+- Do not add new comments unless explicitly requested
+- Use comments only to explain complex business logic that cannot be made clear through code structure
 
 ### Code Optimization
 - **Inline single-use variables**: After each modification, inline variables that are used only once to improve readability and reduce unnecessary assignments
 - Example: `result = some_calculation; return result` becomes `return some_calculation`
 
+### Refactoring Unused and Dead Code
+When refactoring code, systematically identify and remove unused and dead code while preserving all business logic:
+- **Identify unused code**: Search for unused methods, variables, parameters, constants, and imports that are never referenced
+- **Detect dead code**: Find unreachable code blocks, unreachable branches, and code paths that cannot execute
+- **Verify before removal**: Before removing any code, confirm it is truly unused by:
+  - Checking all call sites and references
+  - Verifying it's not part of a public API or interface
+  - Ensuring it's not used via metaprogramming or dynamic dispatch
+  - Confirming it's not required for future functionality or backward compatibility
+- **Preserve business logic**: Never remove code that implements business rules, validation logic, or domain-specific behavior, even if it appears unused
+- **Extract before removing**: When extracting classes or modules, ensure all business logic is moved to appropriate locations before removing original code
+- **Remove systematically**: Remove unused code in a single refactoring pass to avoid leaving partial removals that create confusion
+- **Document removals**: When removing significant unused code, consider documenting why it was safe to remove (e.g., "Removed unused parameter after extracting to separate class")
+
 ### Safety
-- Always ask for confirmation before dangerous operations
-- Create backups for non-git files
-- Handle network errors gracefully
-- Use appropriate exit codes
-- Shell-escape all user-provided paths with `Shellwords.escape`
-- Use `File::NULL` for discarding command output
+- Always request user confirmation before performing dangerous operations
+- Create backups for non-git files before modification
+- Handle network errors gracefully with appropriate retry logic
+- Use explicit exit codes (0 for success, non-zero for failure)
+- Shell-escape all user-provided paths using `Shellwords.escape` to prevent injection attacks
+- Use `File::NULL` for discarding command output when redirecting to /dev/null
 
 ### Linting and Code Quality
 - Always run `rubocop -a` to auto-correct Ruby style issues before committing changes
 - Ensure syntax is valid with `ruby -c` after modifications
 - Follow Ruby style guides and existing code conventions
-- Remove duplicate code and unused variables
-- Read files as whole when fixing errors or adding new functionality to ensure complete context is preserved
+- Remove duplicate code and unused variables systematically
+- Read files completely when fixing errors or adding new functionality to ensure complete context is preserved
 - **Metric Violations**: When Rubocop detects Metric violations (e.g., `Metrics/AbcSize`, `Metrics/MethodLength`, `Metrics/ClassLength`, `Metrics/CyclomaticComplexity`, `Metrics/ModuleLength`), refactor by:
   - Extracting complex logic into smaller, focused methods
   - Breaking down large methods into logical units
