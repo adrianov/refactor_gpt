@@ -149,7 +149,10 @@ Features:
 - Answers programming and non-programming questions
 - Can explain code snippets or concepts
 - Works as a quick terminal-based AI assistant
-- Uses `glow` for nicely formatted Markdown output when `glow` is installed, falling back to plain text otherwise
+- Markdown rendering with syntax highlighting:
+  - **md2term** (preferred) - Install with `pip install md2term` or `uv tool install md2term`
+  - **glow** (fallback) - Install with `brew install glow` or equivalent for your system
+  - Falls back to plain text if neither is available
 - Auto-detects AI provider from `.env` configuration:
   - **Gemini 3 Flash** (preferred, if `GEMINI_ACCESS_TOKEN` is configured)
   - **GPT models** via OpenAI API (if `OPENAI_ACCESS_TOKEN` is configured)
