@@ -123,18 +123,34 @@ module Utility
   end
 
   def self.display_answer(answer)
-    return render_with_md2term(answer) if md2term_available?
-    return puts answer unless glow_available?
+    has_tables = contains_tables?(answer)
 
-    display_with_glow(format_answer(answer), calculate_width(extract_urls(answer)))
+    if has_tables && glow_available?
+      return display_with_glow(format_answer(answer), calculate_width(extract_urls(answer)))
+    end
+
+    return render_with_md2term(answer) if md2term_available?
+
+    puts answer
+  end
+
+  def self.contains_tables?(text)
+    lines = text.split("\n")
+    lines.each_with_index do |line, index|
+      next unless line.strip.match?(/\|.*\|/)
+
+      next_line = lines[index + 1]
+      return true if next_line&.strip&.match?(/^[\|\s:-\|]+$/) && next_line.include?("-")
+    end
+    false
   end
 
   def self.glow_available?
-    system("command -v glow >/dev/null 2>&1")
+    @glow_available ||= system("command -v glow >/dev/null 2>&1")
   end
 
   def self.md2term_available?
-    system("command -v md2term >/dev/null 2>&1")
+    @md2term_available ||= system("command -v md2term >/dev/null 2>&1")
   end
 
   def self.render_with_md2term(answer)
@@ -144,7 +160,7 @@ module Utility
     end
   end
 
-  def self.render_with_md2term_streaming
+  def self.stream_with_md2term
     IO.popen(ENV.to_h.merge({"CLICOLOR_FORCE" => "1"}),
       ["md2term", "-"], "w") do |io|
       yield io
@@ -507,25 +523,31 @@ def initialize_conversation(client, args)
   end
 end
 
+def use_streaming?(client)
+  Utility.md2term_available? && client.is_a?(AskGeminiClient)
+end
+
 def run_conversation_loop(client, messages, args)
-  use_streaming = Utility.md2term_available? && client.is_a?(AskGeminiClient)
+  streaming = use_streaming?(client)
 
-  if !$stdin.tty?
-    question = get_question(args)
-    if question
-      process_question(client, messages, question, use_streaming, args)
-    end
+  if $stdin.tty?
+    run_interactive_loop(client, messages, args, streaming)
   else
-    loop do
-      question = get_question(args)
-      break unless question
+    question = get_question(args)
+    process_question(client, messages, question, streaming, args) if question
+  end
+end
 
-      handle_mode_switch(client, question) if args[:question_parts].empty?
-      next if question == "--no-search"
+def run_interactive_loop(client, messages, args, streaming)
+  loop do
+    question = get_question(args)
+    break unless question
 
-      process_question(client, messages, question, use_streaming, args)
-      clear_args_for_next_iteration(args)
-    end
+    handle_mode_switch(client, question) if args[:question_parts].empty?
+    next if question == "--no-search"
+
+    process_question(client, messages, question, streaming, args)
+    clear_args_for_next_iteration(args)
   end
 end
 
@@ -606,7 +628,7 @@ def process_with_streaming(client, messages)
   spinner, spinner_thread = start_thinking_spinner
   first_chunk_received = false
 
-  Utility.render_with_md2term_streaming do |io|
+  Utility.stream_with_md2term do |io|
     full_text, first_chunk_received = process_stream_chunks(client, messages, spinner,
       spinner_thread, io, first_chunk_received)
   end
@@ -619,7 +641,6 @@ end
 def process_stream_chunks(client, messages, spinner, spinner_thread, io, first_chunk_received)
   full_text = ""
   chunk_received = first_chunk_received
-  buffer = ""
 
   client.stream_answer(messages) do |chunk|
     if chunk && !chunk.to_s.empty? && !chunk_received
@@ -629,20 +650,9 @@ def process_stream_chunks(client, messages, spinner, spinner_thread, io, first_c
 
     text = chunk.to_s
     full_text += text
-    buffer += text
-
-    # Always flush complete lines to ensure md2term receives proper line structure
-    # This is essential for tables and other markdown structures
-    while (newline_index = buffer.index("\n"))
-      line = buffer[0..newline_index]
-      io.write(line)
-      io.flush
-      buffer = buffer[(newline_index + 1)..-1]
-    end
+    io.write(text)
+    io.flush
   end
-
-  io.write(buffer) unless buffer.empty?
-  io.flush
 
   [full_text, chunk_received]
 end
