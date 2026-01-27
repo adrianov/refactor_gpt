@@ -19,6 +19,7 @@ require 'colorize'
 require 'reline'
 require 'open3'
 require 'timeout'
+require 'rbconfig'
 
 # Handles all output formatting and display operations
 class Display
@@ -56,16 +57,18 @@ class Display
     prefix = verified ? '✓ Passed' : '✗ Failed'
     suffix = context.empty? ? '' : " #{context}"
 
-    message = if desc && !desc.empty?
-                "#{prefix}#{suffix}: #{desc}"
-              elsif verified
-                "#{prefix}#{suffix}! Success."
-              else
-                "#{prefix}#{suffix}! #{context.empty? ? 'Retrying...' : 'Next...'}"
-              end
-
-    color = verified ? :green : :yellow
-    timestamped_puts message.send(color)
+    if desc && !desc.empty?
+      if desc.include?("\n")
+        timestamped_puts "#{prefix}#{suffix}:".send(verified ? :green : :yellow)
+        desc.each_line { |line| timestamped_puts "  #{line.chomp}" }
+      else
+        timestamped_puts "#{prefix}#{suffix}: #{desc}".send(verified ? :green : :yellow)
+      end
+    elsif verified
+      timestamped_puts "#{prefix}#{suffix}! Success.".send(:green)
+    else
+      timestamped_puts "#{prefix}#{suffix}! #{context.empty? ? 'Retrying...' : 'Next...'}".send(:yellow)
+    end
   end
 
   def display_total_runtime(start_time)
@@ -75,8 +78,13 @@ class Display
     timestamped_puts "Run time: #{format_duration(elapsed)}".cyan
   end
 
-  def display_agent_failure
+  def display_agent_failure(output = nil)
     timestamped_puts 'Agent failed. Next...'.yellow
+    if output && !output.strip.empty?
+      timestamped_puts ''
+      timestamped_puts 'Agent output:'.yellow
+      output.each_line { |line| timestamped_puts line.chomp }
+    end
     timestamped_puts ''
   end
 
@@ -150,9 +158,18 @@ end
 # Handles agent command execution with retry logic
 class AgentExecutor
   EXECUTION_TIMEOUT = 300
+  TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
 
   def initialize(display)
     @display = display
+  end
+
+  def test_runner_running?
+    return false unless RbConfig::CONFIG['host_os'] =~ /linux|darwin|bsd/
+
+    TEST_RUNNERS.any? do |runner|
+      system("pgrep -f #{runner} > #{File::NULL} 2>&1")
+    end
   end
 
   def wrap_prompt(p)
@@ -179,8 +196,12 @@ class AgentExecutor
       @display.timestamped_puts "Running: agent --model #{model} '#{p[0..50]}...'"
       stdout, stderr, status = nil
       begin
-        Timeout.timeout(EXECUTION_TIMEOUT) do
+        if test_runner_running?
           stdout, stderr, status = Open3.capture3('agent', '--print', '--model', model, wrapped)
+        else
+          Timeout.timeout(EXECUTION_TIMEOUT) do
+            stdout, stderr, status = Open3.capture3('agent', '--print', '--model', model, wrapped)
+          end
         end
       rescue Timeout::Error
         @display.timestamped_puts "❌ Agent timed out after #{EXECUTION_TIMEOUT}s".red
@@ -228,7 +249,7 @@ class VerificationHandler
   end
 
   def parse_res(res)
-    return [false, nil] if res.nil? || res.strip.empty?
+    return [false, res] if res.nil? || res.strip.empty?
 
     n = res.strip
     up = n.upcase
@@ -242,7 +263,7 @@ class VerificationHandler
     return parse_no_res(n) if no_idx && (yes_idx.nil? || no_idx < yes_idx)
     return parse_yes_res(n) if yes_idx && (no_idx.nil? || yes_idx < no_idx)
 
-    [false, nil]
+    [false, res]
   end
 
   def parse_no_res(n)
@@ -314,9 +335,9 @@ class Superagent
     MODELS.each_with_index do |model, idx|
       @display.display_attempt_header(model, idx, MODELS.size)
 
-      success, _output = @agent_executor.run(model, req)
+      success, output = @agent_executor.run(model, req)
       unless success
-        @display.display_agent_failure
+        @display.display_agent_failure(output)
         next
       end
 
