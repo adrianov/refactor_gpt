@@ -17,6 +17,8 @@ module CompletionNotifier
   end
 
   def self.play_sound(success)
+    return unless command_exists?("afplay")
+
     sound_file = success ? SUCCESS_SOUND : ERROR_SOUND
     sound_path = find_sound_file(sound_file)
     return unless sound_path
@@ -24,6 +26,10 @@ module CompletionNotifier
     system("afplay #{sound_path.shellescape} > #{File::NULL} 2>&1")
   rescue StandardError
     # Ignore sound playback errors
+  end
+
+  def self.command_exists?(command)
+    system("command -v #{command.shellescape} > #{File::NULL} 2>&1")
   end
 
   def self.find_sound_file(filename)
