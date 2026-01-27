@@ -21,6 +21,7 @@ require 'open3'
 require 'timeout'
 require 'rbconfig'
 require 'shellwords'
+require 'json'
 require_relative "lib/agents_file_handler"
 
 # Handles all output formatting and display operations
@@ -255,8 +256,31 @@ class AgentExecutor
     HEREDOC
   end
 
+  def parse_json_stream_line(line)
+    return [nil, nil] if line.nil? || line.strip.empty?
+
+    json_obj = JSON.parse(line.strip)
+    type = json_obj['type']
+    text = nil
+
+    case type
+    when 'assistant'
+      content = json_obj.dig('message', 'content')
+      if content.is_a?(Array)
+        text_content = content.find { |c| c['type'] == 'text' }
+        text = text_content['text'] if text_content
+      end
+    when 'result'
+      text = json_obj['result']
+    end
+
+    [type, text]
+  rescue JSON::ParserError
+    [nil, nil]
+  end
+
   def build_and_display_command(*args)
-    cmd = ['agent', *args]
+    cmd = ['agent', '--print', '--output-format', 'stream-json', *args]
     display_cmd = cmd.map do |arg|
       if arg.length > 50 || arg.include?("\n")
         "'#{arg[0..50].gsub("\n", " ")}...'"
@@ -280,8 +304,21 @@ class AgentExecutor
     # Check if a test runner is already running in the system before starting the agent
     if test_runner_running?
       @display.timestamped_puts '⚠️  Test runner already running in system, no timeout applied'.yellow
-      cmd = build_and_display_command('--print', '--model', model, wrapped)
-      return Open3.capture3(*cmd)
+      cmd = build_and_display_command('--model', model, wrapped)
+      stdout, stderr, status = Open3.capture3(*cmd)
+      raw_output = stdout + stderr
+      final_result = ''
+
+      raw_output.each_line do |line|
+        type, text = parse_json_stream_line(line.strip)
+        if text && !text.empty?
+          @display.timestamped_puts text
+          final_result = text if type == 'result'
+        end
+      end
+
+      output = final_result.empty? ? raw_output : final_result
+      return [output, '', status]
     end
 
     test_runner_detected = false
@@ -324,11 +361,13 @@ class AgentExecutor
     end
 
     begin
-      cmd = build_and_display_command('--print', '--model', model, wrapped)
+      cmd = build_and_display_command('--model', model, wrapped)
       Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
         process_pid = wait_thr.pid
-        output = ''
+        raw_output = ''
+        final_result = ''
         stdin.close
+        line_buffer = ''
 
         loop do
           break if timed_out
@@ -337,7 +376,19 @@ class AgentExecutor
           if ready
             begin
               chunk = stdout_stderr.readpartial(4096)
-              output += chunk
+              raw_output += chunk
+              line_buffer += chunk
+
+              while (newline_idx = line_buffer.index("\n"))
+                line = line_buffer[0..newline_idx]
+                line_buffer = line_buffer[(newline_idx + 1)..-1] || ''
+
+                type, text = parse_json_stream_line(line.strip)
+                if text && !text.empty?
+                  @display.timestamped_puts text
+                  final_result = text if type == 'result'
+                end
+              end
             rescue EOFError
               break
             rescue IO::WaitReadable
@@ -346,7 +397,18 @@ class AgentExecutor
           elsif !wait_thr.alive?
             begin
               remaining = stdout_stderr.read
-              output += remaining if remaining
+              if remaining
+                raw_output += remaining
+                line_buffer += remaining
+
+                line_buffer.each_line do |line|
+                  type, text = parse_json_stream_line(line.strip)
+                  if text && !text.empty?
+                    @display.timestamped_puts text
+                    final_result = text if type == 'result'
+                  end
+                end
+              end
             rescue EOFError
               # Stream closed, no more data
             rescue IOError => e
@@ -359,10 +421,19 @@ class AgentExecutor
 
         if timed_out
           stdout_stderr.close rescue nil
-          output += "\n[Process terminated due to timeout]"
+          final_result += "\n[Process terminated due to timeout]"
         else
           remaining = stdout_stderr.read rescue ''
-          output += remaining
+          if remaining
+            raw_output += remaining
+            remaining.each_line do |line|
+              type, text = parse_json_stream_line(line.strip)
+              if text && !text.empty?
+                @display.timestamped_puts text
+                final_result = text if type == 'result'
+              end
+            end
+          end
         end
 
         execution_complete = true
@@ -377,6 +448,7 @@ class AgentExecutor
           status = Struct.new(:success?).new(false)
         end
 
+        output = final_result.empty? ? raw_output : final_result
         [output || '', '', status]
       end
     rescue Errno::ESRCH, Errno::ECHILD
@@ -424,12 +496,21 @@ class AgentExecutor
 
   def run_plan_mode(model, p)
     wrapped = wrap_prompt(p)
-    cmd = build_and_display_command('--plan', '--print', '--model', model, wrapped)
+    cmd = build_and_display_command('--plan', '--model', model, wrapped)
     
     stdout, stderr, status = Open3.capture3(*cmd)
-    output = (stdout || '') + (stderr || '')
-    output.each_line { |line| @display.timestamped_puts line.chomp }
+    raw_output = (stdout || '') + (stderr || '')
+    final_result = ''
     
+    raw_output.each_line do |line|
+      type, text = parse_json_stream_line(line.strip)
+      if text && !text.empty?
+        @display.timestamped_puts text
+        final_result = text if type == 'result'
+      end
+    end
+    
+    output = final_result.empty? ? raw_output : final_result
     [status.success?, output]
   rescue StandardError => e
     @display.timestamped_puts "❌ Agent execution error: #{e.message}".red
@@ -599,14 +680,24 @@ class VerificationHandler
     @display.timestamped_puts 'Verifying...'.blue
 
     verification_prompt = build_verification_prompt(req)
-    cmd = @agent_executor.build_and_display_command('--mode', 'ask', '--model', model, '--print', verification_prompt)
+    cmd = @agent_executor.build_and_display_command('--mode', 'ask', '--model', model, verification_prompt)
 
     stdout, stderr, status = Open3.capture3(*cmd)
-    output = stdout + stderr
-    output.each_line { |line| @display.timestamped_puts line.chomp }
+    raw_output = stdout + stderr
+    final_result = ''
+
+    raw_output.each_line do |line|
+      type, text = @agent_executor.parse_json_stream_line(line.strip)
+      if text && !text.empty?
+        @display.timestamped_puts text
+        final_result = text if type == 'result'
+      end
+    end
+
+    output = final_result.empty? ? stdout.strip : final_result.strip
 
     if status.success?
-      verified, desc = parse_res(stdout.strip)
+      verified, desc = parse_res(output)
       return [verified, desc || 'Failed'] unless desc.nil?
     end
 
