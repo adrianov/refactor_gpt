@@ -314,6 +314,9 @@ class AskGptClient
       - Briefly explain non-obvious parts of the code.
       - If there are multiple reasonable approaches, mention the most common one first.
 
+      Formatting restrictions:
+      - Do not use Markdown tables, as they cannot be parsed properly.
+
       Translations:
       - Provide translations to Russian, English, French, German, Spanish, and Italian
       - Follow user-specified language pairs when provided
@@ -433,6 +436,9 @@ class AskGeminiClient
       - When showing code, make it copy-pastable and minimal.
       - Briefly explain non-obvious parts of the code.
       - If there are multiple reasonable approaches, mention the most common one first.
+
+      Formatting restrictions:
+      - Do not use Markdown tables, as they cannot be parsed properly.
 
       Translations:
       - Provide translations to Russian, English, French, German, Spanish, and Italian
