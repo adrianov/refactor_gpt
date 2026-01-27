@@ -18,8 +18,7 @@ class Verify
 
   def ask(prompts)
     client = OpenAiClient.new(model: @model, debug: @debug,
-      progress_title: "Assessing feature implementation".cyan,
-      raise_on_server_error: true)
+      progress_title: nil, raise_on_server_error: true)
     client.ask(prompts)
   rescue ServerError => e
     handle_gemini_fallback(prompts, e)
@@ -40,8 +39,7 @@ class Verify
     return handle_final_error(error) unless gemini_configured?
 
     warn "⚠️  Server error persisted after 3 retries, falling back to Gemini..."
-    gemini_client = GeminiClient.new(model: @model, debug: @debug,
-      progress_title: "Assessing feature implementation".cyan)
+    gemini_client = GeminiClient.new(model: @model, debug: @debug, progress_title: nil)
     gemini_client.ask(prompts)
   end
 

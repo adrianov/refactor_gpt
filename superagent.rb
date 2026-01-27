@@ -18,6 +18,7 @@ end
 require 'colorize'
 require 'reline'
 require 'open3'
+require 'timeout'
 
 # Handles all output formatting and display operations
 class Display
@@ -148,15 +149,17 @@ end
 
 # Handles agent command execution with retry logic
 class AgentExecutor
+  EXECUTION_TIMEOUT = 300
+
   def initialize(display)
     @display = display
   end
 
-  def wrap_prompt(prompt)
+  def wrap_prompt(p)
     <<~HEREDOC
       IMPORTANT: This agent is running in non-interactive mode. Do not ask questions, request user input, or wait for confirmation. Work autonomously using available information and make reasonable decisions based on context. Execute tasks directly without seeking clarification.
 
-      #{prompt}
+      #{p}
     HEREDOC
   end
 
@@ -168,13 +171,22 @@ class AgentExecutor
       output.include?('http/2 stream closed') || output.include?('Connection stalled')
   end
 
-  def run(model, prompt, max_retries: 3, base_delay: 1)
-    wrapped = wrap_prompt(prompt)
+  def run(model, p, max_retries: 3, base_delay: 1)
+    wrapped = wrap_prompt(p)
     retries = 0
 
     loop do
-      @display.timestamped_puts "Running: agent --model #{model} '#{prompt[0..50]}...'"
-      stdout, stderr, status = Open3.capture3('agent', '--print', '--model', model, wrapped)
+      @display.timestamped_puts "Running: agent --model #{model} '#{p[0..50]}...'"
+      stdout, stderr, status = nil
+      begin
+        Timeout.timeout(EXECUTION_TIMEOUT) do
+          stdout, stderr, status = Open3.capture3('agent', '--print', '--model', model, wrapped)
+        end
+      rescue Timeout::Error
+        @display.timestamped_puts "❌ Agent timed out after #{EXECUTION_TIMEOUT}s".red
+        return [false, "Timeout after #{EXECUTION_TIMEOUT}s"]
+      end
+
       output = stdout + stderr
       output.each_line { |line| @display.timestamped_puts line.chomp }
 
@@ -215,32 +227,32 @@ class VerificationHandler
     HEREDOC
   end
 
-  def parse_response(response)
-    return [false, nil] if response.nil? || response.strip.empty?
+  def parse_res(res)
+    return [false, nil] if res.nil? || res.strip.empty?
 
-    normalized = response.strip
-    upcased = normalized.upcase
+    n = res.strip
+    up = n.upcase
 
-    return parse_yes_res(normalized) if upcased.start_with?('YES')
-    return parse_no_res(normalized) if upcased.start_with?('NO')
+    return parse_yes_res(n) if up.start_with?('YES')
+    return parse_no_res(n) if up.start_with?('NO')
 
-    yes_idx = upcased.index(/\bYES\b/)
-    no_idx = upcased.index(/\bNO\b/)
+    yes_idx = up.index(/\bYES\b/)
+    no_idx = up.index(/\bNO\b/)
 
-    return parse_no_res(normalized) if no_idx && (yes_idx.nil? || no_idx < yes_idx)
-    return parse_yes_res(normalized) if yes_idx && (no_idx.nil? || yes_idx < no_idx)
+    return parse_no_res(n) if no_idx && (yes_idx.nil? || no_idx < yes_idx)
+    return parse_yes_res(n) if yes_idx && (no_idx.nil? || yes_idx < no_idx)
 
     [false, nil]
   end
 
-  def parse_no_res(normalized)
-    match = normalized.match(/\bNO\s*:?\s*(.+)/i)
-    [false, match ? match[1].strip : 'Failed']
+  def parse_no_res(n)
+    m = n.match(/\bNO\s*:?\s*(.+)/i)
+    [false, m ? m[1].strip : 'Failed']
   end
 
-  def parse_yes_res(normalized)
-    match = normalized.match(/\bYES\s*:?\s*(.+)/i)
-    [true, match ? match[1].strip : 'Passed']
+  def parse_yes_res(n)
+    m = n.match(/\bYES\s*:?\s*(.+)/i)
+    [true, m ? m[1].strip : 'Passed']
   end
 
   def run_verify_gpt(req)
@@ -253,7 +265,7 @@ class VerificationHandler
 
     return [false, 'verify_gpt.rb failed'] unless status.success?
 
-    verified, desc = parse_response(stdout.strip)
+    verified, desc = parse_res(stdout.strip)
     [verified, desc || 'Failed']
   end
 
