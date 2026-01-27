@@ -968,6 +968,7 @@ CompletionNotifier.wrap_main do
       next
     end
 
+    CompletionNotifier.notify_completion(success: true)
     display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
     execute_commits(commits)
     break

@@ -10,8 +10,10 @@ module CompletionNotifier
   @exit_status = nil
   @exception_occurred = false
   @script_dir = nil
+  @already_notified = false
 
   def self.notify_completion(success: true)
+    @already_notified = true
     play_sound(success)
     update_terminal_title(success)
   end
@@ -85,6 +87,9 @@ module CompletionNotifier
     @script_dir = File.dirname(File.expand_path($PROGRAM_NAME))
 
     at_exit do
+      # Skip notification if already notified (e.g., after analysis completion)
+      return if @already_notified
+
       # Capture exit status from global exception if available
       if $!.is_a?(SystemExit)
         set_exit_status($!.status)
