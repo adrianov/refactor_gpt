@@ -983,11 +983,14 @@ CompletionNotifier.wrap_main do
 
     if push_answer == "y"
       puts "Running: git push".green
-      system("git push")
+      success = system("git push")
+      exit(success ? 0 : 1)
     else
       puts "Changes committed but not pushed.".yellow
+      exit 0
     end
   else
     puts "Changes committed. No remote configured to push to.".yellow
+    exit 0
   end
 end

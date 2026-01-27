@@ -9,7 +9,12 @@
 # Executes agent commands across multiple AI models sequentially,
 # automatically verifying results and retrying with fix instructions when verification fails.
 
-require_relative "lib/completion_notifier"
+completion_notifier_path = File.join(__dir__, "lib", "completion_notifier.rb")
+begin
+  require_relative "lib/completion_notifier" if File.exist?(completion_notifier_path)
+rescue LoadError, StandardError
+  # Ignore if completion_notifier is not available
+end
 require "colorize"
 require "reline"
 require "open3"
@@ -283,7 +288,11 @@ def main
 end
 
 if __FILE__ == $PROGRAM_NAME
-  CompletionNotifier.wrap_main do
+  if defined?(CompletionNotifier) && CompletionNotifier.respond_to?(:wrap_main)
+    CompletionNotifier.wrap_main do
+      main
+    end
+  else
     main
   end
 end
