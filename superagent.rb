@@ -255,6 +255,19 @@ class AgentExecutor
     HEREDOC
   end
 
+  def build_and_display_command(*args)
+    cmd = ['agent', *args]
+    display_cmd = cmd.map do |arg|
+      if arg.length > 50 || arg.include?("\n")
+        "'#{arg[0..50].gsub("\n", " ")}...'"
+      else
+        arg
+      end
+    end.join(' ')
+    @display.timestamped_puts "Running: #{display_cmd}"
+    cmd
+  end
+
   def retryable_network_error?(output)
     return false if output.nil? || output.empty?
 
@@ -267,7 +280,8 @@ class AgentExecutor
     # Check if a test runner is already running in the system before starting the agent
     if test_runner_running?
       @display.timestamped_puts '⚠️  Test runner already running in system, no timeout applied'.yellow
-      return Open3.capture3('agent', '--print', '--model', model, wrapped)
+      cmd = build_and_display_command('--print', '--model', model, wrapped)
+      return Open3.capture3(*cmd)
     end
 
     test_runner_detected = false
@@ -306,7 +320,8 @@ class AgentExecutor
     end
 
     begin
-      Open3.popen2e('agent', '--print', '--model', model, wrapped) do |_stdin, stdout_stderr, wait_thr|
+      cmd = build_and_display_command('--print', '--model', model, wrapped)
+      Open3.popen2e(*cmd) do |_stdin, stdout_stderr, wait_thr|
         process_pid = wait_thr.pid
         output = stdout_stderr.read
         begin
@@ -332,7 +347,6 @@ class AgentExecutor
     retries = 0
 
     loop do
-      @display.timestamped_puts "Running: agent --model #{model} '#{p[0..50].gsub("\n", " ")}...'"
       stdout, stderr, status = nil
       begin
         stdout, stderr, status = run_with_timeout_monitoring(model, wrapped)
@@ -363,9 +377,9 @@ class AgentExecutor
 
   def run_plan_mode(model, p)
     wrapped = wrap_prompt(p)
-    @display.timestamped_puts "Running: agent --plan --model #{model} '#{p[0..50].gsub("\n", " ")}...'"
+    cmd = build_and_display_command('--plan', '--print', '--model', model, wrapped)
     
-    stdout, stderr, status = Open3.capture3('agent', '--plan', '--print', '--model', model, wrapped)
+    stdout, stderr, status = Open3.capture3(*cmd)
     output = (stdout || '') + (stderr || '')
     output.each_line { |line| @display.timestamped_puts line.chomp }
     
@@ -539,9 +553,9 @@ class VerificationHandler
     @display.timestamped_puts 'Verifying...'.blue
 
     verification_prompt = build_verification_prompt(req)
-    @display.timestamped_puts "Running: agent --mode ask --model #{model} '[verification prompt]'"
+    cmd = build_and_display_command('--mode', 'ask', '--model', model, '--print', verification_prompt)
 
-    stdout, stderr, status = Open3.capture3('agent', '--mode', 'ask', '--model', model, '--print', verification_prompt)
+    stdout, stderr, status = Open3.capture3(*cmd)
     output = stdout + stderr
     output.each_line { |line| @display.timestamped_puts line.chomp }
 
