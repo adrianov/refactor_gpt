@@ -3,10 +3,13 @@
 
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
+require_relative "lib/completion_notifier"
 require "shellwords"
 require "rbconfig"
 require "colorize"
 require "json"
+
+CompletionNotifier.setup_exit_hook
 
 # Simple system information detection with memoization
 class SystemInfo
@@ -238,48 +241,50 @@ ARGV.each do |arg|
   user_instruction_parts << arg
 end
 
-if user_instruction_parts.empty?
-  puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] \"What to do\"".cyan
-  exit
-end
+CompletionNotifier.wrap_main do
+  if user_instruction_parts.empty?
+    puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] \"What to do\"".cyan
+    exit
+  end
 
-user_instruction = user_instruction_parts.join(" ")
-ai = OpenAi.new(debug: debug_mode)
+  user_instruction = user_instruction_parts.join(" ")
+  ai = OpenAi.new(debug: debug_mode)
 
-result = ai.analyze_request(user_instruction)
+  result = ai.analyze_request(user_instruction)
 
-if debug_mode
-  puts "AI Response:".yellow
-  puts JSON.pretty_generate(result)
-end
+  if debug_mode
+    puts "AI Response:".yellow
+    puts JSON.pretty_generate(result)
+  end
 
-if result["context_commands"]&.any?
-  context_output = ai.collect_context_output(result["context_commands"])
-  bash_command = ai.bash_command(user_instruction, context_output)
-elsif result["bash_command"]
-  bash_command = result["bash_command"]
-else
-  bash_command = ai.bash_command(user_instruction)
-end
+  if result["context_commands"]&.any?
+    context_output = ai.collect_context_output(result["context_commands"])
+    bash_command = ai.bash_command(user_instruction, context_output)
+  elsif result["bash_command"]
+    bash_command = result["bash_command"]
+  else
+    bash_command = ai.bash_command(user_instruction)
+  end
 
-safe_commands = %w[grep ag ls df cat less head tail sed awk tr uniq wc cut]
+  safe_commands = %w[grep ag ls df cat less head tail sed awk tr uniq wc cut]
 
-print "Generated bash command: ".cyan
-puts bash_command.green
+  print "Generated bash command: ".cyan
+  puts bash_command.green
 
-if safe_commands.any? do |cmd|
-  bash_command.start_with?(cmd + " ") || bash_command == cmd
-end
-  puts "Running: #{bash_command}".green
-  system(bash_command)
-else
-  puts "Do you want to run this command? (y/N)".white
-  answer = $stdin.gets.chomp.downcase
-
-  if answer == "y"
+  if safe_commands.any? do |cmd|
+    bash_command.start_with?(cmd + " ") || bash_command == cmd
+  end
     puts "Running: #{bash_command}".green
     system(bash_command)
   else
-    puts "Command not executed.".yellow
+    puts "Do you want to run this command? (y/N)".white
+    answer = $stdin.gets.chomp.downcase
+
+    if answer == "y"
+      puts "Running: #{bash_command}".green
+      system(bash_command)
+    else
+      puts "Command not executed.".yellow
+    end
   end
 end

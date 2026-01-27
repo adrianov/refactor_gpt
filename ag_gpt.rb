@@ -2,7 +2,10 @@
 # frozen_string_literal: true
 
 require_relative "lib/openai_client"
+require_relative "lib/completion_notifier"
 require "shellwords"
+
+CompletionNotifier.setup_exit_hook
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -145,45 +148,47 @@ unless check_ag_installed
   exit(1)
 end
 
-if ARGV.empty?
-  puts "Search through your code with human language."
-  puts "Usage: #{File.basename($PROGRAM_NAME)} \"What to search in human language\""
-  exit(0)
-end
+CompletionNotifier.wrap_main do
+  if ARGV.empty?
+    puts "Search through your code with human language."
+    puts "Usage: #{File.basename($PROGRAM_NAME)} \"What to search in human language\""
+    exit(0)
+  end
 
-user_instruction = ARGV.join(" ")
-openai = OpenAi.new
-bash_command = openai.bash_command(user_instruction)
+  user_instruction = ARGV.join(" ")
+  openai = OpenAi.new
+  bash_command = openai.bash_command(user_instruction)
 
-puts "Generated bash command: #{bash_command}"
+  puts "Generated bash command: #{bash_command}"
 
-# Run the command automatically if it starts with 'ag'
-answer = if bash_command.start_with?("ag ")
-  puts ""
-  "y"
-else
-  puts "Do you want to run this command? (y/n)"
-  $stdin.gets.to_s.chomp.downcase
-end
+  # Run the command automatically if it starts with 'ag'
+  answer = if bash_command.start_with?("ag ")
+    puts ""
+    "y"
+  else
+    puts "Do you want to run this command? (y/n)"
+    $stdin.gets.to_s.chomp.downcase
+  end
 
-if answer == "y"
-  system(bash_command)
-  puts "\nFinished:\n#{bash_command}"
+  if answer == "y"
+    system(bash_command)
+    puts "\nFinished:\n#{bash_command}"
 
-  unless `#{bash_command}`.strip.empty?
-    puts "\nInterpret results with OpenAI? (y/N)"
-    interpret_answer = $stdin.gets&.chomp&.downcase
+    unless `#{bash_command}`.strip.empty?
+      puts "\nInterpret results with OpenAI? (y/N)"
+      interpret_answer = $stdin.gets&.chomp&.downcase
 
-    if interpret_answer == "y"
-      puts "\nInterpreting results with OpenAI..."
-      interpretation = openai.interpret_ag_output(user_instruction, `#{bash_command}`)
-      if system("command -v glow >/dev/null 2>&1")
-        IO.popen(["glow", "-"], "w") { |io| io.write(interpretation) }
-      else
-        puts "\nOpenAI interpretation:\n\n#{interpretation}"
+      if interpret_answer == "y"
+        puts "\nInterpreting results with OpenAI..."
+        interpretation = openai.interpret_ag_output(user_instruction, `#{bash_command}`)
+        if system("command -v glow >/dev/null 2>&1")
+          IO.popen(["glow", "-"], "w") { |io| io.write(interpretation) }
+        else
+          puts "\nOpenAI interpretation:\n\n#{interpretation}"
+        end
       end
     end
+  else
+    puts "Command not executed."
   end
-else
-  puts "Command not executed."
 end

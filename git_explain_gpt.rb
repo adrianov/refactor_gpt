@@ -3,9 +3,12 @@
 
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
+require_relative "lib/completion_notifier"
 require "shellwords"
 require "colorize"
 require "reline"
+
+CompletionNotifier.setup_exit_hook
 
 class GitExplainer
   include AgentsFileHandler
@@ -356,54 +359,56 @@ def clean_glow_line(line)
 end
 
 # Entry point
-debug_mode = parse_arguments(ARGV)
+CompletionNotifier.wrap_main do
+  debug_mode = parse_arguments(ARGV)
 
-status_output = run_cmd("git status --porcelain --branch")
+  status_output = run_cmd("git status --porcelain --branch")
 
-if status_output.lines.count { |line| !line.start_with?("##") }.zero?
-  puts "No changes to explain.".yellow
-  exit 0
+  if status_output.lines.count { |line| !line.start_with?("##") }.zero?
+    puts "No changes to explain.".yellow
+    exit 0
+  end
+
+  recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
+  recent_commands = get_recent_commands
+
+  # Get untracked files not in .gitignore
+  # --exclude-standard respects .gitignore, .git/info/exclude, and core.excludesfile
+  untracked_files = `git ls-files --others --exclude-standard --directory`.split("\n")
+
+  # Additional patterns to exclude from git add -N (temporary, binary, debug files)
+  additional_exclusions = [
+    "*.log", "*.tmp", "*.temp", "*.bak", "*.swp", "*.swo",
+    "*.pyc", "*.pyo", "*.class", "*.jar", "*.war", "*.ear",
+    "*.zip", "*.tar.gz", "*.tgz", "*.rar", "*.exe", "*.dll",
+    "*.so", "*.dylib", "*.bin", "*.dat", "*.orig", "*.rej",
+    ".DS_Store", "Thumbs.db"
+  ]
+
+  # Filter out files matching additional exclusion patterns
+  files_to_add = untracked_files.reject do |file|
+    additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
+  end
+
+  unless files_to_add.empty?
+    add_cmd = ["git", "add", "-N", *files_to_add].map { |p| Shellwords.escape(p) }.join(" ")
+    system("#{add_cmd} 2>/dev/null")
+  end
+
+  # Capture diff output for analysis with 500 lines context
+  diff_output = `git diff -U500`
+  unless $?.success?
+    warn "Failed to capture diff for analysis".red
+    exit 1
+  end
+
+  explanation = GitExplainer.new(debug: debug_mode).explain_changes(
+    status_output,
+    diff_output,
+    recent_commits,
+    recent_commands
+  )
+
+  display_with_glow(explanation)
+  run_interactive_questions(explanation, debug_mode) if $stdin.tty?
 end
-
-recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
-recent_commands = get_recent_commands
-
-# Get untracked files not in .gitignore
-# --exclude-standard respects .gitignore, .git/info/exclude, and core.excludesfile
-untracked_files = `git ls-files --others --exclude-standard --directory`.split("\n")
-
-# Additional patterns to exclude from git add -N (temporary, binary, debug files)
-additional_exclusions = [
-  "*.log", "*.tmp", "*.temp", "*.bak", "*.swp", "*.swo",
-  "*.pyc", "*.pyo", "*.class", "*.jar", "*.war", "*.ear",
-  "*.zip", "*.tar.gz", "*.tgz", "*.rar", "*.exe", "*.dll",
-  "*.so", "*.dylib", "*.bin", "*.dat", "*.orig", "*.rej",
-  ".DS_Store", "Thumbs.db"
-]
-
-# Filter out files matching additional exclusion patterns
-files_to_add = untracked_files.reject do |file|
-  additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
-end
-
-unless files_to_add.empty?
-  add_cmd = ["git", "add", "-N", *files_to_add].map { |p| Shellwords.escape(p) }.join(" ")
-  system("#{add_cmd} 2>/dev/null")
-end
-
-# Capture diff output for analysis with 500 lines context
-diff_output = `git diff -U500`
-unless $?.success?
-  warn "Failed to capture diff for analysis".red
-  exit 1
-end
-
-explanation = GitExplainer.new(debug: debug_mode).explain_changes(
-  status_output,
-  diff_output,
-  recent_commits,
-  recent_commands
-)
-
-display_with_glow(explanation)
-run_interactive_questions(explanation, debug_mode) if $stdin.tty?

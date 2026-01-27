@@ -5,9 +5,12 @@ require "colorize"
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
 require_relative "lib/refactor_gpt_utils"
+require_relative "lib/completion_notifier"
 require "shellwords"
 require "oj"
 require "tempfile"
+
+CompletionNotifier.setup_exit_hook
 
 # Class to interact with OpenAI API
 class OpenAi
@@ -439,12 +442,14 @@ class RefactorGptRunner
 end
 
 # Script entry point
-if ARGV.empty?
-  puts(
-    "Usage: #{File.basename($PROGRAM_NAME)} <file1> [file2 ...] " \
-    '["Instructions what to do."]'
-  )
-  exit 1
-end
+CompletionNotifier.wrap_main do
+  if ARGV.empty?
+    puts(
+      "Usage: #{File.basename($PROGRAM_NAME)} <file1> [file2 ...] " \
+      '["Instructions what to do."]'
+    )
+    exit 1
+  end
 
-RefactorGptRunner.new.run(ARGV)
+  RefactorGptRunner.new.run(ARGV)
+end

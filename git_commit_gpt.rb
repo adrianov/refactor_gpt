@@ -5,9 +5,12 @@ require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
 require_relative "lib/diff_processor"
 require_relative "lib/diff_compactor"
+require_relative "lib/completion_notifier"
 require "shellwords"
 require "ruby-progressbar"
 require "colorize"
+
+CompletionNotifier.setup_exit_hook
 
 class OpenAi
   include AgentsFileHandler
@@ -954,51 +957,53 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
 end
 
 # Entry point
-debug_mode, cli_hint = parse_arguments(ARGV)
+CompletionNotifier.wrap_main do
+  debug_mode, cli_hint = parse_arguments(ARGV)
 
-# Change to git root directory to ensure consistent path handling
-git_root = get_git_root
-Dir.chdir(git_root)
+  # Change to git root directory to ensure consistent path handling
+  git_root = get_git_root
+  Dir.chdir(git_root)
 
-recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
-recent_commands = get_recent_commands
+  recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
+  recent_commands = get_recent_commands
 
-loop do
-  plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
-  break if plan_result.nil?
+  loop do
+    plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
+    break if plan_result.nil?
 
-  commits = plan_result["commits"]
-  warnings = plan_result["warnings"]
-  quality_assessment = plan_result["quality_assessment"]
-  excluded_files = plan_result["excluded_files"]
+    commits = plan_result["commits"]
+    warnings = plan_result["warnings"]
+    quality_assessment = plan_result["quality_assessment"]
+    excluded_files = plan_result["excluded_files"]
 
-  warnings_fixed = handle_rubocop_warnings
+    warnings_fixed = handle_rubocop_warnings
 
-  if warnings_fixed
-    puts "\nFiles have changed after fixing warnings. Re-planning commits...".cyan
-    recent_commands = get_recent_commands
-    next
+    if warnings_fixed
+      puts "\nFiles have changed after fixing warnings. Re-planning commits...".cyan
+      recent_commands = get_recent_commands
+      next
+    end
+
+    display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
+    execute_commits(commits)
+    break
   end
 
-  display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
-  execute_commits(commits)
-  break
-end
+  # Check if there's a remote before asking to push
+  remote_output = `git remote 2>/dev/null`.strip
+  has_remote = !remote_output.empty?
 
-# Check if there's a remote before asking to push
-remote_output = `git remote 2>/dev/null`.strip
-has_remote = !remote_output.empty?
+  if has_remote
+    puts "Do you want to push? (y/N)".white
+    push_answer = $stdin.gets.to_s.chomp.downcase
 
-if has_remote
-  puts "Do you want to push? (y/N)".white
-  push_answer = $stdin.gets.to_s.chomp.downcase
-
-  if push_answer == "y"
-    puts "Running: git push".green
-    system("git push")
+    if push_answer == "y"
+      puts "Running: git push".green
+      system("git push")
+    else
+      puts "Changes committed but not pushed.".yellow
+    end
   else
-    puts "Changes committed but not pushed.".yellow
+    puts "Changes committed. No remote configured to push to.".yellow
   end
-else
-  puts "Changes committed. No remote configured to push to.".yellow
 end

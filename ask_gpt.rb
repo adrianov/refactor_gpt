@@ -3,9 +3,12 @@
 
 require_relative "lib/openai_client"
 require_relative "lib/gemini_client"
+require_relative "lib/completion_notifier"
 require "ruby-progressbar"
 require "rbconfig"
 require "reline"
+
+CompletionNotifier.setup_exit_hook
 
 # System information detection
 class SystemInfo
@@ -756,4 +759,8 @@ def clear_args_for_next_iteration(args)
   args[:file_snippets] = []
 end
 
-main if __FILE__ == $PROGRAM_NAME
+if __FILE__ == $PROGRAM_NAME
+  CompletionNotifier.wrap_main do
+    main
+  end
+end
