@@ -163,22 +163,22 @@ def parse_response(response)
   return parse_yes_response(normalized) if upcased.start_with?("YES")
   return parse_no_response(normalized) if upcased.start_with?("NO")
 
-  yes_index = upcased.index(/\bYES\b/)
-  no_index = upcased.index(/\bNO\b/)
+  yes_match = upcased.match(/\bYES\b/)
+  no_match = upcased.match(/\bNO\b/)
 
-  return parse_no_response(normalized) if no_index && (yes_index.nil? || no_index < yes_index)
-  return parse_yes_response(normalized) if yes_index && (no_index.nil? || yes_index < no_index)
+  return parse_no_response(normalized) if no_match && (yes_match.nil? || no_match.begin(0) < yes_match.begin(0))
+  return parse_yes_response(normalized) if yes_match && (no_match.nil? || yes_match.begin(0) < no_match.begin(0))
 
   [false, response]
 end
 
 def parse_no_response(normalized)
-  match = normalized.match(/\bNO\s*:?\s*(.+)/i)
+  match = normalized.match(/\bNO\s*:?\s*([\s\S]+)/i)
   [false, match ? match[1].strip : "Verification failed"]
 end
 
 def parse_yes_response(normalized)
-  match = normalized.match(/\bYES\s*:?\s*(.+)/i)
+  match = normalized.match(/\bYES\s*:?\s*([\s\S]+)/i)
   [true, match ? match[1].strip : "Verification passed"]
 end
 
@@ -190,7 +190,9 @@ def display_result(verified, description)
     puts "NO: Unable to parse assessment response. The LLM response did not contain YES or NO."
     if description && !description.strip.empty?
       puts "\nActual LLM response:"
-      puts description
+      # Use multiline output for the actual response to ensure it's fully visible
+      description.each_line { |line| puts line.chomp }
+      puts "\nFull response length: #{description.length} characters"
     end
     exit 1
   end
