@@ -163,7 +163,7 @@ def get_feature_request(args)
 end
 
 def parse_response(response)
-  return [false, nil] if response.nil? || response.strip.empty?
+  return [false, response] if response.nil? || response.strip.empty?
 
   normalized = response.strip
   upcased = normalized.upcase
@@ -177,7 +177,7 @@ def parse_response(response)
   return parse_no_response(normalized) if no_index && (yes_index.nil? || no_index < yes_index)
   return parse_yes_response(normalized) if yes_index && (no_index.nil? || yes_index < no_index)
 
-  [false, nil]
+  [false, response]
 end
 
 def parse_no_response(normalized)
@@ -194,11 +194,12 @@ def display_result(verified, description)
   if verified
     puts "YES: #{description}"
     exit 0
-  elsif description.nil?
-    puts "NO: Unable to parse assessment response. The LLM response did not contain YES or NO."
-    exit 1
   else
-    puts "NO: #{description}"
+    puts "NO: Unable to parse assessment response. The LLM response did not contain YES or NO."
+    if description && !description.strip.empty?
+      puts "\nActual LLM response:"
+      puts description
+    end
     exit 1
   end
 end
