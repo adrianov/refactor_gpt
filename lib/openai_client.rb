@@ -25,6 +25,10 @@ class ServerError < StandardError
   end
 end
 
+# Custom error for network/resource errors that should be retried
+class NetworkResourceError < StandardError
+end
+
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
   DEFAULT_MODEL = "glm-4.6"
@@ -78,12 +82,32 @@ class OpenAiClient
       HTTPX::TimeoutError,
       HTTPX::ConnectionError => e
 
+      if is_network_resource_error?(e.message.to_s)
+        retries += 1
+        if retries <= max_retries
+          handle_network_resource_retry(e, retries, max_retries, base_delay)
+          retry
+        else
+          warn "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}"
+          exit 1
+        end
+      else
+        retries += 1
+        if retries <= max_retries
+          handle_retry_with_exponential_backoff(e, retries, max_retries, base_delay)
+          retry
+        else
+          raise e
+        end
+      end
+    rescue NetworkResourceError => e
       retries += 1
       if retries <= max_retries
-        handle_retry_with_exponential_backoff(e, retries, max_retries, base_delay)
+        handle_network_resource_retry(e, retries, max_retries, base_delay)
         retry
       else
-        raise e
+        warn "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}"
+        exit 1
       end
     rescue RateLimitError => e
       retries += 1
@@ -111,6 +135,16 @@ class OpenAiClient
     error_name = error.class.name.split("::").last
     warn "⚠️  Connection issue (#{error_name}), retrying in #{delay}s... (#{retries}/#{max_retries})"
     sleep(delay)
+  end
+
+  def handle_network_resource_retry(error, retries, max_retries, base_delay)
+    delay = base_delay * (2**(retries - 1))
+    warn "⚠️  Network/resource error, retrying in #{delay}s... (#{retries}/#{max_retries})"
+    sleep(delay)
+  end
+
+  def is_network_resource_error?(error_message)
+    error_message.include?("resource_exhausted") || error_message.include?("Connection stalled")
   end
 
   def handle_rate_limit_retry(error, retries, max_retries, base_delay)
@@ -195,6 +229,11 @@ class OpenAiClient
     raise_rate_limit_error(response) if response.status == 429
     raise_server_error(response) if response.status >= 500 && response.status < 600
 
+    error_message = extract_error_message_from_response(response)
+    if error_message && is_network_resource_error?(error_message)
+      raise NetworkResourceError.new("Network/resource error: #{error_message}")
+    end
+
     pretty_print_error("API Error", response.status, response.body)
     exit 1
   end
@@ -230,6 +269,11 @@ class OpenAiClient
     end
 
     raise ServerError.new("Server error", status: error_status) if error_status && error_status >= 500
+
+    error_message = extract_error_message_from_response_object(response)
+    if error_message && is_network_resource_error?(error_message)
+      raise NetworkResourceError.new("Network/resource error: #{error_message}")
+    end
 
     error_details = format_error_response(response)
     pretty_print_error("API Error", "Unknown", error_details)
@@ -365,7 +409,8 @@ class OpenAiClient
 
   def handle_http_error(error)
     error_message = error.message.to_s
-    is_stream_cancel = error_message.include?("CANCEL") || error_message.include?("stream closed")
+    is_stream_cancel = error_message.include?("CANCEL") || error_message.include?("canceled") ||
+                       error_message.include?("stream closed") || error_message.include?("0x8")
 
     error_type = case error
     when HTTPX::Connection::HTTP2::GoawayError
@@ -381,7 +426,7 @@ class OpenAiClient
     end
 
     if is_stream_cancel
-      pretty_print_error(error_type, "Network Error", "HTTP/2 stream was cancelled. This may indicate rate limiting, resource limits, or network issues.")
+      pretty_print_error(error_type, "Network Error", "HTTP/2 stream was cancelled (error code CANCEL/0x8). This may indicate rate limiting, API quota limits, resource limits, or network issues.")
     else
       pretty_print_error(error_type, "Network Error", error.message)
     end
