@@ -76,6 +76,7 @@ To make the scripts easier to use from anywhere, you can add aliases to your `.z
     echo "alias ask='$(pwd)/ask_gpt.rb'" >> ~/.zshrc
     echo "alias gcommit='$(pwd)/git_commit_gpt.rb'" >> ~/.zshrc
     echo "alias ge='$(pwd)/git_explain_gpt.rb'" >> ~/.zshrc
+    echo "alias superagent='$(pwd)/superagent.rb'" >> ~/.zshrc
    ```
 
 3. Activate the aliases by either:
@@ -90,8 +91,27 @@ ask "explain how Ruby blocks work"
 ask --search "search the web for this"
 gcommit "plan and create structured git commits"
 ge "explain current git changes"
+superagent "refactor the whole project to use dry-rb"
 
 ## Available Scripts
+
+### superagent.rb
+
+An automated code agent that executes commands across multiple AI models sequentially, automatically verifying results and retrying with fix instructions when verification fails.
+
+Usage:
+```bash
+./superagent.rb "Your request here"
+```
+
+Features:
+- **Multi-model fallback**: Sequentially tries Gemini, Claude, and other models.
+- **Automatic verification**: Uses a separate agent pass to verify that changes solve the request.
+- **Self-correction**: Automatically retries with specific fix instructions if verification fails.
+- **Non-interactive execution**: Proceeds autonomously without seeking clarification, ideal for long-running tasks.
+- **Detailed logging**: Provides timestamped logs and tracks git status throughout the process.
+- **Performance tracking**: Reports total runtime upon completion.
+- **Interactive mode**: Supports interactive request input if no arguments are provided.
 
 ### refactor_gpt.rb
 
