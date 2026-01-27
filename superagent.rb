@@ -540,7 +540,7 @@ class VerificationHandler
   def parse_res(res)
     return [false, res] if res.nil? || res.strip.empty?
 
-    n = res.strip
+    n = normalize_response(res)
     up = n.upcase
 
     return parse_yes_res(n) if up.start_with?('YES')
@@ -553,6 +553,15 @@ class VerificationHandler
     return parse_yes_res(n) if yes_idx && (no_idx.nil? || yes_idx < no_idx)
 
     [false, res]
+  end
+
+  def normalize_response(res)
+    normalized = res.strip
+    normalized = normalized.gsub(/\*\*(.*?)\*\*/, '\1')
+    normalized = normalized.gsub(/\*(.*?)\*/, '\1')
+    normalized = normalized.gsub(/__(.*?)__/, '\1')
+    normalized = normalized.gsub(/_(.*?)_/, '\1')
+    normalized.strip
   end
 
   def parse_no_res(n)
@@ -619,20 +628,28 @@ class VerificationHandler
     instruction_parts << <<~HEREDOC
 
       Task:
-      Verify that the changes fully solve the user's request and introduce no new bugs or regressions.
+      Verify that the code changes fully implement the user's request without introducing bugs or regressions.
 
-      You may use any verification method you find appropriate, such as:
-      - Reviewing git diff (run `git diff` to see changes)
-      - Running tests or linting tools
-      - Checking file contents
-      - Any other verification approach you deem suitable
+      Available information:
+      - Git status and diff are provided in the prompt below
+      - Analyze the provided changes to verify they meet the requirements
+      - Do not run any commands - all necessary data is already included
 
-      After verification, respond with:
-      - "YES: [short description of what was verified]" if the changes fully solve the request with no issues
-      - "NO: [short description of what is wrong]" if there are issues
+      Verification approach:
+      - Review the git diff to understand what changed
+      - Check if the changes address the user's request
+      - Look for potential bugs, regressions, or missing functionality
+      - Verify code quality and adherence to project guidelines
 
-      CRITICAL: Your response MUST start with either "YES" or "NO" as the first word. This is required for automated parsing.
-      Always include a brief description after the YES/NO. Keep it specific and concise.
+      Response format:
+      - Start your response with "YES: " followed by a brief description if verification passes
+      - Start your response with "NO: " followed by a brief description if verification fails
+
+      CRITICAL requirements:
+      - Your response MUST start with either "YES" or "NO" as the first word
+      - Use minimal formatting only - avoid excessive markdown or formatting
+      - Keep your response short and concise - one sentence is sufficient
+      - The description after YES/NO should be brief and specific
     HEREDOC
 
     if has_agents
@@ -682,23 +699,89 @@ class VerificationHandler
     verification_prompt = build_verification_prompt(req)
     cmd = @agent_executor.build_and_display_command('--mode', 'ask', '--model', model, verification_prompt)
 
-    stdout, stderr, status = Open3.capture3(*cmd)
-    raw_output = stdout + stderr
+    raw_output = ''
     final_result = ''
 
-    raw_output.each_line do |line|
-      type, text = @agent_executor.parse_json_stream_line(line.strip)
-      if text && !text.empty?
-        @display.timestamped_puts text
-        final_result = text if type == 'result'
+    Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
+      stdin.close
+      line_buffer = ''
+
+      loop do
+        ready = IO.select([stdout_stderr], nil, nil, 0.5)
+        if ready
+          begin
+            chunk = stdout_stderr.readpartial(4096)
+            raw_output += chunk
+            line_buffer += chunk
+
+            while (newline_idx = line_buffer.index("\n"))
+              line = line_buffer[0..newline_idx]
+              line_buffer = line_buffer[(newline_idx + 1)..-1] || ''
+
+              type, text = @agent_executor.parse_json_stream_line(line.strip)
+              if text && !text.empty?
+                @display.timestamped_puts text
+                final_result = text if type == 'result'
+              end
+            end
+          rescue EOFError
+            break
+          rescue IO::WaitReadable
+            next
+          end
+        elsif !wait_thr.alive?
+          begin
+            remaining = stdout_stderr.read
+            if remaining
+              raw_output += remaining
+              line_buffer += remaining
+
+              line_buffer.each_line do |line|
+                type, text = @agent_executor.parse_json_stream_line(line.strip)
+                if text && !text.empty?
+                  @display.timestamped_puts text
+                  final_result = text if type == 'result'
+                end
+              end
+            end
+          rescue EOFError
+            # Stream closed, no more data
+          rescue IOError => e
+            # Error reading remaining data, log and continue
+            @display.timestamped_puts "Warning: Error reading remaining output: #{e.message}".yellow
+          end
+          break
+        end
       end
-    end
 
-    output = final_result.empty? ? stdout.strip : final_result.strip
+      begin
+        remaining = stdout_stderr.read rescue ''
+        if remaining
+          raw_output += remaining
+          remaining.each_line do |line|
+            type, text = @agent_executor.parse_json_stream_line(line.strip)
+            if text && !text.empty?
+              @display.timestamped_puts text
+              final_result = text if type == 'result'
+            end
+          end
+        end
+      rescue EOFError, IOError
+        # Stream closed or error reading
+      end
 
-    if status.success?
-      verified, desc = parse_res(output)
-      return [verified, desc || 'Failed'] unless desc.nil?
+      begin
+        status = wait_thr.value
+      rescue StandardError
+        status = Struct.new(:success?).new(false)
+      end
+
+      output = final_result.empty? ? raw_output.strip : final_result.strip
+
+      if status.success?
+        verified, desc = parse_res(output)
+        return [verified, desc || 'Failed'] unless desc.nil?
+      end
     end
 
     @display.timestamped_puts 'Primary verification failed, using verify_gpt.rb as fallback...'.yellow
