@@ -37,7 +37,7 @@ class OpenAiClient
   PROGRESS_SPEED_FILE = File.join(Dir.home, ".refactor_gpt").freeze
 
   def initialize(model: nil, debug: false, max_completion_tokens: nil,
-    progress_title: nil, api_base_url: nil, api_key: nil)
+    progress_title: nil, api_base_url: nil, api_key: nil, raise_on_server_error: false)
     @api_base_url = api_base_url || fetch_env("OPENAI_BASE_URL", "https://api.openai.com/v1")
     @api_key = api_key || fetch_env("OPENAI_ACCESS_TOKEN")
     @proxy_url = fetch_env("PROXY_URL", nil)
@@ -49,6 +49,7 @@ class OpenAiClient
     @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
     @progress_mutex = Mutex.new
     @progress_stop = false
+    @raise_on_server_error = raise_on_server_error
   end
 
   def ask(messages, json: false, title: nil)
@@ -142,7 +143,11 @@ class OpenAiClient
         retry
       else
         warn "❌ Server error persisted after #{max_retries} retries"
-        exit 1
+        if @raise_on_server_error
+          raise e
+        else
+          exit 1
+        end
       end
     end
   end

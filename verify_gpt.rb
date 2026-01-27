@@ -14,36 +14,27 @@ class Verify
   def initialize(model: nil, debug: false)
     @model = model
     @debug = debug
-    @openai_client = OpenAiClient.new(model: model, debug: debug,
-      progress_title: "Assessing feature implementation".cyan)
   end
 
   def ask(prompts)
-    try_with_openai(prompts)
+    client = OpenAiClient.new(model: @model, debug: @debug,
+      progress_title: "Assessing feature implementation".cyan,
+      raise_on_server_error: true)
+    client.ask(prompts)
+  rescue ServerError => e
+    handle_gemini_fallback(prompts, e)
+  end
+
+  def assess_feature(user_request, status_output, diff_output)
+    ask([
+      {role: "system", content: system_instruction},
+      {role: "user", content: build_user_content(user_request, status_output, diff_output)}
+    ])
   end
 
   private
 
-  def try_with_openai(prompts)
-    retries = 0
-    max_retries = 3
-
-    begin
-      @openai_client.ask(prompts)
-    rescue ServerError => e
-      retries += 1
-      if retries <= max_retries
-        delay = 1 * (2**(retries - 1))
-        warn "⚠️  Server error (#{e.status}), retrying in #{delay}s... (#{retries}/#{max_retries})"
-        sleep(delay)
-        retry
-      else
-        handle_server_error_fallback(prompts, e)
-      end
-    end
-  end
-
-  def handle_server_error_fallback(prompts, error)
+  def handle_gemini_fallback(prompts, error)
     return handle_final_error(error) unless gemini_configured?
 
     warn "⚠️  Server error persisted after 3 retries, falling back to Gemini..."
@@ -53,8 +44,8 @@ class Verify
   end
 
   def handle_final_error(error)
-    warn "❌ Server error persisted after 3 retries"
-    raise error
+    warn "❌ Server error persisted after 3 retries and Gemini is not available"
+    exit 1
   end
 
   def gemini_configured?
@@ -73,15 +64,6 @@ class Verify
       h[key.strip] = value.strip if key && value
     end
   end
-
-  def assess_feature(user_request, status_output, diff_output)
-    ask([
-      {role: "system", content: system_instruction},
-      {role: "user", content: build_user_content(user_request, status_output, diff_output)}
-    ])
-  end
-
-  private
 
   def build_user_content(user_request, status_output, diff_output)
     content_parts = [
