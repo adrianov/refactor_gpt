@@ -580,8 +580,8 @@ def handle_mode_switch(client, input)
 end
 
 def process_question(client, messages, question, use_streaming)
-  corrected_question = correct_grammar(client, question)
-  display_corrected_question(question, corrected_question)
+  corrected_question, reason = correct_grammar(client, question)
+  display_corrected_question(question, corrected_question, reason)
 
   messages << {role: "user", content: corrected_question}
 
@@ -663,9 +663,18 @@ end
 
 def correct_grammar(client, question)
   grammar_instruction = <<~HEREDOC
-    Correct the grammar, spelling, and clarity of the following question while preserving its exact meaning and intent.
-    Return only the corrected question without any explanations, comments, or additional text.
-    If the question is already grammatically correct, return it unchanged.
+    Correct the grammar, spelling, and clarity of the following question or statement while preserving its exact meaning and intent.
+    
+    Style preservation:
+    - Preserve the exact style (formal or informal) of the original input.
+    - Do not convert informal speech to formal, or formal speech to informal.
+    - If the input is informal, keep it informal; if formal, keep it formal.
+    - You may suggest improvements within the same style (e.g., better informal phrasing, clearer formal structure).
+    
+    Return the response in this exact format:
+    Corrected: [corrected text]
+    Reason: [brief explanation of what was corrected]
+    If the input is already grammatically correct, return it unchanged with "Reason: No changes needed".
   HEREDOC
 
   grammar_messages = if client.is_a?(AskGeminiClient)
@@ -674,16 +683,41 @@ def correct_grammar(client, question)
     [{role: "system", content: grammar_instruction}, {role: "user", content: question}]
   end
 
-  corrected = client.ask(grammar_messages, title: nil)
-  corrected&.strip || question
+  response = client.ask(grammar_messages, title: nil)
+  parse_correction_response(response, question)
 rescue StandardError
-  question
+  [question, nil]
 end
 
-def display_corrected_question(original, corrected)
-  return if original.strip == corrected.strip
+def parse_correction_response(response, original)
+  return [original, nil] unless response
 
-  puts "Corrected question: #{corrected}"
+  corrected_match = response.match(/Corrected:\s*(.+?)(?:\n|$)/i)
+  reason_match = response.match(/Reason:\s*(.+?)(?:\n|$)/i)
+
+  corrected = corrected_match ? corrected_match[1].strip : original
+  reason = reason_match ? reason_match[1].strip : nil
+
+  [corrected, reason]
+end
+
+def only_case_or_punctuation_change?(original, corrected)
+  normalize_text(original) == normalize_text(corrected)
+end
+
+def normalize_text(text)
+  text.strip
+    .gsub(/[[:punct:]]/, "")
+    .gsub(/\s+/, " ")
+    .downcase
+end
+
+def display_corrected_question(original, corrected, reason)
+  return if original.strip == corrected.strip
+  return if only_case_or_punctuation_change?(original, corrected)
+
+  puts "Corrected: #{corrected}"
+  puts "Reason: #{reason}" if reason
   puts
 end
 
