@@ -23,7 +23,8 @@ module CompletionNotifier
     sound_path = find_sound_file(sound_file)
     return unless sound_path
 
-    Process.detach(Process.spawn("afplay", sound_path, out: File::NULL, err: File::NULL))
+    pid = Process.spawn("afplay", sound_path, out: File::NULL, err: File::NULL)
+    Process.wait(pid)
   rescue StandardError
     # Ignore sound playback errors
   end

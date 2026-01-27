@@ -84,13 +84,36 @@ def wrap_prompt_with_instructions(prompt)
   HEREDOC
 end
 
-def run_agent_command(model, prompt)
+def is_retryable_network_error?(output)
+  return false if output.nil? || output.empty?
+
+  output.include?("CANCEL") || output.include?("canceled") ||
+    output.include?("stream closed") || output.include?("0x8") ||
+    output.include?("http/2 stream closed")
+end
+
+def run_agent_command(model, prompt, max_retries: 3, base_delay: 1)
   wrapped_prompt = wrap_prompt_with_instructions(prompt)
-  timestamped_puts "Running: agent --print --model #{model} '#{prompt[0..50]}#{"..." if prompt.length > 50}'".green
-  stdout, stderr, status = Open3.capture3("agent", "--print", "--model", model, wrapped_prompt)
-  output = stdout + stderr
-  output.each_line { |line| timestamped_puts line.chomp }
-  [status.success?, output]
+  retries = 0
+
+  loop do
+    timestamped_puts "Running: agent --print --model #{model} '#{prompt[0..50]}#{"..." if prompt.length > 50}'".green
+    stdout, stderr, status = Open3.capture3("agent", "--print", "--model", model, wrapped_prompt)
+    output = stdout + stderr
+    output.each_line { |line| timestamped_puts line.chomp }
+
+    return [status.success?, output] if status.success?
+
+    if is_retryable_network_error?(output) && retries < max_retries
+      retries += 1
+      delay = base_delay * (2**(retries - 1))
+      timestamped_puts "⚠️  Network error detected, retrying in #{delay}s... (#{retries}/#{max_retries})".yellow
+      sleep(delay)
+      next
+    end
+
+    return [false, output]
+  end
 end
 
 
@@ -148,14 +171,11 @@ end
 
 def run_verification(model, user_request)
   verification_prompt = build_verification_prompt(user_request)
-  wrapped_prompt = wrap_prompt_with_instructions(verification_prompt)
   timestamped_puts "Verifying solution with #{model}...".blue
   timestamped_puts "Running: agent --print --model #{model} [verification prompt]".green
 
-  stdout, stderr, status = Open3.capture3("agent", "--print", "--model", model, wrapped_prompt)
-  output = stdout + stderr
-  output.each_line { |line| timestamped_puts line.chomp }
-  return [false, nil, output] unless status.success?
+  success, output = run_agent_command(model, verification_prompt)
+  return [false, nil, output] unless success
 
   verified, description = parse_verification_response(output.strip)
   [verified, description, output]
