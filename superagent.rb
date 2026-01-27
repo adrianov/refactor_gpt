@@ -58,12 +58,8 @@ class Display
     suffix = context.empty? ? '' : " #{context}"
 
     if desc && !desc.empty?
-      if desc.include?("\n")
-        timestamped_puts "#{prefix}#{suffix}:".send(verified ? :green : :yellow)
-        desc.each_line { |line| timestamped_puts "  #{line.chomp}" }
-      else
-        timestamped_puts "#{prefix}#{suffix}: #{desc}".send(verified ? :green : :yellow)
-      end
+      timestamped_puts "#{prefix}#{suffix}:".send(verified ? :green : :yellow)
+      desc.each_line { |line| timestamped_puts "  #{line.chomp}" }
     elsif verified
       timestamped_puts "#{prefix}#{suffix}! Success.".send(:green)
     else
@@ -83,7 +79,7 @@ class Display
     if output && !output.strip.empty?
       timestamped_puts ''
       timestamped_puts 'Agent output:'.yellow
-      output.each_line { |line| timestamped_puts line.chomp }
+      output.each_line { |line| timestamped_puts "  #{line.chomp}" }
     end
     timestamped_puts ''
   end
@@ -159,17 +155,94 @@ end
 class AgentExecutor
   EXECUTION_TIMEOUT = 300
   TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
+  TEST_RUNNER_CHECK_INTERVAL = 2
 
   def initialize(display)
     @display = display
   end
 
-  def test_runner_running?
+  def test_runner_running?(pid = nil)
     return false unless RbConfig::CONFIG['host_os'] =~ /linux|darwin|bsd/
 
+    # If pid is provided, we check for descendants of that pid
+    # Otherwise we check for any test runner process in the system
     TEST_RUNNERS.any? do |runner|
-      system("pgrep -f #{runner} > #{File::NULL} 2>&1")
+      if pid
+        # Find all descendants of the given PID and check if any match the runner name
+        # We use 'ps -eo ppid,comm' to get parent-child relationships
+        # and search for the runner in the descendants
+        descendants = get_all_descendants(pid)
+        descendants.any? { |d_pid| process_matches_runner?(d_pid, runner) }
+      else
+        system_runner_running?(runner)
+      end
     end
+  end
+
+  def system_runner_running?(runner)
+    # Check for exact process name match (avoids false positives from pgrep -f)
+    return true if system("pgrep -x #{runner} > #{File::NULL} 2>&1")
+
+    # Check for runners invoked via interpreters, but only if runner appears as executable argument
+    # This avoids matching processes that just mention the runner in file paths or grep patterns
+    output = `ps ax -o comm,args 2>/dev/null`
+    return false if output.empty?
+
+    output.each_line do |line|
+      next if line.strip.empty?
+
+      parts = line.split(nil, 2)
+      next if parts.length < 2
+
+      comm = parts[0]
+      args = parts[1] || ''
+
+      # Only check interpreter processes
+      next unless %w[ruby node python].include?(comm)
+
+      # Runner must appear as an executable argument (after bundle exec, or as direct arg)
+      # Pattern ensures runner is a command, not part of a file path
+      next unless args.match?(/\b(?:bundle\s+exec\s+)?#{runner}(?:\s|$)/)
+
+      # Exclude processes that are searching/editing (grep, editors, etc.)
+      next if args.match?(/\b(?:grep|find|vim|nano|emacs|less|more|cat|head|tail|ag|rg)\s/)
+
+      return true
+    end
+    false
+  end
+
+  def get_all_descendants(parent_pid)
+    descendants = []
+    # Get all processes with their PPIDs
+    output = `ps -eo ppid,pid 2>/dev/null`
+    return [] if output.empty?
+
+    # Build a parent-to-children map
+    p_to_c = Hash.new { |h, k| h[k] = [] }
+    output.each_line.map(&:split).each do |ppid, pid|
+      next unless ppid && pid
+
+      p_to_c[ppid.to_i] << pid.to_i
+    end
+
+    # BFS to find all descendants
+    queue = [parent_pid.to_i]
+    while queue.any?
+      curr = queue.shift
+      children = p_to_c[curr]
+      if children
+        descendants.concat(children)
+        queue.concat(children)
+      end
+    end
+    descendants
+  end
+
+  def process_matches_runner?(pid, runner)
+    # Check if the command line of the process contains the runner name
+    cmdline = `ps -p #{pid} -o args= 2>/dev/null`.strip
+    cmdline.include?(runner)
   end
 
   def wrap_prompt(p)
@@ -188,27 +261,88 @@ class AgentExecutor
       output.include?('http/2 stream closed') || output.include?('Connection stalled')
   end
 
+  def run_with_timeout_monitoring(model, wrapped)
+    # Check if a test runner is already running in the system before starting the agent
+    if test_runner_running?
+      @display.timestamped_puts '⚠️  Test runner already running in system, no timeout applied'.yellow
+      return Open3.capture3('agent', '--print', '--model', model, wrapped)
+    end
+
+    test_runner_detected = false
+    execution_complete = false
+    process_pid = nil
+    timeout_disabled = false
+
+    monitor_thread = Thread.new do
+      loop do
+        sleep TEST_RUNNER_CHECK_INTERVAL
+        break if execution_complete
+
+        if process_pid && test_runner_running?(process_pid)
+          unless test_runner_detected
+            test_runner_detected = true
+            timeout_disabled = true
+            @display.timestamped_puts '⚠️  Test runner detected (child of agent), disabling timeout'.yellow
+          end
+        end
+      end
+    end
+
+    timeout_thread = Thread.new do
+      elapsed = 0
+      while elapsed < EXECUTION_TIMEOUT && !execution_complete
+        sleep TEST_RUNNER_CHECK_INTERVAL
+        elapsed += TEST_RUNNER_CHECK_INTERVAL
+        next if timeout_disabled || (process_pid && test_runner_running?(process_pid))
+
+        if elapsed >= EXECUTION_TIMEOUT && !execution_complete
+          @display.timestamped_puts "❌ Agent timed out after #{EXECUTION_TIMEOUT}s".red
+          Process.kill('TERM', process_pid) if process_pid
+          break
+        end
+      end
+    end
+
+    begin
+      Open3.popen2e('agent', '--print', '--model', model, wrapped) do |_stdin, stdout_stderr, wait_thr|
+        process_pid = wait_thr.pid
+        output = stdout_stderr.read
+        begin
+          status = wait_thr.value
+        rescue StandardError
+          status = Struct.new(:success?).new(false)
+        end
+        execution_complete = true
+        [output || '', '', status]
+      end
+    rescue Errno::ESRCH, Errno::ECHILD
+      execution_complete = true
+      [nil, nil, Struct.new(:success?).new(false)]
+    ensure
+      execution_complete = true
+      monitor_thread&.kill
+      timeout_thread&.kill
+    end
+  end
+
   def run(model, p, max_retries: 3, base_delay: 1)
     wrapped = wrap_prompt(p)
     retries = 0
 
     loop do
-      @display.timestamped_puts "Running: agent --model #{model} '#{p[0..50]}...'"
+      @display.timestamped_puts "Running: agent --model #{model} '#{p[0..50].gsub("\n", " ")}...'"
       stdout, stderr, status = nil
       begin
-        if test_runner_running?
-          stdout, stderr, status = Open3.capture3('agent', '--print', '--model', model, wrapped)
-        else
-          Timeout.timeout(EXECUTION_TIMEOUT) do
-            stdout, stderr, status = Open3.capture3('agent', '--print', '--model', model, wrapped)
-          end
+        stdout, stderr, status = run_with_timeout_monitoring(model, wrapped)
+        if status.nil? || !status.success?
+          return [false, "Timeout after #{EXECUTION_TIMEOUT}s"] if stdout.nil?
         end
-      rescue Timeout::Error
-        @display.timestamped_puts "❌ Agent timed out after #{EXECUTION_TIMEOUT}s".red
-        return [false, "Timeout after #{EXECUTION_TIMEOUT}s"]
+      rescue StandardError => e
+        @display.timestamped_puts "❌ Agent execution error: #{e.message}".red
+        return [false, "Execution error: #{e.message}"]
       end
 
-      output = stdout + stderr
+      output = (stdout || '') + (stderr || '')
       output.each_line { |line| @display.timestamped_puts line.chomp }
 
       return [status.success?, output] if status.success?
@@ -267,27 +401,31 @@ class VerificationHandler
   end
 
   def parse_no_res(n)
-    m = n.match(/\bNO\s*:?\s*(.+)/i)
+    m = n.match(/\bNO\s*:?\s*([\s\S]+)/i)
     [false, m ? m[1].strip : 'Failed']
   end
 
   def parse_yes_res(n)
-    m = n.match(/\bYES\s*:?\s*(.+)/i)
+    m = n.match(/\bYES\s*:?\s*([\s\S]+)/i)
     [true, m ? m[1].strip : 'Passed']
   end
 
   def run_verify_gpt(req)
     @display.timestamped_puts 'Verifying...'.blue
-    @display.timestamped_puts "Running: verify_gpt.rb '#{req[0..50]}...'"
+    @display.timestamped_puts "Running: verify_gpt.rb '#{req[0..50].gsub("\n", " ")}...'"
 
     stdout, stderr, status = Open3.capture3('ruby', @verify_gpt_path, req)
     output = stdout + stderr
+
+    # Always display the full output from verify_gpt.rb to ensure nothing is missed
     output.each_line { |line| @display.timestamped_puts line.chomp }
 
-    return [false, 'verify_gpt.rb failed'] unless status.success?
-
-    verified, desc = parse_res(stdout.strip)
-    [verified, desc || 'Failed']
+    if status.success?
+      verified, desc = parse_res(stdout.strip)
+      [verified, desc || 'Failed']
+    else
+      [false, 'verify_gpt.rb failed']
+    end
   end
 
   def run_verification(model, req)
