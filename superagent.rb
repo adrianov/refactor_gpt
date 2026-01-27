@@ -47,7 +47,6 @@ def read_interactive_request
 
     lines << line
   end
-
   lines.join("\n")
 end
 
@@ -71,10 +70,8 @@ def run_agent_command(model, prompt)
   cmd = "agent --print --model #{Shellwords.escape(model)} #{escaped_prompt}"
   timestamped_puts "Running: agent --print --model #{model} '#{prompt[0..50]}#{"..." if prompt.length > 50}'".green
   output = `#{cmd} 2>&1`
-  output.each_line do |line|
-    timestamped_puts line.chomp
-  end
-  [ $?.success?, output ]
+  output.each_line { |line| timestamped_puts line.chomp }
+  [$?.success?, output]
 end
 
 
@@ -113,28 +110,17 @@ def build_fix_prompt(user_request)
 end
 
 def parse_verification_response(response)
-  return [false, nil] unless response
+  return [false, nil] if response.nil? || response.strip.empty?
 
   normalized = response.strip
-  return [false, nil] if normalized.empty?
-
   upcased = normalized.upcase
   yes_match = normalized.match(/\bYES\s*:?\s*(.+)/i)
   no_match = normalized.match(/\bNO\s*:?\s*(.+)/i)
   yes_index = upcased.index(/\bYES\b/)
   no_index = upcased.index(/\bNO\b/)
 
-  if no_match && (!yes_index || (no_index && no_index < yes_index))
-    description = no_match[1].strip
-    return [false, description]
-  end
-
-  if yes_match && (!no_index || (yes_index && yes_index < no_index))
-    description = yes_match[1].strip
-    return [true, description]
-  end
-
-  # Fallback: if we see YES/NO without description, still parse it
+  return [false, no_match[1].strip] if no_match && (!yes_index || no_index < yes_index)
+  return [true, yes_match[1].strip] if yes_match && (!no_index || yes_index < no_index)
   return [true, "Verification passed"] if yes_index && (!no_index || yes_index < no_index)
   return [false, "Verification failed"] if no_index
 
@@ -147,12 +133,8 @@ def run_verification(model, user_request)
   timestamped_puts "Running: agent --print --model #{model} [verification prompt]".green
 
   output = `agent --print --model #{Shellwords.escape(model)} #{Shellwords.escape(verification_prompt)} 2>&1`
-  output.each_line do |line|
-    timestamped_puts line.chomp
-  end
-  success = $?.success?
-
-  return [false, nil, output] unless success
+  output.each_line { |line| timestamped_puts line.chomp }
+  return [false, nil, output] unless $?.success?
 
   verified, description = parse_verification_response(output.strip)
   [verified, description, output]
@@ -172,8 +154,7 @@ def display_start_message(user_request)
 end
 
 def display_attempt_header(model, index)
-  attempt = index + 1
-  timestamped_puts "--- Attempt #{attempt}/#{MODELS.size}: Using #{model} ---".blue
+  timestamped_puts "--- Attempt #{index + 1}/#{MODELS.size}: Using #{model} ---".blue
   timestamped_puts ""
 end
 
@@ -188,47 +169,43 @@ def attempt_retry_with_fix(model, user_request)
   run_verification(model, user_request)
 end
 
+def display_verification_result(verified, description, context = "")
+  prefix = verified ? "✓ Verification passed" : "✗ Verification failed"
+  suffix = context.empty? ? "" : " #{context}"
+
+  if description && !description.empty?
+    message = "#{prefix}#{suffix}: #{description}"
+  else
+    default = verified ? "Changes solve the request with no new bugs." : (context.empty? ? "Retrying once with fix instruction..." : "Trying next model...")
+    message = "#{prefix}#{suffix}! #{default}"
+  end
+
+  color = verified ? :green : :yellow
+  timestamped_puts message.send(color)
+end
+
+def handle_verification_success(description, context = "")
+  display_verification_result(true, description, context)
+  display_total_runtime
+  exit 0
+end
+
 def process_model_attempt(model, user_request)
   verified, description, verification_output = run_verification(model, user_request)
   timestamped_puts ""
 
-  if verified
-    if description && !description.empty?
-      timestamped_puts "✓ Verification passed: #{description}".green
-    else
-      timestamped_puts "✓ Verification passed! Changes solve the request with no new bugs.".green
-    end
-    display_total_runtime
-    exit 0
-  end
+  return handle_verification_success(description) if verified
 
-  if description && !description.empty?
-    timestamped_puts "✗ Verification failed: #{description}".yellow
-  else
-    timestamped_puts "✗ Verification failed. Retrying once with fix instruction...".yellow
-  end
+  display_verification_result(false, description)
   timestamped_puts ""
 
   verified, fix_description, fix_output = attempt_retry_with_fix(model, user_request)
   timestamped_puts ""
 
-  if verified
-    if fix_description && !fix_description.empty?
-      timestamped_puts "✓ Verification passed after retry: #{fix_description}".green
-    else
-      timestamped_puts "✓ Verification passed after retry! Changes solve the request with no new bugs.".green
-    end
-    display_total_runtime
-    exit 0
-  end
+  return handle_verification_success(fix_description, "after retry") if verified
 
-  if fix_description && !fix_description.empty?
-    timestamped_puts "✗ Verification failed after retry: #{fix_description}".yellow
-  else
-    timestamped_puts "✗ Verification failed after retry. Trying next model...".yellow
-  end
+  display_verification_result(false, fix_description, "after retry")
   timestamped_puts ""
-  
   [false, fix_output || verification_output]
 end
 
@@ -238,9 +215,7 @@ def handle_agent_failure
 end
 
 def format_duration(seconds)
-  minutes = (seconds / 60).to_i
-  remaining_seconds = (seconds % 60).to_i
-  "#{minutes}m #{remaining_seconds}s"
+  "#{(seconds / 60).to_i}m #{(seconds % 60).to_i}s"
 end
 
 def display_total_runtime
