@@ -46,15 +46,14 @@ class OpenAi
       assessment = perform_assessment(file_codes, current_file_codes, user_instruction, client: client)
 
       if assessment["warnings"]&.any? && refactored_files.any?
-        fixed_files = attempt_to_fix_warnings(client, current_file_codes, assessment["warnings"], user_instruction)
-        unless fixed_files.empty?
-          fixed_files.each { |path, code| current_file_codes[path] = code }
-          assessment = perform_assessment(file_codes, current_file_codes, user_instruction, client: client)
-        end
+        current_file_codes = fix_warnings_if_needed(client, file_codes, current_file_codes, assessment, user_instruction)
+        assessment = perform_assessment(file_codes, current_file_codes, user_instruction, client: client)
       end
 
-      break if assessment["satisfied"] && (assessment["warnings"].nil? || assessment["warnings"].empty?)
+      break if satisfied?(assessment)
       break if last_stage?(index)
+
+      puts "Proceeding to higher agent as task is not fully solved or critical warnings exist.".yellow
     end
 
     warn "Warning: All stages failed to produce output. Returning original files." unless any_stage_successful
@@ -63,11 +62,32 @@ class OpenAi
 
   private
 
+  def fix_warnings_if_needed(client, original_file_codes, current_file_codes, assessment, user_instruction)
+    fixed_files = attempt_to_fix_warnings(client, current_file_codes, assessment["warnings"], user_instruction)
+    return current_file_codes if fixed_files.empty?
+
+    fixed_files.each { |path, code| current_file_codes[path] = code }
+    current_file_codes
+  end
+
+  def satisfied?(assessment)
+    assessment["satisfied"] && !critical_warnings?(assessment["warnings"])
+  end
+
+  def critical_warnings?(warnings)
+    return false if warnings.nil? || warnings.empty?
+
+    warnings.any? { |w| w["critical"] == true || (w["probability"] || 0) > 0.8 }
+  end
+
   def attempt_to_fix_warnings(client, current_file_codes, warnings, user_instruction)
     model_name = client.instance_variable_get(:@model)
     puts "Attempting to fix warnings with #{model_name}...".blue
 
-    warning_text = warnings.map { |w| "- #{w["message"]} (probability: #{w["probability"]})" }.join("\n")
+    warning_text = warnings.map do |w|
+      critical = w["critical"] ? " [CRITICAL]" : ""
+      "- #{w["message"]} (probability: #{w["probability"]})#{critical}"
+    end.join("\n")
     fix_instruction = "Fix these issues from the previous refactoring step:\n#{warning_text}"
     fix_instruction += "\n\nOriginal instruction: #{user_instruction}" if user_instruction
 
@@ -85,13 +105,7 @@ class OpenAi
     puts "--- Assessing if instruction is fulfilled (#{model_name}) ---".blue
 
     prompt = build_assessment_prompt(original_file_codes, current_file_codes, user_instruction)
-    messages = [
-      {role: "system", content: "You are an expert code reviewer. Assess if the user's refactoring instruction " \
-                               "has been fully fulfilled. Respond ONLY with a JSON object: " \
-                               "{\"satisfied\": true/false, \"reason\": \"brief explanation\", " \
-                               "\"warnings\": [{\"message\": \"...\", \"probability\": 0..1}]}"},
-      {role: "user", content: prompt}
-    ]
+    messages = assessment_messages(prompt)
 
     response = client.ask(messages, json: true, title: "Assessing refactoring".cyan)
     result = ResponseParser.extract_json(response)
@@ -103,6 +117,16 @@ class OpenAi
     {"satisfied" => false, "reason" => "Assessment failed: #{e.message}", "warnings" => []}
   end
 
+  def assessment_messages(prompt)
+    [
+      {role: "system", content: "You are an expert code reviewer. Assess if the user's refactoring instruction " \
+                               "has been fully fulfilled. Respond ONLY with a JSON object: " \
+                               "{\"satisfied\": true/false, \"reason\": \"brief explanation\", " \
+                               "\"warnings\": [{\"message\": \"...\", \"probability\": 0..1, \"critical\": true/false}]}"},
+      {role: "user", content: prompt}
+    ]
+  end
+
   def display_assessment_result(result)
     status_color = result["satisfied"] ? :green : :yellow
     puts "Assessment: #{result["reason"]}".colorize(status_color)
@@ -112,7 +136,8 @@ class OpenAi
     puts "Warnings:".yellow
     result["warnings"].each do |warning|
       prob = warning["probability"] || 0
-      puts "  - #{warning["message"]} (probability: #{prob})".yellow
+      critical = warning["critical"] ? " [CRITICAL]".red : ""
+      puts "  - #{warning["message"]} (probability: #{prob})#{critical}".yellow
     end
   end
 
@@ -125,29 +150,35 @@ class OpenAi
       original_code = original_file_codes[path]
       next if original_code == current_code
 
-      prompt += generate_diff(path, original_code, current_code)
-      prompt += "\n"
+      prompt += "#{generate_diff(path, original_code, current_code)}\n"
     end
     prompt
   end
 
   def generate_diff(path, original, current)
     Tempfile.create(["original", File.extname(path)]) do |f1|
-      f1.binmode
-      f1.write(original)
-      f1.close
+      f1_setup(f1, original)
       Tempfile.create(["current", File.extname(path)]) do |f2|
-        f2.binmode
-        f2.write(current)
-        f2.close
+        f2_setup(f2, current)
         diff = `diff -u #{Shellwords.shellescape(f1.path)} #{Shellwords.shellescape(f2.path)}`
-        # Clean up the diff header to show the actual filename
         diff.sub(/^--- .*\n\+\+\+ .*\n/, "--- a/#{path}\n+++ b/#{path}\n")
       end
     end
   rescue => e
     warn "Warning: Diff generation failed for #{path}: #{e.message}"
     "--- a/#{path}\n+++ b/#{path}\n@@ -0,0 +0,0 @@\n(Diff failed, original and refactored versions differ)\n"
+  end
+
+  def f1_setup(f1, original)
+    f1.binmode
+    f1.write(original)
+    f1.close
+  end
+
+  def f2_setup(f2, current)
+    f2.binmode
+    f2.write(current)
+    f2.close
   end
 
   def process_stage(client, index, current_file_codes, user_instruction)
@@ -167,13 +198,19 @@ class OpenAi
   def setup_config(model)
     @base_url = fetch_config("REFACTOR_BASE_URL", "OPENAI_BASE_URL")
     @api_key = fetch_config("REFACTOR_ACCESS_TOKEN", "OPENAI_ACCESS_TOKEN")
-    @models = [
+    @models = load_models(model)
+  end
+
+  def load_models(model)
+    models = [
       fetch_env_var("REFACTOR_MODEL_1"),
       fetch_env_var("REFACTOR_MODEL_2"),
       fetch_env_var("REFACTOR_MODEL_3")
     ].compact
 
-    @models = [model || fetch_env_var("DEFAULT_MODEL") || OpenAiClient::DEFAULT_MODEL] if @models.empty?
+    return models unless models.empty?
+
+    [model || fetch_env_var("DEFAULT_MODEL") || OpenAiClient::DEFAULT_MODEL]
   end
 
   def fetch_config(primary, secondary)
@@ -218,12 +255,11 @@ class OpenAi
 
   def build_system_instruction
     agents_content = load_agents_file
-    has_agents = !agents_content.empty?
-
     parts = [base_system_instruction]
-    parts << "Follow Ruby development guidelines from AGENTS.md." if has_agents
-    parts << agents_guideline_section(agents_content) if has_agents
+    return parts.join if agents_content.empty?
 
+    parts << "Follow Ruby development guidelines from AGENTS.md."
+    parts << agents_guideline_section(agents_content)
     parts.join
   end
 
@@ -347,7 +383,12 @@ class RefactorGptRunner
     validate_files
 
     file_codes = read_files
+    process_refactoring(file_codes)
+  end
 
+  private
+
+  def process_refactoring(file_codes)
     raw_response, elapsed_time = with_timing do
       OpenAi.new(debug: @debug).refactor(file_codes, user_instruction).to_s
     end
@@ -355,8 +396,6 @@ class RefactorGptRunner
     refactored_files = ResponseParser.parse_files_from_response(raw_response, @file_paths)
     FileProcessor.new(file_codes).process_refactored_files(refactored_files, elapsed_time)
   end
-
-  private
 
   def with_timing
     start_time = Time.now
