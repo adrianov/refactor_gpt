@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+SCRIPT_DIR = File.expand_path(File.dirname(__FILE__)).freeze
+
 require_relative "lib/openai_client"
 require_relative "lib/gemini_client"
 require_relative "lib/completion_notifier"
@@ -104,7 +106,7 @@ module Utility
     end
   end
 
-  def self.valid_file_path?(path, base_dir)
+  def self.valid_file_path?(path, _base_dir)
     File.file?(path)
   end
 
@@ -217,12 +219,7 @@ module Utility
   end
 
   def self.load_env_vars
-    # First try project root (one level up from lib/)
-    env_file_path = File.join(File.dirname(__FILE__), ".env")
-
-    # Fallback to current directory if not found
-    env_file_path = File.join(Dir.pwd, ".env") unless File.exist?(env_file_path)
-
+    env_file_path = File.join(SCRIPT_DIR, ".env")
     return {} unless File.exist?(env_file_path)
 
     File.foreach(env_file_path).with_object({}) do |line, h|
