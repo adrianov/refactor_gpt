@@ -55,18 +55,35 @@ class OpenAiClient
     title ||= @progress_title
     return ask_with_progress(messages, json: json, title: title) if title
 
-    retry_with_backoff do
-      body = build_request_body(messages, json: json)
-      debug_request(body) if @debug
+    execute_with_network_retry do
+      retry_with_backoff do
+        body = build_request_body(messages, json: json)
+        debug_request(body) if @debug
 
-      response = make_api_request(body)
-      handle_response_errors(response)
-      answer = extract_answer(response)
-      debug_response(answer) if @debug
-      answer
+        response = make_api_request(body)
+        handle_response_errors(response)
+        answer = extract_answer(response)
+        debug_response(answer) if @debug
+        answer
+      end
     end
   rescue HTTPX::Error => e
-    handle_http_error(e)
+    if is_network_resource_error?(e.message.to_s)
+      execute_with_network_retry do
+        retry_with_backoff do
+          body = build_request_body(messages, json: json)
+          debug_request(body) if @debug
+
+          response = make_api_request(body)
+          handle_response_errors(response)
+          answer = extract_answer(response)
+          debug_response(answer) if @debug
+          answer
+        end
+      end
+    else
+      handle_http_error(e)
+    end
   rescue Oj::ParseError => e
     handle_parse_error(e, response)
   end
@@ -144,7 +161,25 @@ class OpenAiClient
   end
 
   def is_network_resource_error?(error_message)
-    error_message.include?("resource_exhausted") || error_message.include?("Connection stalled")
+    error_message.include?("resource_exhausted") || error_message.include?("Connection stalled") ||
+      error_message.include?("CANCEL") || error_message.include?("canceled") ||
+      error_message.include?("stream closed") || error_message.include?("0x8")
+  end
+
+  def execute_with_network_retry(max_retries: 3, base_delay: 1)
+    retries = 0
+    begin
+      yield
+    rescue NetworkResourceError => e
+      retries += 1
+      if retries <= max_retries
+        handle_network_resource_retry(e, retries, max_retries, base_delay)
+        retry
+      else
+        warn "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}"
+        exit 1
+      end
+    end
   end
 
   def handle_rate_limit_retry(error, retries, max_retries, base_delay)
@@ -234,6 +269,10 @@ class OpenAiClient
       raise NetworkResourceError.new("Network/resource error: #{error_message}")
     end
 
+    if response&.body && is_network_resource_error?(response.body.to_s)
+      raise NetworkResourceError.new("Network/resource error: #{response.body}")
+    end
+
     pretty_print_error("API Error", response.status, response.body)
     exit 1
   end
@@ -273,6 +312,13 @@ class OpenAiClient
     error_message = extract_error_message_from_response_object(response)
     if error_message && is_network_resource_error?(error_message)
       raise NetworkResourceError.new("Network/resource error: #{error_message}")
+    end
+
+    if response.respond_to?(:response) && response.response.respond_to?(:body) && response.response.body
+      response_body = response.response.body.to_s
+      if is_network_resource_error?(response_body)
+        raise NetworkResourceError.new("Network/resource error: #{response_body}")
+      end
     end
 
     error_details = format_error_response(response)
@@ -353,9 +399,17 @@ class OpenAiClient
   end
 
   def ask_with_progress(messages, json: false, title: nil)
-    setup_progress_tracking(messages, json: json, title: title)
+    execute_with_network_retry do
+      setup_progress_tracking(messages, json: json, title: title)
+    end
   rescue HTTPX::Error => e
-    handle_http_error(e)
+    if is_network_resource_error?(e.message.to_s)
+      execute_with_network_retry do
+        setup_progress_tracking(messages, json: json, title: title)
+      end
+    else
+      handle_http_error(e)
+    end
   rescue Oj::ParseError => e
     handle_parse_error(e, response)
   end
@@ -409,8 +463,10 @@ class OpenAiClient
 
   def handle_http_error(error)
     error_message = error.message.to_s
-    is_stream_cancel = error_message.include?("CANCEL") || error_message.include?("canceled") ||
-                       error_message.include?("stream closed") || error_message.include?("0x8")
+
+    if is_network_resource_error?(error_message)
+      raise NetworkResourceError.new("Network/resource error: #{error.message}")
+    end
 
     error_type = case error
     when HTTPX::Connection::HTTP2::GoawayError
@@ -422,14 +478,10 @@ class OpenAiClient
     when HTTPX::ConnectionError
       "Connection Failed"
     else
-      is_stream_cancel ? "Stream Cancelled (HTTP/2)" : error.class.name.split("::").last
+      error.class.name.split("::").last
     end
 
-    if is_stream_cancel
-      pretty_print_error(error_type, "Network Error", "HTTP/2 stream was cancelled (error code CANCEL/0x8). This may indicate rate limiting, API quota limits, resource limits, or network issues.")
-    else
-      pretty_print_error(error_type, "Network Error", error.message)
-    end
+    pretty_print_error(error_type, "Network Error", error.message)
     exit 1
   end
 
