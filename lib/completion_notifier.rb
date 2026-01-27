@@ -60,6 +60,8 @@ module CompletionNotifier
   end
 
   def self.setup_exit_hook
+    return if @hook_setup
+    @hook_setup = true
     @script_dir = File.dirname(File.expand_path($PROGRAM_NAME))
 
     trap("EXIT") do |status|
@@ -96,6 +98,7 @@ module CompletionNotifier
   end
 
   def self.wrap_main
+    setup_exit_hook
     yield
   rescue SystemExit => e
     set_exit_status(e.status)
