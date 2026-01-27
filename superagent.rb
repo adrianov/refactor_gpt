@@ -23,6 +23,7 @@ require 'rbconfig'
 require 'shellwords'
 require 'json'
 require_relative "lib/agents_file_handler"
+require_relative "lib/diff_processor"
 
 # Handles all output formatting and display operations
 class Display
@@ -170,7 +171,7 @@ end
 
 # Handles agent command execution with retry logic
 class AgentExecutor
-  EXECUTION_TIMEOUT = 300
+  EXECUTION_TIMEOUT = 30
   TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
   TEST_RUNNER_CHECK_INTERVAL = 2
 
@@ -340,6 +341,7 @@ class AgentExecutor
     process_pid = nil
     timeout_disabled = false
     timed_out = false
+    last_chunk_time = nil
 
     monitor_thread = Thread.new do
       loop do
@@ -357,15 +359,15 @@ class AgentExecutor
     end
 
     timeout_thread = Thread.new do
-      elapsed = 0
-      while elapsed < EXECUTION_TIMEOUT && !execution_complete
+      while !execution_complete
         sleep TEST_RUNNER_CHECK_INTERVAL
-        elapsed += TEST_RUNNER_CHECK_INTERVAL
         next if timeout_disabled || (process_pid && test_runner_running?(process_pid))
+        next if last_chunk_time.nil?
 
-        if elapsed >= EXECUTION_TIMEOUT && !execution_complete
+        time_since_last_chunk = Time.now - last_chunk_time
+        if time_since_last_chunk >= EXECUTION_TIMEOUT && !execution_complete
           timed_out = true
-          @display.timestamped_puts "❌ Agent timed out after #{EXECUTION_TIMEOUT}s".red
+          @display.timestamped_puts "❌ Agent timed out after #{EXECUTION_TIMEOUT}s without receiving data".red
           Process.kill('TERM', process_pid) if process_pid
           sleep 2
           Process.kill('KILL', process_pid) if process_pid && !execution_complete
@@ -378,6 +380,7 @@ class AgentExecutor
       cmd = build_and_display_command('--model', model, wrapped)
       Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
         process_pid = wait_thr.pid
+        last_chunk_time = Time.now
         raw_output = ''
         final_result = ''
         stdin.close
@@ -390,6 +393,7 @@ class AgentExecutor
           if ready
             begin
               chunk = stdout_stderr.readpartial(4096)
+              last_chunk_time = Time.now
               raw_output += chunk
               line_buffer += chunk
 
@@ -412,6 +416,7 @@ class AgentExecutor
             begin
               remaining = stdout_stderr.read
               if remaining
+                last_chunk_time = Time.now
                 raw_output += remaining
                 line_buffer += remaining
 
@@ -438,7 +443,8 @@ class AgentExecutor
           final_result += "\n[Process terminated due to timeout]"
         else
           remaining = stdout_stderr.read rescue ''
-          if remaining
+          if remaining && !remaining.empty?
+            last_chunk_time = Time.now
             raw_output += remaining
             remaining.each_line do |line|
               type, text = parse_json_stream_line(line.strip)
@@ -536,9 +542,12 @@ end
 class VerificationHandler
   include AgentsFileHandler
 
+  MAX_CONTENT_SIZE_KB = 100
+
   def initialize(display, agent_executor)
     @display = display
     @agent_executor = agent_executor
+    @diff_processor = DiffProcessor.new
   end
 
   def build_fix_prompt(req)
@@ -734,21 +743,28 @@ class VerificationHandler
   end
 
   def build_verification_user_content(user_request, status_output, diff_output, file_contents = '')
-    content_parts = [
-      "User request: #{user_request}\n\n"
-    ]
+    content_parts = []
+    current_size_bytes = 0
+    max_size_bytes = MAX_CONTENT_SIZE_KB * 1024
+
+    request_text = "User request: #{user_request}\n\n"
+    current_size_bytes = append_section(content_parts, current_size_bytes, max_size_bytes, request_text)
 
     if git_repo?
-      content_parts << "Here is the git status:\n#{status_output.strip}\n\n"
+      status_text = "Here is the git status:\n#{status_output.strip}\n\n"
+      current_size_bytes = append_section(content_parts, current_size_bytes, max_size_bytes, status_text)
+
       unless diff_output.strip.empty?
-        content_parts << "Here is the git diff for all changes:\n#{diff_output.strip}\n"
+        current_size_bytes = append_diff_section(content_parts, current_size_bytes, max_size_bytes, diff_output, status_output)
       end
     else
-      content_parts << "No git repository detected. Here are the file contents:\n\n"
+      no_git_text = "No git repository detected. Here are the file contents:\n\n"
+      current_size_bytes = append_section(content_parts, current_size_bytes, max_size_bytes, no_git_text)
+
       unless file_contents.strip.empty?
-        content_parts << file_contents.strip
+        current_size_bytes = append_file_contents_section(content_parts, current_size_bytes, max_size_bytes, file_contents)
       else
-        content_parts << "No files found to verify."
+        current_size_bytes = append_section(content_parts, current_size_bytes, max_size_bytes, "No files found to verify.")
       end
     end
 
@@ -893,6 +909,53 @@ class VerificationHandler
     return [false, nil] unless success
 
     run_verification(model, req)
+  end
+
+  private
+
+  def append_section(parts, current_size_bytes, max_size_bytes, text)
+    return current_size_bytes if text.empty? || current_size_bytes + text.bytesize > max_size_bytes
+
+    parts << text
+    current_size_bytes + text.bytesize
+  end
+
+  def append_diff_section(parts, current_size_bytes, max_size_bytes, diff_output, status_output)
+    diff_text = "Here is the git diff for all changes:\n\n"
+    remaining = max_size_bytes - current_size_bytes - diff_text.bytesize
+    if remaining > 0
+      sorted_diff = @diff_processor.build_sorted_diff(diff_output, status_output, remaining)
+      diff_text += sorted_diff
+      parts << diff_text
+      current_size_bytes + diff_text.bytesize
+    else
+      parts << "#{diff_text}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_KB} KB limit)\n"
+      current_size_bytes
+    end
+  end
+
+  def append_file_contents_section(parts, current_size_bytes, max_size_bytes, file_contents)
+    remaining = max_size_bytes - current_size_bytes
+    return current_size_bytes if remaining <= 0
+
+    if file_contents.bytesize <= remaining
+      parts << file_contents.strip
+      current_size_bytes + file_contents.bytesize
+    else
+      truncated = truncate_file_contents(file_contents, remaining)
+      parts << truncated
+      current_size_bytes + truncated.bytesize
+    end
+  end
+
+  def truncate_file_contents(file_contents, max_bytes)
+    return "" if max_bytes <= 0
+
+    truncated = file_contents.byteslice(0, max_bytes)
+    last_newline = truncated.rindex("\n")
+    return truncated if last_newline.nil?
+
+    truncated.byteslice(0, last_newline + 1) + "\n... (file contents truncated due to size limit)\n"
   end
 end
 
