@@ -663,6 +663,191 @@ def display_commit_total_stats(file_stats, _files)
   puts "  Total: #{total_changes} changes (#{total_additions} additions, #{total_deletions} deletions)".yellow
 end
 
+def check_agent_installed
+  system("agent --version > #{File::NULL} 2>&1")
+end
+
+def run_rubocop_warnings
+  output = `rubocop --format json 2>/dev/null`
+  return [] unless $?.success?
+
+  begin
+    result = Oj.load(output)
+    offenses = result["files"]&.flat_map { |file| file["offenses"] || [] } || []
+    offenses.map do |offense|
+      {
+        "file" => offense["location"]["file_path"],
+        "line" => offense["location"]["start_line"],
+        "cop" => offense["cop_name"],
+        "message" => offense["message"],
+        "severity" => offense["severity"]
+      }
+    end
+  rescue Oj::ParseError
+    []
+  end
+end
+
+def display_single_rubocop_warning(warning, idx)
+  file = warning["file"]
+  line = warning["line"]
+  cop = warning["cop"]
+  message = warning["message"]
+  severity = warning["severity"]
+  severity_color = severity == "error" ? :red : :yellow
+  puts "  [#{idx + 1}] #{file}:#{line} - #{cop}".colorize(severity_color)
+  puts "      #{message}".yellow
+end
+
+def display_rubocop_warnings(warnings)
+  return if warnings.empty?
+
+  puts "\nRubocop warnings:".yellow
+  warnings.each_with_index { |warning, idx| display_single_rubocop_warning(warning, idx) }
+  puts
+end
+
+def parse_warning_indices(input, warnings_size)
+  input.split.map(&:to_i).select { |n| n >= 1 && n <= warnings_size }.map { |n| n - 1 }.uniq
+end
+
+def display_warning_selection_prompt
+  puts "Select warnings to fix:".white
+  puts "  - Enter numbers separated by spaces (e.g., '1 3 5')".white
+  puts "  - Enter 'all' to fix all warnings".white
+  puts "  - Enter 'consecutive' to fix warnings one by one".white
+  puts "  - Enter 'skip' to skip fixing warnings".white
+end
+
+def parse_selection_input(input, warnings_size)
+  return [] if input == "skip"
+  return (0...warnings_size).to_a if input == "all"
+  return :consecutive if input == "consecutive"
+
+  parse_warning_indices(input, warnings_size)
+end
+
+def get_warning_selection(warnings)
+  return [] if warnings.empty?
+
+  display_warning_selection_prompt
+  input = $stdin.gets.to_s.chomp.strip.downcase
+  parse_selection_input(input, warnings.size)
+end
+
+def build_warning_prompt(warning)
+  file = warning["file"]
+  line = warning["line"]
+  cop = warning["cop"]
+  message = warning["message"]
+
+  "Fix the following Rubocop warning in #{file} at line #{line}:\n" \
+  "Cop: #{cop}\n" \
+  "Message: #{message}\n" \
+  "Fix only this specific warning without changing other code."
+end
+
+def build_all_warnings_prompt(selected_warnings)
+  prompt_parts = ["Fix the following Rubocop warnings:\n"]
+  selected_warnings.each_with_index do |warning, idx|
+    file = warning["file"]
+    line = warning["line"]
+    cop = warning["cop"]
+    message = warning["message"]
+    prompt_parts << "#{idx + 1}. #{file}:#{line} - #{cop}"
+    prompt_parts << "   Message: #{message}\n"
+  end
+  prompt_parts << "\nFix all these warnings without changing other code."
+  prompt_parts.join("\n")
+end
+
+def fix_warning_with_agent(warning)
+  prompt = build_warning_prompt(warning)
+  cmd = ["agent", "--force", prompt].map { |arg| Shellwords.escape(arg) }.join(" ")
+  puts "Running: #{cmd}".green
+  system(cmd)
+end
+
+def display_warnings_summary(selected_warnings)
+  puts "Fixing #{selected_warnings.size} warning(s) at once...".cyan
+  puts "Warnings to fix:".yellow
+  selected_warnings.each_with_index do |warning, idx|
+    puts "  #{idx + 1}. #{warning['file']}:#{warning['line']} - #{warning['cop']}".yellow
+  end
+end
+
+def fix_all_warnings_with_agent(selected_warnings)
+  prompt = build_all_warnings_prompt(selected_warnings)
+  display_warnings_summary(selected_warnings)
+  cmd = ["agent", "--force", prompt].map { |arg| Shellwords.escape(arg) }.join(" ")
+  puts "Running: agent --force [prompt]".green
+  system(cmd)
+end
+
+def display_consecutive_warning(warning, idx, total)
+  puts "\nWarning #{idx + 1}/#{total}: #{warning['file']}:#{warning['line']} - #{warning['cop']}".cyan
+  puts "  #{warning['message']}".yellow
+end
+
+def should_fix_warning?
+  puts "Fix this warning? (y/N/skip)".white
+  answer = $stdin.gets.to_s.chomp.downcase
+  return :skip if answer == "skip"
+  return :yes if answer == "y"
+
+  :no
+end
+
+def fix_warnings_consecutively(warnings)
+  warnings.each_with_index do |warning, idx|
+    display_consecutive_warning(warning, idx, warnings.size)
+    decision = should_fix_warning?
+    break if decision == :skip
+    next if decision == :no
+
+    fix_warning_with_agent(warning)
+  end
+end
+
+def fix_warnings_by_indices(warnings, selected_indices)
+  selected_warnings = selected_indices.map { |idx| warnings[idx] }
+  fix_all_warnings_with_agent(selected_warnings)
+end
+
+def check_remaining_warnings
+  puts "\nRe-checking rubocop warnings...".cyan
+  remaining_warnings = run_rubocop_warnings
+  if remaining_warnings.any?
+    puts "Remaining warnings: #{remaining_warnings.size}".yellow
+    display_rubocop_warnings(remaining_warnings)
+  else
+    puts "All selected warnings fixed!".green
+  end
+end
+
+def handle_rubocop_warnings
+  return false unless check_agent_installed
+
+  warnings = run_rubocop_warnings
+  return false if warnings.empty?
+
+  display_rubocop_warnings(warnings)
+  selection = get_warning_selection(warnings)
+
+  return false if selection == []
+
+  if selection == :consecutive
+    fix_warnings_consecutively(warnings)
+  else
+    fix_warnings_by_indices(warnings, selection)
+  end
+
+  check_remaining_warnings
+  true
+end
+
+ANALYSIS_SOUND_THRESHOLD = 5.0
+
 def get_user_confirmation
   puts "Do you want to run these git add/commit commands? (y/N)".white
   answer = $stdin.gets.to_s.chomp.downcase
@@ -673,6 +858,101 @@ def get_user_confirmation
   end
 end
 
+def prepare_untracked_files
+  all_untracked = `git ls-files --others --exclude-standard`.split("\n")
+  additional_exclusions = [
+    "*.log", "*.tmp", "*.temp", "*.bak", "*.swp", "*.swo",
+    "*.pyc", "*.pyo", "*.class", "*.jar", "*.war", "*.ear",
+    "*.zip", "*.tar.gz", "*.tgz", "*.rar", "*.exe", "*.dll",
+    "*.so", "*.dylib", "*.bin", "*.dat", "*.orig", "*.rej",
+    ".DS_Store", "Thumbs.db"
+  ]
+  files_to_add = all_untracked.reject do |file|
+    additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
+  end
+
+  return if files_to_add.empty?
+
+  add_cmd = ["git", "add", "-N", *files_to_add].map { |p| Shellwords.escape(p) }.join(" ")
+  puts "Running: #{add_cmd}".green
+  system("#{add_cmd} 2>/dev/null")
+end
+
+def check_for_changes(status_output)
+  return true if status_output.lines.count { |line| !line.start_with?("##") }.positive?
+
+  puts "No changes to commit.".yellow
+  false
+end
+
+def show_git_diff_if_needed(show_diff, recent_commands)
+  return unless show_diff
+  return if recent_commands.lines.last&.include?("git diff")
+
+  system("git diff")
+  puts
+end
+
+def get_diff_output
+  diff_output = `git diff -U500`
+  unless $?.success?
+    warn "Failed to capture diff for analysis".red
+    exit 1
+  end
+  diff_output
+end
+
+def play_completion_sound(elapsed)
+  return unless elapsed > ANALYSIS_SOUND_THRESHOLD
+
+  sound_file = "/System/Library/Sounds/Glass.aiff"
+  system("afplay #{Shellwords.escape(sound_file)}") if File.exist?(sound_file)
+  print "\e]0;✅ Commit Plan Done\a"
+end
+
+def call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
+  start_time = Time.now
+  plan = OpenAi.new(debug: debug_mode).commit_plan(
+    status_output,
+    diff_output,
+    cli_hint,
+    recent_commits,
+    recent_commands
+  )
+  elapsed = Time.now - start_time
+  play_completion_sound(elapsed)
+  plan
+end
+
+def extract_plan_results(plan, status_output)
+  commits = plan["commits"] || []
+  return nil if commits.empty?
+
+  warnings = plan["warnings"] || []
+  quality_assessment = plan["quality_assessment"]
+  excluded_files = plan["excluded_files"] || []
+  status_filenames = extract_porcelain_filenames(status_output)
+  commits = fix_json_truncation_in_commits(commits, status_filenames)
+
+  {
+    "commits" => commits,
+    "warnings" => warnings,
+    "quality_assessment" => quality_assessment,
+    "excluded_files" => excluded_files
+  }
+end
+
+def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
+  status_output = run_cmd("git status --porcelain --branch")
+  return nil unless check_for_changes(status_output)
+
+  prepare_untracked_files
+  show_git_diff_if_needed(show_diff, recent_commands)
+  diff_output = get_diff_output
+  plan = call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
+  extract_plan_results(plan, status_output)
+end
+
 # Entry point
 debug_mode, cli_hint = parse_arguments(ARGV)
 
@@ -680,85 +960,30 @@ debug_mode, cli_hint = parse_arguments(ARGV)
 git_root = get_git_root
 Dir.chdir(git_root)
 
-status_output = run_cmd("git status --porcelain --branch")
-
-if status_output.lines.count { |line| !line.start_with?("##") }.zero?
-  puts "No changes to commit.".yellow
-  exit 0
-end
-
 recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
-# Get all untracked files and filter out ignored ones before adding to tracking
-# git ls-files --others --exclude-standard already respects .gitignore and other standard exclusions
-all_untracked = `git ls-files --others --exclude-standard`.split("\n")
+loop do
+  plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
+  break if plan_result.nil?
 
-# Additional patterns to exclude from git add -N (temporary, binary, debug files)
-additional_exclusions = [
-  "*.log", "*.tmp", "*.temp", "*.bak", "*.swp", "*.swo",
-  "*.pyc", "*.pyo", "*.class", "*.jar", "*.war", "*.ear",
-  "*.zip", "*.tar.gz", "*.tgz", "*.rar", "*.exe", "*.dll",
-  "*.so", "*.dylib", "*.bin", "*.dat", "*.orig", "*.rej",
-  ".DS_Store", "Thumbs.db"
-]
+  commits = plan_result["commits"]
+  warnings = plan_result["warnings"]
+  quality_assessment = plan_result["quality_assessment"]
+  excluded_files = plan_result["excluded_files"]
 
-# Filter out files matching additional exclusion patterns
-files_to_add = all_untracked.reject do |file|
-  additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
+  warnings_fixed = handle_rubocop_warnings
+
+  if warnings_fixed
+    puts "\nFiles have changed after fixing warnings. Re-planning commits...".cyan
+    recent_commands = get_recent_commands
+    next
+  end
+
+  display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
+  execute_commits(commits)
+  break
 end
-
-unless files_to_add.empty?
-  add_cmd = ["git", "add", "-N", *files_to_add].map { |p| Shellwords.escape(p) }.join(" ")
-  puts "Running: #{add_cmd}".green
-  system("#{add_cmd} 2>/dev/null")
-end
-
-# Show all changes in git diff (no exclusions) unless last command was git diff
-unless recent_commands.lines.last&.include?("git diff")
-  system("git diff")
-  puts
-end
-
-# Capture diff output for OpenAI analysis with 500 lines context
-diff_cmd = "git diff -U500"
-diff_output = `#{diff_cmd}`
-unless $?.success?
-  warn "Failed to capture diff for analysis".red
-  exit 1
-end
-
-ANALYSIS_SOUND_THRESHOLD = 5.0
-
-start_time = Time.now
-plan = OpenAi.new(debug: debug_mode).commit_plan(
-  status_output,
-  diff_output,
-  cli_hint,
-  recent_commits,
-  recent_commands
-)
-elapsed = Time.now - start_time
-if elapsed > ANALYSIS_SOUND_THRESHOLD
-  sound_file = "/System/Library/Sounds/Glass.aiff"
-  system("afplay #{Shellwords.escape(sound_file)}") if File.exist?(sound_file)
-  print "\e]0;✅ Commit Plan Done\a"
-end
-commits = plan["commits"] || []
-warnings = plan["warnings"] || []
-quality_assessment = plan["quality_assessment"]
-excluded_files = plan["excluded_files"] || []
-
-if commits.empty?
-  puts "No commits suggested by the model.".yellow
-  exit 0
-end
-
-status_filenames = extract_porcelain_filenames(status_output)
-commits = fix_json_truncation_in_commits(commits, status_filenames)
-
-display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
-execute_commits(commits)
 
 # Check if there's a remote before asking to push
 remote_output = `git remote 2>/dev/null`.strip
