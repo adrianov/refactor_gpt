@@ -122,8 +122,18 @@ class Display
     $stdout.flush if $stdout.tty?
     $stderr.print sequence if $stderr.tty?
     $stderr.flush if $stderr.tty?
+    save_terminal_title(title)
   rescue StandardError
     # Ignore terminal title update errors
+  end
+
+  def save_terminal_title(title)
+    return unless ENV['HOME']
+
+    title_file = File.join(ENV['HOME'], '.refactor_gpt_terminal_title')
+    File.write(title_file, title)
+  rescue StandardError
+    # Ignore file write errors
   end
 end
 
