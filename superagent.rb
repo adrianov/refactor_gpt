@@ -1,5 +1,13 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
+#
+# Superagent - Automated code agent with multi-model fallback and verification
+# Copyright 2026 Peter Adrianov
+# Email: peter.adrianov@gmail.com
+# Telegram: @adrianov
+#
+# Executes agent commands across multiple AI models sequentially,
+# automatically verifying results and retrying with fix instructions when verification fails.
 
 require_relative "lib/completion_notifier"
 require "colorize"
@@ -147,10 +155,26 @@ def validate_user_request(user_request)
   exit 1
 end
 
+def git_repo?
+  system("git rev-parse --is-inside-work-tree > #{File::NULL} 2>&1")
+end
+
+def display_git_status
+  return unless git_repo?
+
+  status = `git status --short 2>&1`.strip
+  return if status.empty?
+
+  timestamped_puts "Git status:".cyan
+  status.each_line { |line| timestamped_puts "  #{line.chomp}" }
+  timestamped_puts ""
+end
+
 def display_start_message(user_request)
   timestamped_puts "\nStarting superagent with request:".cyan
   timestamped_puts "#{user_request}\n".yellow
   timestamped_puts ""
+  display_git_status
 end
 
 def display_attempt_header(model, index)
@@ -187,6 +211,7 @@ end
 def handle_verification_success(description, context = "")
   display_verification_result(true, description, context)
   display_total_runtime
+  display_git_status
   exit 0
 end
 
@@ -245,6 +270,7 @@ def main
 
   timestamped_puts "All attempts completed. Verification did not pass with any model.".red
   display_total_runtime
+  display_git_status
   exit 1
 end
 
