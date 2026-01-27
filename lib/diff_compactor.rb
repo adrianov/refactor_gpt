@@ -25,19 +25,31 @@ class DiffCompactor
       return result if result_size <= max_bytes
     end
 
+    # If even context=0 is too large, try one more time with a very aggressive approach
+    # but for now we return nil as per existing logic if it doesn't fit.
     nil
   end
 
   def build_compacted_diff(lines, context)
     result = []
     current_hunk = []
+    hunk_header = nil
     in_hunk = false
 
     lines.each do |line|
       if diff_header_line?(line)
-        return nil unless append_completed_hunk(result, current_hunk, in_hunk, context)
+        if in_hunk
+          compacted = compact_single_hunk(current_hunk, hunk_header, context)
+          return nil unless compacted
+          result.concat(compacted)
+          in_hunk = false
+        end
+
         result << line
-        in_hunk = hunk_start?(line)
+        if hunk_start?(line)
+          hunk_header = line
+          in_hunk = true
+        end
         current_hunk = []
       elsif in_hunk
         current_hunk << line
@@ -46,14 +58,19 @@ class DiffCompactor
       end
     end
 
-    return nil unless append_completed_hunk(result, current_hunk, in_hunk, context)
+    if in_hunk
+      compacted = compact_single_hunk(current_hunk, hunk_header, context)
+      return nil unless compacted
+      result.concat(compacted)
+    end
+
     result
   end
 
-  def append_completed_hunk(result, current_hunk, in_hunk, context)
+  def append_completed_hunk(result, current_hunk, hunk_header, in_hunk, context)
     return true unless in_hunk && !current_hunk.empty?
 
-    compacted = compact_single_hunk(current_hunk, context)
+    compacted = compact_single_hunk(current_hunk, hunk_header, context)
     return false if compacted.nil?
 
     result.concat(compacted)
@@ -62,17 +79,24 @@ class DiffCompactor
 
   def diff_header_line?(line)
     line.start_with?("diff --git") || line.start_with?("index ") || line.start_with?("---") ||
-      line.start_with?("+++") || line.start_with?("@@")
+      line.start_with?("+++") || hunk_start?(line)
   end
 
   def hunk_start?(line)
     line.start_with?("@@")
   end
 
-  def compact_single_hunk(hunk_lines, max_context)
+  def compact_single_hunk(hunk_lines, hunk_header, max_context)
     return hunk_lines if hunk_lines.empty?
 
-    state = {result: [], leading_context: [], trailing_context: [], in_changes: false}
+    line_numbers = parse_hunk_header(hunk_header)
+    return hunk_lines unless line_numbers
+
+    state = {result: [], leading_context: [], trailing_context: [], in_changes: false,
+             leading_boundaries: [], trailing_boundaries: [],
+             old_line_num: line_numbers[:old_start], new_line_num: line_numbers[:new_start],
+             leading_skip_marker: nil, trailing_skipped_count: 0,
+             trailing_skipped_start: nil, trailing_skipped_end: nil}
 
     hunk_lines.each do |line|
       process_hunk_line(line, state, max_context)
@@ -82,14 +106,37 @@ class DiffCompactor
     state[:result]
   end
 
+  def parse_hunk_header(header)
+    return nil unless header&.start_with?("@@")
+
+    match = header.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/)
+    return nil unless match
+
+    {old_start: match[1].to_i, old_count: (match[2] || 1).to_i,
+     new_start: match[3].to_i, new_count: (match[4] || 1).to_i}
+  end
+
   def process_hunk_line(line, state, max_context)
     if change_line?(line)
+      update_line_numbers(line, state)
       handle_change_line(line, state, max_context)
     elsif context_line?(line)
+      update_line_numbers(line, state)
       handle_context_line(line, state, max_context)
     else
       flush_context_buffers(state)
       state[:result] << line
+    end
+  end
+
+  def update_line_numbers(line, state)
+    if line.start_with?("+")
+      state[:new_line_num] += 1
+    elsif line.start_with?("-")
+      state[:old_line_num] += 1
+    elsif line.start_with?(" ")
+      state[:old_line_num] += 1
+      state[:new_line_num] += 1
     end
   end
 
@@ -102,50 +149,128 @@ class DiffCompactor
   end
 
   def handle_change_line(line, state, max_context)
-    if !state[:in_changes] && state[:leading_context].size > max_context
-      state[:result].concat(state[:leading_context].last(max_context))
-      state[:leading_context] = []
+    if !state[:in_changes]
+      flush_leading_context_with_boundaries(state, max_context)
     end
     state[:result] << line
     state[:in_changes] = true
     state[:trailing_context] = []
+    state[:trailing_boundaries] = []
+    state[:trailing_skipped_count] = 0
+    state[:trailing_skipped_start] = nil
+    state[:trailing_skipped_end] = nil
   end
 
   def handle_context_line(line, state, max_context)
-    if state[:in_changes]
+    if structural_boundary?(line)
+      preserve_boundary_line(line, state)
+    elsif state[:in_changes]
       add_trailing_context(line, state, max_context)
     else
       add_leading_context(line, state, max_context)
     end
   end
 
-  def add_trailing_context(line, state, max_context)
-    state[:trailing_context] << line
-    return unless state[:trailing_context].size > max_context
+  def structural_boundary?(line)
+    content = extract_line_content(line)
+    return false if content.nil? || content.empty?
 
-    state[:result].concat(state[:trailing_context].first(max_context))
-    state[:trailing_context] = state[:trailing_context].last(max_context)
+    content.strip.start_with?("class ", "module ") || content.strip == "end"
+  end
+
+  def extract_line_content(line)
+    return line[1..] if line.start_with?(" ", "+", "-")
+
+    line
+  end
+
+  def preserve_boundary_line(line, state)
+    if state[:in_changes]
+      state[:trailing_boundaries] << line
+    else
+      state[:leading_boundaries] << line
+    end
+  end
+
+  def add_trailing_context(line, state, max_context)
+    if state[:trailing_context].size < max_context
+      state[:trailing_context] << line
+    else
+      # We already have max_context lines, so this one and any subsequent ones are skipped
+      state[:trailing_skipped_count] += 1
+      state[:trailing_skipped_start] ||= state[:new_line_num]
+      state[:trailing_skipped_end] = state[:new_line_num]
+    end
   end
 
   def add_leading_context(line, state, max_context)
     state[:leading_context] << line
-    state[:leading_context].shift if state[:leading_context].size > max_context
+    return if state[:leading_context].size <= max_context
+
+    excess = state[:leading_context].size - max_context
+    first_skipped_line = state[:old_line_num] - state[:leading_context].size + 1
+    last_skipped_line = first_skipped_line + excess - 1
+    state[:leading_context].shift
+    state[:leading_skip_marker] = format_skip_marker(first_skipped_line, last_skipped_line, excess)
+  end
+
+  def flush_leading_context_with_boundaries(state, max_context)
+    return if state[:leading_context].empty? && state[:leading_boundaries].empty?
+
+    state[:result].concat(state[:leading_boundaries])
+    state[:leading_boundaries] = []
+
+    if state[:leading_skip_marker]
+      state[:result] << state[:leading_skip_marker]
+      state[:leading_skip_marker] = nil
+    elsif state[:leading_context].size > max_context
+      skipped_count = state[:leading_context].size - max_context
+      first_skipped_line = state[:old_line_num] - state[:leading_context].size
+      last_skipped_line = first_skipped_line + skipped_count - 1
+      state[:result] << format_skip_marker(first_skipped_line, last_skipped_line, skipped_count)
+    end
+
+    if state[:leading_context].size > max_context
+      state[:result].concat(state[:leading_context].last(max_context))
+    else
+      state[:result].concat(state[:leading_context])
+    end
+    state[:leading_context] = []
   end
 
   def flush_context_buffers(state)
+    state[:result].concat(state[:leading_boundaries])
+    state[:leading_boundaries] = []
     state[:result].concat(state[:leading_context])
     state[:leading_context] = []
+    state[:result].concat(state[:trailing_boundaries])
+    state[:trailing_boundaries] = []
     state[:result].concat(state[:trailing_context])
     state[:trailing_context] = []
+    if state[:trailing_skipped_count] && state[:trailing_skipped_count] > 0
+      state[:result] << format_skip_marker(state[:trailing_skipped_start], state[:trailing_skipped_end],
+        state[:trailing_skipped_count])
+      state[:trailing_skipped_count] = 0
+    end
   end
 
   def finalize_hunk_context(state, max_context)
     unless state[:in_changes]
+      state[:result].concat(state[:leading_boundaries])
       state[:result].concat(state[:leading_context])
       return
     end
-    return if state[:trailing_context].empty?
+    return if state[:trailing_context].empty? && state[:trailing_boundaries].empty? && !state[:trailing_skipped_count]
 
-    state[:result].concat(state[:trailing_context].last(max_context))
+    state[:result].concat(state[:trailing_boundaries])
+    state[:result].concat(state[:trailing_context])
+    if state[:trailing_skipped_count] && state[:trailing_skipped_count] > 0
+      state[:result] << format_skip_marker(state[:trailing_skipped_start], state[:trailing_skipped_end],
+        state[:trailing_skipped_count])
+    end
+  end
+
+  def format_skip_marker(start_line, end_line, count)
+    " ... (skipped #{count} lines: #{start_line}-#{end_line}) ...\n"
   end
 end
