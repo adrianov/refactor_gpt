@@ -13,9 +13,10 @@ module CompletionNotifier
   @already_notified = false
 
   def self.notify_completion(success: true)
+    return if @already_notified
+
     @already_notified = true
     play_sound(success)
-    update_terminal_title(success)
   end
 
   def self.play_sound(success)
@@ -55,31 +56,6 @@ module CompletionNotifier
     return script_path if File.exist?(script_path)
 
     nil
-  end
-
-  def self.update_terminal_title(success)
-    return unless $stdout.tty? || $stderr.tty?
-
-    status = success ? "✓ Done" : "✗ Error"
-    # Use \033 instead of \e for better compatibility, and \007 instead of \a
-    # This works with Terminal.app, iTerm2, and most xterm-compatible terminals
-    sequence = "\033]2;#{status}\007\033]1;#{status}\007"
-    $stdout.print sequence if $stdout.tty?
-    $stdout.flush if $stdout.tty?
-    $stderr.print sequence if $stderr.tty?
-    $stderr.flush if $stderr.tty?
-    save_terminal_title(status)
-  rescue StandardError
-    # Ignore terminal title update errors
-  end
-
-  def self.save_terminal_title(title)
-    return unless ENV['HOME']
-
-    title_file = File.join(ENV['HOME'], '.refactor_gpt_terminal_title')
-    File.write(title_file, title)
-  rescue StandardError
-    # Ignore file write errors
   end
 
   def self.set_exit_status(status)

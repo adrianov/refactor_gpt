@@ -9,12 +9,6 @@
 # Executes agent commands across multiple AI models sequentially,
 # automatically verifying results and retrying with fix instructions when verification fails.
 
-completion_notifier_path = File.join(__dir__, 'lib', 'completion_notifier.rb')
-begin
-  require_relative 'lib/completion_notifier' if File.exist?(completion_notifier_path)
-rescue LoadError, StandardError
-  # Ignore if completion_notifier is not available
-end
 require 'colorize'
 require 'reline'
 require 'open3'
@@ -24,6 +18,7 @@ require 'shellwords'
 require 'json'
 require_relative "lib/agents_file_handler"
 require_relative "lib/diff_processor"
+require_relative "lib/completion_notifier"
 
 # Handles all output formatting and display operations
 class Display
@@ -114,26 +109,34 @@ class Display
     "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
   end
 
-  def update_terminal_title(title)
-    return unless $stdout.tty? || $stderr.tty?
+  def wait_for_enter
+    return unless $stdin.tty?
 
-    sequence = "\033]2;#{title}\007\033]1;#{title}\007"
-    $stdout.print sequence if $stdout.tty?
-    $stdout.flush if $stdout.tty?
-    $stderr.print sequence if $stderr.tty?
-    $stderr.flush if $stderr.tty?
-    save_terminal_title(title)
-  rescue StandardError
-    # Ignore terminal title update errors
+    timestamped_puts ''
+    timestamped_puts 'Press Enter to continue...'.cyan
+    $stdin.gets
   end
 
-  def save_terminal_title(title)
-    return unless ENV['HOME']
 
-    title_file = File.join(ENV['HOME'], '.refactor_gpt_terminal_title')
-    File.write(title_file, title)
-  rescue StandardError
-    # Ignore file write errors
+  def check_late_night_reminder
+    now = Time.now
+    return unless now.hour >= 0 && now.hour < 6
+
+    messages = [
+      "🌙 It's getting late! Your code will still be here tomorrow, and you'll tackle it with fresh eyes and renewed energy.",
+      "⏰ Late night coding session detected! Remember, a well-rested mind writes better code. Tomorrow will be a productive day!",
+      "🌆 The clock says it's time to wind down. Your future self will thank you for getting some rest. Tomorrow's productivity awaits!",
+      "💤 It's past bedtime! Your code isn't going anywhere, but your energy is. Rest up for an amazing day of coding tomorrow!",
+      "🌃 Late night warrior! While your dedication is admirable, remember that tomorrow you'll be even more productive with some rest.",
+      "⭐ Burning the midnight oil? That's dedication! But even the best developers need sleep. Tomorrow will be a great day for coding!",
+      "🌙 Late night coding is impressive, but so is a good night's sleep. Your code will be waiting for you tomorrow, ready for your refreshed mind!"
+    ]
+
+    message = messages.sample
+    timestamped_puts ''
+    timestamped_puts message.yellow
+    timestamped_puts ''
+    exit 0
   end
 end
 
@@ -141,10 +144,21 @@ end
 class RequestReader
   def initialize(display)
     @display = display
+    @plan_mode = false
   end
 
+  attr_reader :plan_mode
+
   def read_from_argv
-    ARGV.join(' ') unless ARGV.empty?
+    return nil if ARGV.empty?
+
+    args = ARGV.dup
+    if args.include?('--plan')
+      @plan_mode = true
+      args.delete('--plan')
+    end
+
+    args.join(' ') unless args.empty?
   end
 
   def read_from_stdin
@@ -193,7 +207,8 @@ end
 
 # Handles agent command execution with retry logic
 class AgentExecutor
-  EXECUTION_TIMEOUT = 30
+  EXECUTION_TIMEOUT = 60
+  MAX_EXECUTION_TIMEOUT = 600
   TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
   TEST_RUNNER_CHECK_INTERVAL = 2
 
@@ -364,6 +379,7 @@ class AgentExecutor
     timeout_disabled = false
     timed_out = false
     last_chunk_time = nil
+    execution_start_time = nil
 
     monitor_thread = Thread.new do
       loop do
@@ -384,6 +400,19 @@ class AgentExecutor
       while !execution_complete
         sleep TEST_RUNNER_CHECK_INTERVAL
         next if timeout_disabled || (process_pid && test_runner_running?(process_pid))
+
+        if execution_start_time
+          total_execution_time = Time.now - execution_start_time
+          if total_execution_time >= MAX_EXECUTION_TIMEOUT && !execution_complete
+            timed_out = true
+            @display.timestamped_puts "❌ Agent timed out after #{MAX_EXECUTION_TIMEOUT}s maximum execution time".red
+            Process.kill('TERM', process_pid) if process_pid
+            sleep 2
+            Process.kill('KILL', process_pid) if process_pid && !execution_complete
+            break
+          end
+        end
+
         next if last_chunk_time.nil?
 
         time_since_last_chunk = Time.now - last_chunk_time
@@ -402,6 +431,7 @@ class AgentExecutor
       cmd = build_and_display_command('--model', model, wrapped)
       Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
         process_pid = wait_thr.pid
+        execution_start_time = Time.now
         last_chunk_time = Time.now
         raw_output = ''
         final_result = ''
@@ -1001,18 +1031,19 @@ class Superagent
   end
 
   def run
+    @display.check_late_night_reminder
     @start_time = Time.now
     @display.update_git_status
     req = @request_reader.read
     @request_reader.validate(req)
     @display.display_start_message(req)
-    @display.update_terminal_title('Superagent: Starting...')
+
+    return run_plan_mode(req) if @request_reader.plan_mode
 
     MODELS.each_with_index do |model, idx|
       @current_pass = idx + 1
       @current_model = model
       @display.display_attempt_header(model, idx, MODELS.size)
-      update_title('Running')
 
       success, output = @agent_executor.run(model, req)
       unless success
@@ -1021,20 +1052,33 @@ class Superagent
       end
 
       result = process_model_attempt(model, req)
-      return if result == :success
+      return handle_final_success if result == :success
     end
 
-    @display.update_terminal_title('✗ Failed')
-    @display.display_all_attempts_failed
-    @display.display_total_runtime(@start_time)
-    @display.display_git_status
-    exit 1
+    handle_final_failure
+  end
+
+  def run_plan_mode(req)
+    @display.timestamped_puts 'Running in plan mode...'.cyan
+    @display.timestamped_puts ''
+
+    MODELS.each_with_index do |model, idx|
+      @current_pass = idx + 1
+      @current_model = model
+      @display.display_attempt_header(model, idx, MODELS.size)
+
+      success, output = @agent_executor.run_plan_mode(model, req)
+      return handle_plan_success if success
+
+      @display.display_agent_failure(output)
+    end
+
+    handle_final_failure
   end
 
   private
 
   def process_model_attempt(model, req)
-    update_title('Verifying')
     verified, desc = @verification_handler.run_verification(model, req)
     @display.timestamped_puts ''
 
@@ -1043,7 +1087,6 @@ class Superagent
     @display.display_verification_result(false, desc)
     @display.timestamped_puts ''
 
-    update_title('Fixing')
     verified, fix_desc = @verification_handler.retry_with_fix(model, req)
     @display.timestamped_puts ''
 
@@ -1054,29 +1097,51 @@ class Superagent
     :continue
   end
 
-  def update_title(task)
-    return unless @current_pass && @current_model
-
-    model_short = @current_model.split('-').first
-    title = "Pass #{@current_pass}/#{MODELS.size}: #{model_short} - #{task}"
-    @display.update_terminal_title(title)
-  end
 
   def handle_success(desc, context = '')
-    @display.update_terminal_title('✓ Done')
     @display.display_verification_result(true, desc, context)
     @display.display_total_runtime(@start_time)
     @display.display_git_status
+    :success
+  end
+
+  def handle_final_success
+    CompletionNotifier.notify_completion(success: true)
+    update_terminal_title(true)
+    @display.wait_for_enter
+  end
+
+  def handle_plan_success
+    @display.display_total_runtime(@start_time)
+    @display.display_git_status
+    CompletionNotifier.notify_completion(success: true)
+    update_terminal_title(true)
+    @display.wait_for_enter
     exit 0
+  end
+
+  def handle_final_failure
+    @display.display_all_attempts_failed
+    @display.display_total_runtime(@start_time)
+    @display.display_git_status
+    CompletionNotifier.notify_completion(success: false)
+    update_terminal_title(false)
+    @display.wait_for_enter
+    exit 1
+  end
+
+  def update_terminal_title(success)
+    return unless $stdout.tty? || $stderr.tty?
+
+    status = success ? '✅ Done' : '❌ Error'
+    sequence = "\033]0;#{status}\007"
+    $stderr.print sequence if $stderr.tty?
+    $stderr.flush if $stderr.tty?
+  rescue StandardError
+    # Ignore terminal title update errors
   end
 end
 
 if __FILE__ == $PROGRAM_NAME
-  if defined?(CompletionNotifier) && CompletionNotifier.respond_to?(:wrap_main)
-    CompletionNotifier.wrap_main do
-      Superagent.new.run
-    end
-  else
-    Superagent.new.run
-  end
+  Superagent.new(display: Display.new).run
 end

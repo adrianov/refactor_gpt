@@ -83,6 +83,17 @@ To make the scripts easier to use from anywhere, you can add aliases to your `.z
    - Restarting your terminal, or
    - Running `source ~/.zshrc`
 
+## Terminal Title Persistence (Optional)
+
+To preserve terminal tab titles set by `superagent.rb` after the program exits, add shell integration to your `.zshrc`:
+
+```bash
+echo "source $(pwd)/shell_integration.zsh" >> ~/.zshrc
+source ~/.zshrc
+```
+
+This enables the terminal tab to retain status indicators like "✅ Done" or "❌ Failed" even after the command completes, making it easy to see which tabs have finished tasks at a glance.
+
 Now you can use the commands directly from any directory:
 refactor file.rb "make it more readable"
 agpt "find all database queries"
