@@ -73,8 +73,17 @@ def get_user_request
   get_user_request_from_argv || get_user_request_from_stdin || read_interactive_request
 end
 
+def wrap_prompt_with_instructions(prompt)
+  <<~HEREDOC
+    IMPORTANT: This agent is running in non-interactive mode. You must not ask questions, request user input, or wait for confirmation. Proceed autonomously using available information and make reasonable decisions based on context. Execute the task directly without seeking clarification.
+
+    #{prompt}
+  HEREDOC
+end
+
 def run_agent_command(model, prompt)
-  escaped_prompt = Shellwords.escape(prompt)
+  wrapped_prompt = wrap_prompt_with_instructions(prompt)
+  escaped_prompt = Shellwords.escape(wrapped_prompt)
   cmd = "agent --print --model #{Shellwords.escape(model)} #{escaped_prompt}"
   timestamped_puts "Running: agent --print --model #{model} '#{prompt[0..50]}#{"..." if prompt.length > 50}'".green
   output = `#{cmd} 2>&1`
@@ -137,10 +146,11 @@ end
 
 def run_verification(model, user_request)
   verification_prompt = build_verification_prompt(user_request)
+  wrapped_prompt = wrap_prompt_with_instructions(verification_prompt)
   timestamped_puts "Verifying solution with #{model}...".blue
   timestamped_puts "Running: agent --print --model #{model} [verification prompt]".green
 
-  output = `agent --print --model #{Shellwords.escape(model)} #{Shellwords.escape(verification_prompt)} 2>&1`
+  output = `agent --print --model #{Shellwords.escape(model)} #{Shellwords.escape(wrapped_prompt)} 2>&1`
   output.each_line { |line| timestamped_puts line.chomp }
   return [false, nil, output] unless $?.success?
 
