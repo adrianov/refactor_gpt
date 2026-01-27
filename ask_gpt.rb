@@ -713,7 +713,7 @@ def correct_grammar(client, question)
     [{role: "system", content: grammar_instruction}, {role: "user", content: question}]
   end
 
-  response = client.ask(grammar_messages, title: nil)
+  response = client.ask(grammar_messages, title: "Reviewing grammar")
   parse_correction_response(response, question)
 rescue StandardError
   [question, nil]
