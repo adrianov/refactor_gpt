@@ -574,7 +574,13 @@ class VerificationHandler
     [true, m ? m[1].strip : 'Passed']
   end
 
+  def git_repo?
+    @display.git_repo?
+  end
+
   def collect_git_status
+    return '' unless git_repo?
+
     output = `git status --porcelain --branch 2>&1`
     unless $?.success?
       @display.timestamped_puts 'Warning: Failed to get git status'.yellow
@@ -584,6 +590,8 @@ class VerificationHandler
   end
 
   def prepare_untracked_files
+    return unless git_repo?
+
     all_untracked = `git ls-files --others --exclude-standard 2>&1`.split("\n")
     additional_exclusions = [
       '*.log', '*.tmp', '*.temp', '*.bak', '*.swp', '*.swo',
@@ -603,12 +611,57 @@ class VerificationHandler
   end
 
   def collect_git_diff
+    return '' unless git_repo?
+
     output = `git diff -U500 2>&1`
     unless $?.success?
       @display.timestamped_puts 'Warning: Failed to get git diff'.yellow
       return ''
     end
     output
+  end
+
+  def collect_file_contents
+    return '' if git_repo?
+
+    @display.timestamped_puts 'No git repository detected, collecting file contents...'.yellow
+
+    exclusions = [
+      '*.log', '*.tmp', '*.temp', '*.bak', '*.swp', '*.swo',
+      '*.pyc', '*.pyo', '*.class', '*.jar', '*.war', '*.ear',
+      '*.zip', '*.tar.gz', '*.tgz', '*.rar', '*.exe', '*.dll',
+      '*.so', '*.dylib', '*.bin', '*.dat', '*.orig', '*.rej',
+      '.DS_Store', 'Thumbs.db', '.git', '.gitignore'
+    ]
+
+    code_extensions = %w[
+      .rb .py .js .ts .jsx .tsx .java .php .cpp .c .h .hpp .go .rs
+      .sh .bash .zsh .html .css .scss .sass .yml .yaml .json .xml
+      .erb .slim .swift .kt .scala .pl .pm .r .jl .md .txt
+    ]
+
+    files_content = []
+    current_dir = Dir.pwd
+
+    Dir.glob(File.join(current_dir, '**', '*')).each do |file_path|
+      next unless File.file?(file_path)
+
+      relative_path = file_path.sub("#{current_dir}/", '')
+      basename = File.basename(relative_path)
+
+      next if exclusions.any? { |pattern| File.fnmatch(pattern, basename) }
+      next unless code_extensions.any? { |ext| relative_path.end_with?(ext) } ||
+                  basename.start_with?('README') || basename == 'Makefile' || basename == 'Rakefile'
+
+      begin
+        content = File.read(file_path)
+        files_content << "=== File: #{relative_path} ===\n#{content}\n"
+      rescue StandardError => e
+        @display.timestamped_puts "Warning: Failed to read #{relative_path}: #{e.message}".yellow
+      end
+    end
+
+    files_content.join("\n")
   end
 
   def build_verification_system_instruction
@@ -631,12 +684,13 @@ class VerificationHandler
       Verify that the code changes fully implement the user's request without introducing bugs or regressions.
 
       Available information:
-      - Git status and diff are provided in the prompt below
+      - Git status and diff are provided in the prompt below (if git repository exists)
+      - File contents are provided if no git repository is detected
       - Analyze the provided changes to verify they meet the requirements
       - Do not run any commands - all necessary data is already included
 
       Verification approach:
-      - Review the git diff to understand what changed
+      - Review the git diff (or file contents if no git) to understand what changed
       - Check if the changes address the user's request
       - Look for potential bugs, regressions, or missing functionality
       - Verify code quality and adherence to project guidelines
@@ -663,14 +717,23 @@ class VerificationHandler
     instruction_parts.join
   end
 
-  def build_verification_user_content(user_request, status_output, diff_output)
+  def build_verification_user_content(user_request, status_output, diff_output, file_contents = '')
     content_parts = [
-      "User request: #{user_request}\n\n",
-      "Here is the git status:\n#{status_output.strip}\n\n"
+      "User request: #{user_request}\n\n"
     ]
 
-    unless diff_output.strip.empty?
-      content_parts << "Here is the git diff for all changes:\n#{diff_output.strip}\n"
+    if git_repo?
+      content_parts << "Here is the git status:\n#{status_output.strip}\n\n"
+      unless diff_output.strip.empty?
+        content_parts << "Here is the git diff for all changes:\n#{diff_output.strip}\n"
+      end
+    else
+      content_parts << "No git repository detected. Here are the file contents:\n\n"
+      unless file_contents.strip.empty?
+        content_parts << file_contents.strip
+      else
+        content_parts << "No files found to verify."
+      end
     end
 
     content_parts.join("\n")
@@ -680,9 +743,10 @@ class VerificationHandler
     status_output = collect_git_status
     prepare_untracked_files
     diff_output = collect_git_diff
+    file_contents = collect_file_contents
 
     system_instruction = build_verification_system_instruction
-    user_content = build_verification_user_content(req, status_output, diff_output)
+    user_content = build_verification_user_content(req, status_output, diff_output, file_contents)
 
     <<~HEREDOC
       #{system_instruction}
