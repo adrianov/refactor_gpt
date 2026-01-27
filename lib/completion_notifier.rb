@@ -21,12 +21,20 @@ module CompletionNotifier
 
     sound_file = success ? SUCCESS_SOUND : ERROR_SOUND
     sound_path = find_sound_file(sound_file)
-    return unless sound_path
 
-    pid = Process.spawn("afplay", sound_path, out: File::NULL, err: File::NULL)
-    Process.wait(pid)
-  rescue StandardError
-    # Ignore sound playback errors
+    if sound_path
+      pid = Process.spawn("afplay", sound_path, out: File::NULL, err: File::NULL)
+      Process.detach(pid)
+    else
+      # Fallback to system sounds if local files are missing
+      system_sound = success ? "/System/Library/Sounds/Glass.aiff" : "/System/Library/Sounds/Basso.aiff"
+      if File.exist?(system_sound)
+        pid = Process.spawn("afplay", system_sound, out: File::NULL, err: File::NULL)
+        Process.detach(pid)
+      end
+    end
+  rescue StandardError => e
+    warn "Warning: Sound playback failed: #{e.message}" if ENV["DEBUG"]
   end
 
   def self.command_exists?(command)
@@ -37,6 +45,10 @@ module CompletionNotifier
     return File.expand_path(filename) if File.exist?(filename)
 
     script_dir = @script_dir || File.dirname(File.expand_path($PROGRAM_NAME))
+    sounds_dir = File.join(script_dir, 'sounds')
+    sounds_path = File.join(sounds_dir, filename)
+    return sounds_path if File.exist?(sounds_path)
+
     script_path = File.join(script_dir, filename)
     return script_path if File.exist?(script_path)
 
@@ -44,10 +56,16 @@ module CompletionNotifier
   end
 
   def self.update_terminal_title(success)
+    return unless $stdout.tty? || $stderr.tty?
+
     status = success ? "✓ Done" : "✗ Error"
-    # \e]0;TITLE\a is the escape sequence for setting the terminal title
-    print "\e]0;#{status}\a"
-    $stdout.flush
+    # Use \033 instead of \e for better compatibility, and \007 instead of \a
+    # This works with Terminal.app, iTerm2, and most xterm-compatible terminals
+    sequence = "\033]2;#{status}\007\033]1;#{status}\007"
+    $stdout.print sequence if $stdout.tty?
+    $stdout.flush if $stdout.tty?
+    $stderr.print sequence if $stderr.tty?
+    $stderr.flush if $stderr.tty?
   rescue StandardError
     # Ignore terminal title update errors
   end
@@ -62,15 +80,18 @@ module CompletionNotifier
 
   def self.setup_exit_hook
     return if @hook_setup
+
     @hook_setup = true
     @script_dir = File.dirname(File.expand_path($PROGRAM_NAME))
 
-    trap("EXIT") do |status|
-      exit_code = status.is_a?(Integer) ? status : (status.respond_to?(:to_i) ? status.to_i : 0)
-      set_exit_status(exit_code)
-    end
-
     at_exit do
+      # Capture exit status from global exception if available
+      if $!.is_a?(SystemExit)
+        set_exit_status($!.status)
+      elsif $!
+        mark_exception
+      end
+
       success = determine_success
       notify_completion(success: success)
     end
