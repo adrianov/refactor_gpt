@@ -9,35 +9,35 @@
 # Executes agent commands across multiple AI models sequentially,
 # automatically verifying results and retrying with fix instructions when verification fails.
 
-completion_notifier_path = File.join(__dir__, "lib", "completion_notifier.rb")
+completion_notifier_path = File.join(__dir__, 'lib', 'completion_notifier.rb')
 begin
-  require_relative "lib/completion_notifier" if File.exist?(completion_notifier_path)
+  require_relative 'lib/completion_notifier' if File.exist?(completion_notifier_path)
 rescue LoadError, StandardError
   # Ignore if completion_notifier is not available
 end
-require "colorize"
-require "reline"
-require "open3"
+require 'colorize'
+require 'reline'
+require 'open3'
 
 $start_time = nil
 
 def timestamped_puts(*args)
   args.each do |arg|
-    time_str = Time.now.strftime("%Y-%m-%d %H:%M:%S")
+    time_str = Time.now.strftime('%Y-%m-%d %H:%M:%S')
     puts "[#{time_str}] #{arg}"
   end
 end
 
 # Configuration: Models to try in sequence
-MODELS = [
-  "auto",
-  "gemini-3-flash",
-  "claude-4.5-sonnet",
-  "claude-4.5-opus"
+MODELS = %w[
+  auto
+  gemini-3-flash
+  claude-4.5-sonnet
+  claude-4.5-opus
 ].freeze
 
 def get_user_request_from_argv
-  ARGV.join(" ") unless ARGV.empty?
+  ARGV.join(' ') unless ARGV.empty?
 end
 
 def get_user_request_from_stdin
@@ -45,9 +45,9 @@ def get_user_request_from_stdin
 end
 
 def read_interactive_request
-  timestamped_puts "Enter your request:".cyan
-  timestamped_puts "(Press Enter twice or Ctrl+D to submit)"
-  timestamped_puts ""
+  timestamped_puts 'Enter your request:'.cyan
+  timestamped_puts '(Press Enter twice or Ctrl+D to submit)'
+  timestamped_puts ''
 
   lines = []
   loop do
@@ -62,7 +62,7 @@ def read_interactive_request
 end
 
 def read_interactive_line(lines)
-  line = Reline.readline(lines.empty? ? "> " : "  ", true)
+  line = Reline.readline(lines.empty? ? '> ' : '  ', true)
   return nil if line.nil?
 
   line = line.strip
@@ -84,12 +84,12 @@ def wrap_prompt_with_instructions(prompt)
   HEREDOC
 end
 
-def is_retryable_network_error?(output)
+def retryable_network_error?(output)
   return false if output.nil? || output.empty?
 
-  output.include?("CANCEL") || output.include?("canceled") ||
-    output.include?("stream closed") || output.include?("0x8") ||
-    output.include?("http/2 stream closed")
+  output.include?('CANCEL') || output.include?('canceled') ||
+    output.include?('stream closed') || output.include?('0x8') ||
+    output.include?('http/2 stream closed') || output.include?('Connection stalled')
 end
 
 def run_agent_command(model, prompt, max_retries: 3, base_delay: 1)
@@ -98,13 +98,13 @@ def run_agent_command(model, prompt, max_retries: 3, base_delay: 1)
 
   loop do
     timestamped_puts "Running: agent --print --model #{model} '#{prompt[0..50]}#{"..." if prompt.length > 50}'".green
-    stdout, stderr, status = Open3.capture3("agent", "--print", "--model", model, wrapped_prompt)
+    stdout, stderr, status = Open3.capture3('agent', '--print', '--model', model, wrapped_prompt)
     output = stdout + stderr
     output.each_line { |line| timestamped_puts line.chomp }
 
     return [status.success?, output] if status.success?
 
-    if is_retryable_network_error?(output) && retries < max_retries
+    if retryable_network_error?(output) && retries < max_retries
       retries += 1
       delay = base_delay * (2**(retries - 1))
       timestamped_puts "⚠️  Network error detected, retrying in #{delay}s... (#{retries}/#{max_retries})".yellow
@@ -156,17 +156,24 @@ def parse_verification_response(response)
 
   normalized = response.strip
   upcased = normalized.upcase
-  yes_match = normalized.match(/\bYES\s*:?\s*(.+)/i)
-  no_match = normalized.match(/\bNO\s*:?\s*(.+)/i)
+
   yes_index = upcased.index(/\bYES\b/)
   no_index = upcased.index(/\bNO\b/)
 
-  return [false, no_match[1].strip] if no_match && (!yes_index || no_index < yes_index)
-  return [true, yes_match[1].strip] if yes_match && (!no_index || yes_index < no_index)
-  return [true, "Verification passed"] if yes_index && (!no_index || yes_index < no_index)
-  return [false, "Verification failed"] if no_index
+  return parse_no_response(normalized) if no_index && (yes_index.nil? || no_index < yes_index)
+  return parse_yes_response(normalized) if yes_index && (no_index.nil? || yes_index < no_index)
 
   [false, nil]
+end
+
+def parse_no_response(normalized)
+  match = normalized.match(/\bNO\s*:?\s*(.+)/i)
+  [false, match ? match[1].strip : 'Verification failed']
+end
+
+def parse_yes_response(normalized)
+  match = normalized.match(/\bYES\s*:?\s*(.+)/i)
+  [true, match ? match[1].strip : 'Verification passed']
 end
 
 def run_verification(model, user_request)
@@ -184,7 +191,7 @@ end
 def validate_user_request(user_request)
   return true if user_request && !user_request.strip.empty?
 
-  timestamped_puts "No request provided. Exiting.".yellow
+  timestamped_puts 'No request provided. Exiting.'.yellow
   exit 1
 end
 
@@ -198,27 +205,27 @@ def display_git_status
   status = `git status --short 2>&1`.strip
   return if status.empty?
 
-  timestamped_puts "Git status:".cyan
+  timestamped_puts 'Git status:'.cyan
   status.each_line { |line| timestamped_puts "  #{line.chomp}" }
-  timestamped_puts ""
+  timestamped_puts ''
 end
 
 def display_start_message(user_request)
   timestamped_puts "\nStarting superagent with request:".cyan
   timestamped_puts "#{user_request}\n".yellow
-  timestamped_puts ""
+  timestamped_puts ''
   display_git_status
 end
 
 def display_attempt_header(model, index)
   timestamped_puts "--- Attempt #{index + 1}/#{MODELS.size}: Using #{model} ---".blue
-  timestamped_puts ""
+  timestamped_puts ''
 end
 
 def attempt_retry_with_fix(model, user_request)
   fix_prompt = build_fix_prompt(user_request)
   timestamped_puts "Retrying with #{model} using fix instruction...".blue
-  timestamped_puts ""
+  timestamped_puts ''
 
   success, output = run_agent_command(model, fix_prompt)
   return [false, nil, output] unless success
@@ -226,22 +233,24 @@ def attempt_retry_with_fix(model, user_request)
   run_verification(model, user_request)
 end
 
-def display_verification_result(verified, description, context = "")
-  prefix = verified ? "✓ Verification passed" : "✗ Verification failed"
-  suffix = context.empty? ? "" : " #{context}"
+def display_verification_result(verified, description, context = '')
+  prefix = verified ? '✓ Verification passed' : '✗ Verification failed'
+  suffix = context.empty? ? '' : " #{context}"
 
-  if description && !description.empty?
-    message = "#{prefix}#{suffix}: #{description}"
-  else
-    default = verified ? "Changes solve the request with no new bugs." : (context.empty? ? "Retrying once with fix instruction..." : "Trying next model...")
-    message = "#{prefix}#{suffix}! #{default}"
-  end
+  message = if description && !description.empty?
+              "#{prefix}#{suffix}: #{description}"
+            elsif verified
+              "#{prefix}#{suffix}! Changes solve the request with no new bugs."
+            else
+              default = context.empty? ? 'Retrying once with fix instruction...' : 'Trying next model...'
+              "#{prefix}#{suffix}! #{default}"
+            end
 
   color = verified ? :green : :yellow
   timestamped_puts message.send(color)
 end
 
-def handle_verification_success(description, context = "")
+def handle_verification_success(description, context = '')
   display_verification_result(true, description, context)
   display_total_runtime
   display_git_status
@@ -250,26 +259,26 @@ end
 
 def process_model_attempt(model, user_request)
   verified, description, verification_output = run_verification(model, user_request)
-  timestamped_puts ""
+  timestamped_puts ''
 
   return handle_verification_success(description) if verified
 
   display_verification_result(false, description)
-  timestamped_puts ""
+  timestamped_puts ''
 
   verified, fix_description, fix_output = attempt_retry_with_fix(model, user_request)
-  timestamped_puts ""
+  timestamped_puts ''
 
-  return handle_verification_success(fix_description, "after retry") if verified
+  return handle_verification_success(fix_description, 'after retry') if verified
 
-  display_verification_result(false, fix_description, "after retry")
-  timestamped_puts ""
+  display_verification_result(false, fix_description, 'after retry')
+  timestamped_puts ''
   [false, fix_output || verification_output]
 end
 
 def handle_agent_failure
-  timestamped_puts "Agent command failed. Continuing to next model...".yellow
-  timestamped_puts ""
+  timestamped_puts 'Agent command failed. Continuing to next model...'.yellow
+  timestamped_puts ''
 end
 
 def format_duration(seconds)
@@ -301,7 +310,7 @@ def main
     process_model_attempt(model, user_request)
   end
 
-  timestamped_puts "All attempts completed. Verification did not pass with any model.".red
+  timestamped_puts 'All attempts completed. Verification did not pass with any model.'.red
   display_total_runtime
   display_git_status
   exit 1
