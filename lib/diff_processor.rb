@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "diff_compactor"
+
 class DiffProcessor
   CODE_EXTENSIONS = %w[
     .rb .c .h .cpp .hpp .cc .cxx .java .py .js .ts .jsx .tsx .go .rs .swift
