@@ -123,6 +123,7 @@ module Utility
   end
 
   def self.display_answer(answer)
+    return render_with_md2term(answer) if md2term_available?
     return puts answer unless glow_available?
 
     display_with_glow(format_answer(answer), calculate_width(extract_urls(answer)))
@@ -130,6 +131,24 @@ module Utility
 
   def self.glow_available?
     system("command -v glow >/dev/null 2>&1")
+  end
+
+  def self.md2term_available?
+    system("command -v md2term >/dev/null 2>&1")
+  end
+
+  def self.render_with_md2term(answer)
+    IO.popen(ENV.to_h.merge({"CLICOLOR_FORCE" => "1"}),
+      ["md2term", "-"], "w") do |io|
+      io.write(answer)
+    end
+  end
+
+  def self.render_with_md2term_streaming
+    IO.popen(ENV.to_h.merge({"CLICOLOR_FORCE" => "1"}),
+      ["md2term", "-"], "w") do |io|
+      yield io
+    end
   end
 
   def self.extract_urls(answer)
@@ -324,16 +343,21 @@ end
 class AskGeminiClient
   DEFAULT_MODEL = "gemini-3-flash"
 
-  def initialize(model: nil, max_completion_tokens: nil, debug: false)
+  def initialize(model: nil, max_completion_tokens: nil, debug: false, progress: true)
     @model = model
     @max_completion_tokens = max_completion_tokens
     @debug = debug
+    progress_title = progress ? "Thinking" : nil
     @client = GeminiClient.new(model: model, max_completion_tokens: max_completion_tokens, debug: debug,
-      progress_title: "Thinking")
+      progress_title: progress_title)
   end
 
   def ask(messages, json: false)
     @client.ask(messages, json: json)
+  end
+
+  def stream_answer(messages, &block)
+    @client.stream_answer(messages, &block)
   end
 
   def build_system_message(style, brevity)
@@ -435,24 +459,39 @@ def show_interactive_prompt(args)
 end
 
 def create_client(args)
-  if Utility.openai_configured? || !Utility.gemini_configured?
-    AskGptClient.new(
-      model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : nil,
-      max_completion_tokens: args[:short_mode] ? 500 : nil,
-      debug: args[:debug_mode]
-    )
-  elsif Utility.gemini_configured?
-    AskGeminiClient.new(
-      model: nil,
-      max_completion_tokens: args[:short_mode] ? 500 : nil,
-      debug: args[:debug_mode]
-    )
+  use_streaming = Utility.md2term_available? && Utility.gemini_configured? && !args[:search_mode]
+
+  if Utility.gemini_configured?
+    init_gemini_client(args, use_streaming)
+  elsif Utility.openai_configured?
+    init_openai_client(args)
   else
-    warn "❌ No API configuration found. Please configure either:"
-    warn "   • OpenAI: Set OPENAI_ACCESS_TOKEN in .env"
-    warn "   • Gemini: Set GEMINI_ACCESS_TOKEN in .env"
-    exit 1
+    print_config_error
   end
+end
+
+def init_gemini_client(args, use_streaming)
+  AskGeminiClient.new(
+    model: nil,
+    max_completion_tokens: args[:short_mode] ? 500 : nil,
+    debug: args[:debug_mode],
+    progress: !use_streaming
+  )
+end
+
+def init_openai_client(args)
+  AskGptClient.new(
+    model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : nil,
+    max_completion_tokens: args[:short_mode] ? 500 : nil,
+    debug: args[:debug_mode]
+  )
+end
+
+def print_config_error
+  warn "❌ No API configuration found. Please configure either:"
+  warn "   • OpenAI: Set OPENAI_ACCESS_TOKEN in .env"
+  warn "   • Gemini: Set GEMINI_ACCESS_TOKEN in .env"
+  exit 1
 end
 
 def initialize_conversation(client, args)
@@ -469,40 +508,66 @@ def initialize_conversation(client, args)
 end
 
 def run_conversation_loop(client, messages, args)
-  loop do
+  use_streaming = Utility.md2term_available? && client.is_a?(AskGeminiClient)
+
+  if !$stdin.tty?
     question = get_question(args)
-    break unless question
+    if question
+      process_question(client, messages, question, use_streaming)
+    end
+  else
+    loop do
+      question = get_question(args)
+      break unless question
 
-    handle_mode_switch(client, question) if args[:question_parts].empty?
-    next if question == "--no-search"
+      handle_mode_switch(client, question) if args[:question_parts].empty?
+      next if question == "--no-search"
 
-    process_question(client, messages, question)
-    clear_args_for_next_iteration(args)
+      process_question(client, messages, question, use_streaming)
+      clear_args_for_next_iteration(args)
+    end
   end
 end
 
 def get_question(args)
   if args[:question_parts].empty?
-    lines = []
-
-    loop do
-      line = Reline.readline(lines.empty? ? "> " : "  ", true)
-      return nil if line.nil?
-
-      line = line.strip
-      if line.empty?
-        break unless lines.empty?
-
-        return nil
-      end
-
-      lines << line
+    if $stdin.tty?
+      get_interactive_question
+    else
+      get_piped_question
     end
-
-    lines.join("\n")
   else
     Utility.build_question(args[:question_parts], args[:file_snippets])
   end
+end
+
+def get_interactive_question
+  lines = []
+
+  loop do
+    line = Reline.readline(lines.empty? ? "> " : "  ", true)
+    return nil if line.nil?
+
+    line = line.strip
+    if line.empty?
+      break unless lines.empty?
+
+      return nil
+    end
+
+    lines << line
+  end
+
+  lines.join("\n")
+end
+
+def get_piped_question
+  input = $stdin.read
+  if input.nil? || input.strip.empty?
+    warn "No question provided. Exiting."
+    exit 1
+  end
+  input.strip
 end
 
 def handle_mode_switch(client, input)
@@ -514,12 +579,73 @@ def handle_mode_switch(client, input)
   end
 end
 
-def process_question(client, messages, question)
+def process_question(client, messages, question, use_streaming)
   messages << {role: "user", content: question}
+
+  if use_streaming
+    process_with_streaming(client, messages)
+  else
+    process_with_buffering(client, messages)
+  end
+
+  puts
+end
+
+def process_with_streaming(client, messages)
+  full_text = ""
+  spinner, spinner_thread = start_thinking_spinner
+  first_chunk_received = false
+
+  Utility.render_with_md2term_streaming do |io|
+    client.stream_answer(messages) do |chunk|
+      if chunk && !chunk.to_s.empty? && !first_chunk_received
+        stop_thinking_spinner(spinner, spinner_thread)
+        first_chunk_received = true
+      end
+
+      full_text += chunk.to_s
+      io.write(chunk.to_s)
+      io.flush
+    end
+  end
+
+  stop_thinking_spinner(spinner, spinner_thread) unless first_chunk_received
+
+  messages << {role: "assistant", content: full_text}
+end
+
+def start_thinking_spinner
+  spinner = ProgressBar.create(
+    title: "Thinking",
+    total: 6000,
+    format: "%t: |%B| %p%% %e",
+    length: 100
+  )
+
+  thread = Thread.new do
+    loop do
+      break if spinner.finished?
+
+      spinner.increment
+      sleep 0.1
+    end
+  end
+
+  [spinner, thread]
+end
+
+def stop_thinking_spinner(spinner, thread)
+  return unless thread.alive?
+
+  thread.kill
+  spinner.finish unless spinner.finished?
+  print "\r\e[K" # Clear the spinner line
+end
+
+def process_with_buffering(client, messages)
   answer = client.ask(messages)
   messages << {role: "assistant", content: answer}
   Utility.display_answer(answer)
-  puts
 end
 
 def clear_args_for_next_iteration(args)
