@@ -513,7 +513,7 @@ def run_conversation_loop(client, messages, args)
   if !$stdin.tty?
     question = get_question(args)
     if question
-      process_question(client, messages, question, use_streaming)
+      process_question(client, messages, question, use_streaming, args)
     end
   else
     loop do
@@ -523,7 +523,7 @@ def run_conversation_loop(client, messages, args)
       handle_mode_switch(client, question) if args[:question_parts].empty?
       next if question == "--no-search"
 
-      process_question(client, messages, question, use_streaming)
+      process_question(client, messages, question, use_streaming, args)
       clear_args_for_next_iteration(args)
     end
   end
@@ -579,11 +579,18 @@ def handle_mode_switch(client, input)
   end
 end
 
-def process_question(client, messages, question, use_streaming)
-  corrected_question, reason = correct_grammar(client, question)
-  display_corrected_question(question, corrected_question, reason)
+def process_question(client, messages, question, use_streaming, args)
+  text_question = if args[:question_parts].empty?
+    question
+  else
+    args[:question_parts].join(" ")
+  end
 
-  messages << {role: "user", content: corrected_question}
+  corrected_question, reason = correct_grammar(client, text_question)
+  display_corrected_question(text_question, corrected_question, reason)
+
+  full_corrected_question = Utility.build_question([corrected_question], args[:file_snippets] || [])
+  messages << {role: "user", content: full_corrected_question}
 
   if use_streaming
     process_with_streaming(client, messages)
