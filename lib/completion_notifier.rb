@@ -23,7 +23,7 @@ module CompletionNotifier
     sound_path = find_sound_file(sound_file)
     return unless sound_path
 
-    system("afplay #{sound_path.shellescape} > #{File::NULL} 2>&1")
+    Process.detach(Process.spawn("afplay", sound_path, out: File::NULL, err: File::NULL))
   rescue StandardError
     # Ignore sound playback errors
   end

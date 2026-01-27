@@ -364,6 +364,9 @@ class OpenAiClient
   end
 
   def handle_http_error(error)
+    error_message = error.message.to_s
+    is_stream_cancel = error_message.include?("CANCEL") || error_message.include?("stream closed")
+
     error_type = case error
     when HTTPX::Connection::HTTP2::GoawayError
       "Connection Closed (HTTP/2)"
@@ -374,10 +377,14 @@ class OpenAiClient
     when HTTPX::ConnectionError
       "Connection Failed"
     else
-      error.class.name.split("::").last
+      is_stream_cancel ? "Stream Cancelled (HTTP/2)" : error.class.name.split("::").last
     end
 
-    pretty_print_error(error_type, "Network Error", error.message)
+    if is_stream_cancel
+      pretty_print_error(error_type, "Network Error", "HTTP/2 stream was cancelled. This may indicate rate limiting, resource limits, or network issues.")
+    else
+      pretty_print_error(error_type, "Network Error", error.message)
+    end
     exit 1
   end
 

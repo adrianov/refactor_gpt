@@ -849,8 +849,6 @@ def handle_rubocop_warnings
   true
 end
 
-ANALYSIS_SOUND_THRESHOLD = 5.0
-
 def get_user_confirmation
   puts "Do you want to run these git add/commit commands? (y/N)".white
   answer = $stdin.gets.to_s.chomp.downcase
@@ -905,16 +903,7 @@ def get_diff_output
   diff_output
 end
 
-def play_completion_sound(elapsed)
-  return unless elapsed > ANALYSIS_SOUND_THRESHOLD
-
-  sound_file = "/System/Library/Sounds/Glass.aiff"
-  system("afplay #{Shellwords.escape(sound_file)}") if File.exist?(sound_file)
-  print "\e]0;✅ Commit Plan Done\a"
-end
-
 def call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
-  start_time = Time.now
   plan = OpenAi.new(debug: debug_mode).commit_plan(
     status_output,
     diff_output,
@@ -922,8 +911,7 @@ def call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recen
     recent_commits,
     recent_commands
   )
-  elapsed = Time.now - start_time
-  play_completion_sound(elapsed)
+  CompletionNotifier.notify_completion(success: true)
   plan
 end
 
