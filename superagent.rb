@@ -120,7 +120,12 @@ class Display
 
   def check_late_night_reminder
     now = Time.now
-    return unless now.hour >= 0 && now.hour < 6
+    hour = now.hour
+    minute = now.min
+
+    # Check if time is between 23:30 and 6:00
+    is_late_night = (hour == 23 && minute >= 30) || (hour >= 0 && hour < 6)
+    return unless is_late_night
 
     messages = [
       "🌙 It's getting late! Your code will still be here tomorrow, and you'll tackle it with fresh eyes and renewed energy.",
