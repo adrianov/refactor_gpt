@@ -105,11 +105,11 @@ module Utility
   end
 
   def self.valid_file_path?(path, base_dir)
-    File.file?(path) && path.start_with?(base_dir + File::SEPARATOR)
+    File.file?(path)
   end
 
   def self.build_file_snippet(path, base_dir)
-    relative_path = path.sub(base_dir + File::SEPARATOR, "")
+    relative_path = path.start_with?(base_dir + File::SEPARATOR) ? path.sub(base_dir + File::SEPARATOR, "") : path
     "File: #{relative_path}\n#{File.read(path)}"
   end
 
@@ -217,8 +217,10 @@ module Utility
   end
 
   def self.load_env_vars
-    env_file_path = File.join(__dir__, ".env")
+    # First try project root (one level up from lib/)
+    env_file_path = File.join(File.dirname(__FILE__), ".env")
 
+    # Fallback to current directory if not found
     env_file_path = File.join(Dir.pwd, ".env") unless File.exist?(env_file_path)
 
     return {} unless File.exist?(env_file_path)
