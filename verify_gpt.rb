@@ -25,6 +25,8 @@ class Verify
     handle_gemini_fallback(prompts, e)
   end
 
+  public
+
   def assess_feature(user_request, status_output, diff_output)
     ask([
       {role: "system", content: system_instruction},

@@ -23,8 +23,8 @@ require 'open3'
 class Display
   def timestamped_puts(*args)
     args.each do |arg|
-      time_str = Time.now.strftime('%Y-%m-%d %H:%M:%S')
-      puts "[#{time_str}] #{arg}"
+      time = Time.now.strftime('%Y-%m-%d %H:%M:%S')
+      puts "[#{time}] #{arg}"
     end
   end
 
@@ -39,29 +39,28 @@ class Display
     timestamped_puts ''
   end
 
-  def display_start_message(user_request)
+  def display_start_message(req)
     timestamped_puts "\nSuperagent:".cyan
-    timestamped_puts "#{user_request}\n".yellow
+    timestamped_puts req.yellow
     timestamped_puts ''
     display_git_status
   end
 
-  def display_attempt_header(model, index, total)
-    timestamped_puts "--- Attempt #{index + 1}/#{total}: #{model} ---".blue
+  def display_attempt_header(model, idx, total)
+    timestamped_puts "--- Attempt #{idx + 1}/#{total}: #{model} ---".blue
     timestamped_puts ''
   end
 
-  def display_verification_result(verified, description, context = '')
+  def display_verification_result(verified, desc, context = '')
     prefix = verified ? '✓ Passed' : '✗ Failed'
     suffix = context.empty? ? '' : " #{context}"
 
-    message = if description && !description.empty?
-                "#{prefix}#{suffix}: #{description}"
+    message = if desc && !desc.empty?
+                "#{prefix}#{suffix}: #{desc}"
               elsif verified
                 "#{prefix}#{suffix}! Success."
               else
-                default = context.empty? ? 'Retrying...' : 'Next model...'
-                "#{prefix}#{suffix}! #{default}"
+                "#{prefix}#{suffix}! #{context.empty? ? 'Retrying...' : 'Next...'}"
               end
 
     color = verified ? :green : :yellow
@@ -76,7 +75,7 @@ class Display
   end
 
   def display_agent_failure
-    timestamped_puts 'Agent failed. Next model...'.yellow
+    timestamped_puts 'Agent failed. Next...'.yellow
     timestamped_puts ''
   end
 
@@ -88,8 +87,8 @@ class Display
     system("git rev-parse --is-inside-work-tree > #{File::NULL} 2>&1")
   end
 
-  def format_duration(seconds)
-    "#{(seconds / 60).to_i}m #{(seconds % 60).to_i}s"
+  def format_duration(sec)
+    "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
   end
 end
 
@@ -108,7 +107,7 @@ class RequestReader
   end
 
   def read_interactive
-    @display.timestamped_puts 'Enter your request:'.cyan
+    @display.timestamped_puts 'Enter request:'.cyan
     @display.timestamped_puts '(Press Enter twice or Ctrl+D to submit)'
     @display.timestamped_puts ''
 
@@ -139,8 +138,8 @@ class RequestReader
     read_from_argv || read_from_stdin || read_interactive
   end
 
-  def validate(user_request)
-    return true if user_request && !user_request.strip.empty?
+  def validate(req)
+    return true if req && !req.strip.empty?
 
     @display.timestamped_puts 'No request provided. Exiting.'.yellow
     exit 1
@@ -170,12 +169,12 @@ class AgentExecutor
   end
 
   def run(model, prompt, max_retries: 3, base_delay: 1)
-    wrapped_prompt = wrap_prompt(prompt)
+    wrapped = wrap_prompt(prompt)
     retries = 0
 
     loop do
-      @display.timestamped_puts "Running: agent --print --model #{model} '#{prompt[0..50]}...'"
-      stdout, stderr, status = Open3.capture3('agent', '--print', '--model', model, wrapped_prompt)
+      @display.timestamped_puts "Running: agent --model #{model} '#{prompt[0..50]}...'"
+      stdout, stderr, status = Open3.capture3('agent', '--print', '--model', model, wrapped)
       output = stdout + stderr
       output.each_line { |line| @display.timestamped_puts line.chomp }
 
@@ -184,7 +183,7 @@ class AgentExecutor
       if retryable_network_error?(output) && retries < max_retries
         retries += 1
         delay = base_delay * (2**(retries - 1))
-        @display.timestamped_puts "⚠️  Network error detected, retrying in #{delay}s... (#{retries}/#{max_retries})".yellow
+        @display.timestamped_puts "⚠️  Network error, retrying in #{delay}s... (#{retries}/#{max_retries})".yellow
         sleep(delay)
         next
       end
@@ -206,13 +205,13 @@ class VerificationHandler
     File.exist?(@verify_gpt_path)
   end
 
-  def build_fix_prompt(user_request)
+  def build_fix_prompt(req)
     <<~HEREDOC
-      Original user request: #{user_request}
+      Original request: #{req}
 
-      The previous attempt did not fully solve the request or introduced issues. Please fix the implementation.
+      The previous attempt failed. Please fix the implementation.
 
-      Review the current state of the codebase, identify what's missing or incorrect, and make the necessary corrections.
+      Review the codebase and make the necessary corrections.
     HEREDOC
   end
 
@@ -222,63 +221,58 @@ class VerificationHandler
     normalized = response.strip
     upcased = normalized.upcase
 
-    # Prioritize start_with? for cleaner parsing
-    return parse_yes_response(normalized) if upcased.start_with?('YES')
-    return parse_no_response(normalized) if upcased.start_with?('NO')
+    return parse_yes_res(normalized) if upcased.start_with?('YES')
+    return parse_no_res(normalized) if upcased.start_with?('NO')
 
-    yes_index = upcased.index(/\bYES\b/)
-    no_index = upcased.index(/\bNO\b/)
+    yes_idx = upcased.index(/\bYES\b/)
+    no_idx = upcased.index(/\bNO\b/)
 
-    return parse_no_response(normalized) if no_index && (yes_index.nil? || no_index < yes_index)
-    return parse_yes_response(normalized) if yes_index && (no_index.nil? || yes_index < no_index)
+    return parse_no_res(normalized) if no_idx && (yes_idx.nil? || no_idx < yes_idx)
+    return parse_yes_res(normalized) if yes_idx && (no_idx.nil? || yes_idx < no_idx)
 
     [false, nil]
   end
 
-  def parse_no_response(normalized)
+  def parse_no_res(normalized)
     match = normalized.match(/\bNO\s*:?\s*(.+)/i)
     [false, match ? match[1].strip : 'Failed']
   end
 
-  def parse_yes_response(normalized)
+  def parse_yes_res(normalized)
     match = normalized.match(/\bYES\s*:?\s*(.+)/i)
     [true, match ? match[1].strip : 'Passed']
   end
 
-  def run_verification_with_verify_gpt(user_request)
+  def run_verify_gpt(req)
     @display.timestamped_puts 'Verifying...'.blue
-    @display.timestamped_puts "Running: verify_gpt.rb '#{user_request[0..50]}...'"
+    @display.timestamped_puts "Running: verify_gpt.rb '#{req[0..50]}...'"
 
-    # Use Open3.capture3 to run verify_gpt.rb and capture its output
-    stdout, stderr, status = Open3.capture3('ruby', @verify_gpt_path, user_request)
+    stdout, stderr, status = Open3.capture3('ruby', @verify_gpt_path, req)
     output = stdout + stderr
     output.each_line { |line| @display.timestamped_puts line.chomp }
 
-    unless status.success?
-      return [false, 'verify_gpt.rb failed']
-    end
+    return [false, 'verify_gpt.rb failed'] unless status.success?
 
-    # verify_gpt.rb outputs "YES: description" or "NO: description"
-    verified, description = parse_response(stdout.strip)
-    [verified, description || 'Failed']
+    verified, desc = parse_response(stdout.strip)
+    [verified, desc || 'Failed']
   end
 
-  def run_verification(model, user_request)
-    return run_verification_with_verify_gpt(user_request) if verify_gpt_available?
+  def run_verification(model, req)
+    return run_verify_gpt(req) if verify_gpt_available?
 
     @display.timestamped_puts 'verify_gpt.rb not found.'.yellow
     [true, 'verify_gpt.rb not found, assuming success']
   end
 
-  def attempt_retry_with_fix(model, user_request)
-    fix_prompt = build_fix_prompt(user_request)
+  def retry_with_fix(model, req)
+    fix_prompt = build_fix_prompt(req)
     @display.timestamped_puts "Retrying #{model} with fix...".blue
     @display.timestamped_puts ''
 
     success, _output = @agent_executor.run(model, fix_prompt)
     return [false, nil] unless success
 
-    run_verification(model, user_request)
+    run_verification(model, req)
   end
 end
 
@@ -301,20 +295,20 @@ class Superagent
 
   def run
     @start_time = Time.now
-    user_request = @request_reader.read
-    @request_reader.validate(user_request)
-    @display.display_start_message(user_request)
+    req = @request_reader.read
+    @request_reader.validate(req)
+    @display.display_start_message(req)
 
-    MODELS.each_with_index do |model, index|
-      @display.display_attempt_header(model, index, MODELS.size)
+    MODELS.each_with_index do |model, idx|
+      @display.display_attempt_header(model, idx, MODELS.size)
 
-      success, _output = @agent_executor.run(model, user_request)
+      success, _output = @agent_executor.run(model, req)
       unless success
         @display.display_agent_failure
         next
       end
 
-      result = process_model_attempt(model, user_request)
+      result = process_model_attempt(model, req)
       return if result == :success
     end
 
@@ -326,27 +320,27 @@ class Superagent
 
   private
 
-  def process_model_attempt(model, user_request)
-    verified, description = @verification_handler.run_verification(model, user_request)
+  def process_model_attempt(model, req)
+    verified, desc = @verification_handler.run_verification(model, req)
     @display.timestamped_puts ''
 
-    return handle_verification_success(description) if verified
+    return handle_success(desc) if verified
 
-    @display.display_verification_result(false, description)
+    @display.display_verification_result(false, desc)
     @display.timestamped_puts ''
 
-    verified, fix_description = @verification_handler.attempt_retry_with_fix(model, user_request)
+    verified, fix_desc = @verification_handler.retry_with_fix(model, req)
     @display.timestamped_puts ''
 
-    return handle_verification_success(fix_description, 'after retry') if verified
+    return handle_success(fix_desc, 'after retry') if verified
 
-    @display.display_verification_result(false, fix_description, 'after retry')
+    @display.display_verification_result(false, fix_desc, 'after retry')
     @display.timestamped_puts ''
     :continue
   end
 
-  def handle_verification_success(description, context = '')
-    @display.display_verification_result(true, description, context)
+  def handle_success(desc, context = '')
+    @display.display_verification_result(true, desc, context)
     @display.display_total_runtime(@start_time)
     @display.display_git_status
     exit 0
