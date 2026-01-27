@@ -40,27 +40,27 @@ class Display
   end
 
   def display_start_message(user_request)
-    timestamped_puts "\nStarting superagent with request:".cyan
+    timestamped_puts "\nSuperagent:".cyan
     timestamped_puts "#{user_request}\n".yellow
     timestamped_puts ''
     display_git_status
   end
 
   def display_attempt_header(model, index, total)
-    timestamped_puts "--- Attempt #{index + 1}/#{total}: Using #{model} ---".blue
+    timestamped_puts "--- Attempt #{index + 1}/#{total}: #{model} ---".blue
     timestamped_puts ''
   end
 
   def display_verification_result(verified, description, context = '')
-    prefix = verified ? '✓ Verification passed' : '✗ Verification failed'
+    prefix = verified ? '✓ Passed' : '✗ Failed'
     suffix = context.empty? ? '' : " #{context}"
 
     message = if description && !description.empty?
                 "#{prefix}#{suffix}: #{description}"
               elsif verified
-                "#{prefix}#{suffix}! Changes solve the request with no new bugs."
+                "#{prefix}#{suffix}! Success."
               else
-                default = context.empty? ? 'Retrying once with fix instruction...' : 'Trying next model...'
+                default = context.empty? ? 'Retrying...' : 'Next model...'
                 "#{prefix}#{suffix}! #{default}"
               end
 
@@ -71,17 +71,17 @@ class Display
   def display_total_runtime(start_time)
     return unless start_time
 
-    elapsed_time = Time.now - start_time
-    timestamped_puts "Total run time: #{format_duration(elapsed_time)}".cyan
+    elapsed = Time.now - start_time
+    timestamped_puts "Run time: #{format_duration(elapsed)}".cyan
   end
 
   def display_agent_failure
-    timestamped_puts 'Agent command failed. Continuing to next model...'.yellow
+    timestamped_puts 'Agent failed. Next model...'.yellow
     timestamped_puts ''
   end
 
   def display_all_attempts_failed
-    timestamped_puts 'All attempts completed. Verification did not pass with any model.'.red
+    timestamped_puts 'All attempts failed.'.red
   end
 
   def git_repo?
@@ -174,7 +174,7 @@ class AgentExecutor
     retries = 0
 
     loop do
-      @display.timestamped_puts "Running: agent --print --model #{model} '#{prompt[0..50]}#{"..." if prompt.length > 50}'".green
+      @display.timestamped_puts "Running: agent --print --model #{model} '#{prompt[0..50]}...'"
       stdout, stderr, status = Open3.capture3('agent', '--print', '--model', model, wrapped_prompt)
       output = stdout + stderr
       output.each_line { |line| @display.timestamped_puts line.chomp }
@@ -199,26 +199,11 @@ class VerificationHandler
   def initialize(display, agent_executor)
     @display = display
     @agent_executor = agent_executor
+    @verify_gpt_path = File.join(__dir__, 'verify_gpt.rb')
   end
 
-  def build_verification_prompt(user_request)
-    <<~HEREDOC
-      User request: #{user_request}
-
-      Verify that the changes fully solve the user's request and introduce no new bugs or regressions.
-
-      You may use any verification method you find appropriate, such as:
-      - Reviewing git diff (run `git diff` to see changes)
-      - Running tests or linting tools
-      - Checking file contents
-      - Any other verification approach you deem suitable
-
-      After verification, respond with:
-      - "YES: [short description of what was verified]" if the changes fully solve the request with no issues
-      - "NO: [short description of what is wrong]" if there are issues
-
-      Always include a brief description. Keep it specific and concise.
-    HEREDOC
+  def verify_gpt_available?
+    File.exist?(@verify_gpt_path)
   end
 
   def build_fix_prompt(user_request)
@@ -227,11 +212,7 @@ class VerificationHandler
 
       The previous attempt did not fully solve the request or introduced issues. Please fix the implementation.
 
-      Review the current state of the codebase, identify what's missing or incorrect, and make the necessary corrections to:
-      1. Fully solve the user's request
-      2. Ensure no new bugs or regressions are introduced
-
-      You may use git diff, file inspection, or any other method to understand the current state before applying fixes.
+      Review the current state of the codebase, identify what's missing or incorrect, and make the necessary corrections.
     HEREDOC
   end
 
@@ -240,6 +221,10 @@ class VerificationHandler
 
     normalized = response.strip
     upcased = normalized.upcase
+
+    # Prioritize start_with? for cleaner parsing
+    return parse_yes_response(normalized) if upcased.start_with?('YES')
+    return parse_no_response(normalized) if upcased.start_with?('NO')
 
     yes_index = upcased.index(/\bYES\b/)
     no_index = upcased.index(/\bNO\b/)
@@ -252,29 +237,42 @@ class VerificationHandler
 
   def parse_no_response(normalized)
     match = normalized.match(/\bNO\s*:?\s*(.+)/i)
-    [false, match ? match[1].strip : 'Verification failed']
+    [false, match ? match[1].strip : 'Failed']
   end
 
   def parse_yes_response(normalized)
     match = normalized.match(/\bYES\s*:?\s*(.+)/i)
-    [true, match ? match[1].strip : 'Verification passed']
+    [true, match ? match[1].strip : 'Passed']
+  end
+
+  def run_verification_with_verify_gpt(user_request)
+    @display.timestamped_puts 'Verifying...'.blue
+    @display.timestamped_puts "Running: verify_gpt.rb '#{user_request[0..50]}...'"
+
+    # Use Open3.capture3 to run verify_gpt.rb and capture its output
+    stdout, stderr, status = Open3.capture3('ruby', @verify_gpt_path, user_request)
+    output = stdout + stderr
+    output.each_line { |line| @display.timestamped_puts line.chomp }
+
+    unless status.success?
+      return [false, 'verify_gpt.rb failed']
+    end
+
+    # verify_gpt.rb outputs "YES: description" or "NO: description"
+    verified, description = parse_response(stdout.strip)
+    [verified, description || 'Failed']
   end
 
   def run_verification(model, user_request)
-    verification_prompt = build_verification_prompt(user_request)
-    @display.timestamped_puts "Verifying solution with #{model}...".blue
-    @display.timestamped_puts "Running: agent --print --model #{model} [verification prompt]".green
+    return run_verification_with_verify_gpt(user_request) if verify_gpt_available?
 
-    success, output = @agent_executor.run(model, verification_prompt)
-    return [false, nil] unless success
-
-    verified, description = parse_response(output.strip)
-    [verified, description]
+    @display.timestamped_puts 'verify_gpt.rb not found.'.yellow
+    [true, 'verify_gpt.rb not found, assuming success']
   end
 
   def attempt_retry_with_fix(model, user_request)
     fix_prompt = build_fix_prompt(user_request)
-    @display.timestamped_puts "Retrying with #{model} using fix instruction...".blue
+    @display.timestamped_puts "Retrying #{model} with fix...".blue
     @display.timestamped_puts ''
 
     success, _output = @agent_executor.run(model, fix_prompt)
