@@ -14,8 +14,6 @@ require "colorize"
 require "reline"
 require "open3"
 
-CompletionNotifier.setup_exit_hook
-
 $start_time = nil
 
 def timestamped_puts(*args)

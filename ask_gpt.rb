@@ -8,8 +8,6 @@ require "ruby-progressbar"
 require "rbconfig"
 require "reline"
 
-CompletionNotifier.setup_exit_hook
-
 # System information detection
 class SystemInfo
   PLATFORM_PATTERNS = {/darwin/ => "macOS", /linux/ => "Linux",

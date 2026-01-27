@@ -10,8 +10,6 @@ require "shellwords"
 require "ruby-progressbar"
 require "colorize"
 
-CompletionNotifier.setup_exit_hook
-
 class OpenAi
   include AgentsFileHandler
 
@@ -904,15 +902,13 @@ def get_diff_output
 end
 
 def call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
-  plan = OpenAi.new(debug: debug_mode).commit_plan(
+  OpenAi.new(debug: debug_mode).commit_plan(
     status_output,
     diff_output,
     cli_hint,
     recent_commits,
     recent_commands
   )
-  CompletionNotifier.notify_completion(success: true)
-  plan
 end
 
 def extract_plan_results(plan, status_output)

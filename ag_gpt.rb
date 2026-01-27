@@ -5,8 +5,6 @@ require_relative "lib/openai_client"
 require_relative "lib/completion_notifier"
 require "shellwords"
 
-CompletionNotifier.setup_exit_hook
-
 # Class to interact with OpenAI API
 class OpenAi
   def initialize

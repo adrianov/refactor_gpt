@@ -8,8 +8,6 @@ require "shellwords"
 require "colorize"
 require "reline"
 
-CompletionNotifier.setup_exit_hook
-
 class GitExplainer
   include AgentsFileHandler
 

@@ -9,8 +9,6 @@ require "rbconfig"
 require "colorize"
 require "json"
 
-CompletionNotifier.setup_exit_hook
-
 # Simple system information detection with memoization
 class SystemInfo
   def self.to_s

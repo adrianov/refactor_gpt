@@ -10,8 +10,6 @@ require "shellwords"
 require "oj"
 require "tempfile"
 
-CompletionNotifier.setup_exit_hook
-
 # Class to interact with OpenAI API
 class OpenAi
   include AgentsFileHandler
