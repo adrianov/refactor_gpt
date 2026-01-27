@@ -95,6 +95,20 @@ class Display
     system("git rev-parse --is-inside-work-tree > #{File::NULL} 2>&1")
   end
 
+  def update_git_status
+    return unless git_repo?
+
+    timestamped_puts 'Updating git status...'.cyan
+    system("git fetch > #{File::NULL} 2>&1")
+    status_output = `git status 2>&1`
+    if $?.success?
+      timestamped_puts status_output.strip
+    else
+      timestamped_puts 'Warning: Failed to get git status'.yellow
+    end
+    timestamped_puts ''
+  end
+
   def format_duration(sec)
     "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
   end
@@ -901,6 +915,7 @@ class Superagent
 
   def run
     @start_time = Time.now
+    @display.update_git_status
     req = @request_reader.read
     @request_reader.validate(req)
     @display.display_start_message(req)
