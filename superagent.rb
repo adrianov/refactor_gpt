@@ -288,6 +288,7 @@ class AgentExecutor
     execution_complete = false
     process_pid = nil
     timeout_disabled = false
+    timed_out = false
 
     monitor_thread = Thread.new do
       loop do
@@ -312,8 +313,11 @@ class AgentExecutor
         next if timeout_disabled || (process_pid && test_runner_running?(process_pid))
 
         if elapsed >= EXECUTION_TIMEOUT && !execution_complete
+          timed_out = true
           @display.timestamped_puts "❌ Agent timed out after #{EXECUTION_TIMEOUT}s".red
           Process.kill('TERM', process_pid) if process_pid
+          sleep 2
+          Process.kill('KILL', process_pid) if process_pid && !execution_complete
           break
         end
       end
@@ -321,15 +325,58 @@ class AgentExecutor
 
     begin
       cmd = build_and_display_command('--print', '--model', model, wrapped)
-      Open3.popen2e(*cmd) do |_stdin, stdout_stderr, wait_thr|
+      Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
         process_pid = wait_thr.pid
-        output = stdout_stderr.read
+        output = ''
+        stdin.close
+
+        loop do
+          break if timed_out
+
+          ready = IO.select([stdout_stderr], nil, nil, 0.5)
+          if ready
+            begin
+              chunk = stdout_stderr.readpartial(4096)
+              output += chunk
+            rescue EOFError
+              break
+            rescue IO::WaitReadable
+              next
+            end
+          elsif !wait_thr.alive?
+            begin
+              remaining = stdout_stderr.read
+              output += remaining if remaining
+            rescue EOFError
+              # Stream closed, no more data
+            rescue IOError => e
+              # Error reading remaining data, log and continue
+              @display.timestamped_puts "Warning: Error reading remaining output: #{e.message}".yellow
+            end
+            break
+          end
+        end
+
+        if timed_out
+          stdout_stderr.close rescue nil
+          output += "\n[Process terminated due to timeout]"
+        else
+          remaining = stdout_stderr.read rescue ''
+          output += remaining
+        end
+
+        execution_complete = true
+
         begin
           status = wait_thr.value
         rescue StandardError
           status = Struct.new(:success?).new(false)
         end
-        execution_complete = true
+
+        if timed_out
+          status = Struct.new(:success?).new(false)
+        end
+
         [output || '', '', status]
       end
     rescue Errno::ESRCH, Errno::ECHILD
@@ -500,7 +547,6 @@ class VerificationHandler
       - Any other verification approach you deem suitable
 
       After verification, respond with:
->>>>>>> a2db7d8 (refactor: use agent ask mode for primary verification with verify_gpt fallback)
       - "YES: [short description of what was verified]" if the changes fully solve the request with no issues
       - "NO: [short description of what is wrong]" if there are issues
 
@@ -553,7 +599,7 @@ class VerificationHandler
     @display.timestamped_puts 'Verifying...'.blue
 
     verification_prompt = build_verification_prompt(req)
-    cmd = build_and_display_command('--mode', 'ask', '--model', model, '--print', verification_prompt)
+    cmd = @agent_executor.build_and_display_command('--mode', 'ask', '--model', model, '--print', verification_prompt)
 
     stdout, stderr, status = Open3.capture3(*cmd)
     output = stdout + stderr
