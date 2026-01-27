@@ -619,6 +619,7 @@ end
 def process_stream_chunks(client, messages, spinner, spinner_thread, io, first_chunk_received)
   full_text = ""
   chunk_received = first_chunk_received
+  buffer = ""
 
   client.stream_answer(messages) do |chunk|
     if chunk && !chunk.to_s.empty? && !chunk_received
@@ -626,10 +627,22 @@ def process_stream_chunks(client, messages, spinner, spinner_thread, io, first_c
       chunk_received = true
     end
 
-    full_text += chunk.to_s
-    io.write(chunk.to_s)
-    io.flush
+    text = chunk.to_s
+    full_text += text
+    buffer += text
+
+    # Always flush complete lines to ensure md2term receives proper line structure
+    # This is essential for tables and other markdown structures
+    while (newline_index = buffer.index("\n"))
+      line = buffer[0..newline_index]
+      io.write(line)
+      io.flush
+      buffer = buffer[(newline_index + 1)..-1]
+    end
   end
+
+  io.write(buffer) unless buffer.empty?
+  io.flush
 
   [full_text, chunk_received]
 end
