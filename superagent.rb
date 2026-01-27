@@ -358,6 +358,20 @@ class AgentExecutor
       return [false, output]
     end
   end
+
+  def run_plan_mode(model, p)
+    wrapped = wrap_prompt(p)
+    @display.timestamped_puts "Running: agent --plan --model #{model} '#{p[0..50].gsub("\n", " ")}...'"
+    
+    stdout, stderr, status = Open3.capture3('agent', '--plan', '--print', '--model', model, wrapped)
+    output = (stdout || '') + (stderr || '')
+    output.each_line { |line| @display.timestamped_puts line.chomp }
+    
+    [status.success?, output]
+  rescue StandardError => e
+    @display.timestamped_puts "❌ Agent execution error: #{e.message}".red
+    [false, "Execution error: #{e.message}"]
+  end
 end
 
 # Handles verification prompts and response parsing
@@ -428,11 +442,35 @@ class VerificationHandler
     end
   end
 
+  def build_verification_prompt(req)
+    <<~HEREDOC
+      Verify that the code changes fully implement the following request and introduce no new bugs or regressions:
+
+      #{req}
+
+      Review the git status and diff to assess the changes. After verification, respond with:
+      - "YES: [short description of what was verified]" if the changes fully solve the request with no issues
+      - "NO: [short description of what is wrong]" if there are issues
+
+      CRITICAL: Your response MUST start with either "YES" or "NO" as the first word. This is required for automated parsing.
+    HEREDOC
+  end
+
+  def run_agent_verification(model, req)
+    @display.timestamped_puts 'Verifying with agent (plan mode)...'.blue
+    verification_prompt = build_verification_prompt(req)
+    
+    success, output = @agent_executor.run_plan_mode(model, verification_prompt)
+    return [false, 'Agent verification failed'] unless success
+
+    verified, desc = parse_res(output.strip)
+    [verified, desc || 'Failed']
+  end
+
   def run_verification(model, req)
     return run_verify_gpt(req) if verify_gpt_available?
 
-    @display.timestamped_puts 'verify_gpt.rb not found.'.yellow
-    [true, 'verify_gpt.rb not found, assuming success']
+    run_agent_verification(model, req)
   end
 
   def retry_with_fix(model, req)
