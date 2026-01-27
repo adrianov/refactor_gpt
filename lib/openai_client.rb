@@ -29,8 +29,11 @@ end
 class NetworkResourceError < StandardError
 end
 
+require_relative "agents_file_handler"
+
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
+  include AgentsFileHandler
   DEFAULT_MODEL = "glm-4.6"
   REQUEST_TIMEOUT = 300
   DEFAULT_PROGRESS_SPEED = 300
@@ -672,17 +675,7 @@ class OpenAiClient
   end
 
   def load_env_vars
-    # First try project root (one level up from lib/)
-    env_file_path = File.join(File.dirname(__dir__), ".env")
-
-    # Fallback to current directory if not found
-    env_file_path = File.join(Dir.pwd, ".env") unless File.exist?(env_file_path)
-
-    return {} unless File.exist?(env_file_path)
-
-    File.foreach(env_file_path).with_object({}) do |line, h|
-      key, value = line.split("=", 2)
-      h[key.strip] = value.strip if key && value
-    end
+    # This method is now provided by AgentsFileHandler
+    super(Dir.pwd)
   end
 end

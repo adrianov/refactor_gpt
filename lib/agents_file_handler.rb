@@ -2,21 +2,16 @@
 
 # Shared module for handling AGENTS.md file operations
 module AgentsFileHandler
-  def load_agents_file
-    # Only try current working directory
-    agents_file = File.join(Dir.pwd, 'AGENTS.md')
+  def load_agents_file(project_root = Dir.pwd)
+    agents_file = File.join(project_root, 'AGENTS.md')
 
     return '' unless File.exist?(agents_file)
 
     File.read(agents_file)
   end
 
-  def load_env_vars
-    # First try project root (one level up from lib/)
-    env_file_path = File.join(File.dirname(__dir__), ".env")
-
-    # Fallback to current directory if not found
-    env_file_path = File.join(Dir.pwd, ".env") unless File.exist?(env_file_path)
+  def load_env_vars(project_root = Dir.pwd)
+    env_file_path = File.join(project_root, ".env")
 
     return {} unless File.exist?(env_file_path)
 

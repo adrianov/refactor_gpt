@@ -8,12 +8,15 @@ require_relative "lib/completion_notifier"
 require "shellwords"
 require "colorize"
 
+PROJECT_ROOT = Dir.pwd.freeze
+
 class Verify
   include AgentsFileHandler
 
-  def initialize(model: nil, debug: false)
+  def initialize(model: nil, debug: false, project_root: PROJECT_ROOT)
     @model = model
     @debug = debug
+    @project_root = project_root
   end
 
   def ask(prompts)
@@ -49,20 +52,8 @@ class Verify
   end
 
   def gemini_configured?
-    env_vars = load_env_vars
+    env_vars = load_env_vars(@project_root)
     env_vars.key?("GEMINI_ACCESS_TOKEN") && !env_vars["GEMINI_ACCESS_TOKEN"].empty?
-  end
-
-  def load_env_vars
-    env_file_path = File.join(__dir__, ".env")
-    env_file_path = File.join(Dir.pwd, ".env") unless File.exist?(env_file_path)
-
-    return {} unless File.exist?(env_file_path)
-
-    File.foreach(env_file_path).with_object({}) do |line, h|
-      key, value = line.split("=", 2)
-      h[key.strip] = value.strip if key && value
-    end
   end
 
   def build_user_content(user_request, status_output, diff_output)
@@ -79,7 +70,7 @@ class Verify
   end
 
   def system_instruction
-    agents_content = load_agents_file
+    agents_content = load_agents_file(@project_root)
     has_agents = !agents_content.empty?
 
     instruction_parts = [
@@ -123,18 +114,19 @@ class Verify
   end
 end
 
-def run_cmd(cmd, capture_output: true)
+def run_cmd(cmd, capture_output: true, project_root: PROJECT_ROOT)
+  git_cmd = cmd.start_with?("git ") ? "git -C #{Shellwords.escape(project_root)} #{cmd[4..-1]}" : cmd
   if capture_output
-    output = `#{cmd}`
+    output = `#{git_cmd}`
     unless $?.success?
-      puts "NO: Command failed: #{cmd}"
+      puts "NO: Command failed: #{git_cmd}"
       exit 1
     end
     output
   else
-    system(cmd)
+    system(git_cmd)
     unless $?.success?
-      puts "NO: Command failed: #{cmd}"
+      puts "NO: Command failed: #{git_cmd}"
       exit 1
     end
   end
@@ -204,8 +196,12 @@ def display_result(verified, description)
   end
 end
 
-def prepare_untracked_files
-  all_untracked = `git ls-files --others --exclude-standard`.split("\n")
+def prepare_untracked_files(project_root: PROJECT_ROOT)
+  all_untracked = `git -C #{Shellwords.escape(project_root)} ls-files --others --exclude-standard`.split("\n")
+  unless $?.success?
+    puts "NO: Failed to list untracked files"
+    exit 1
+  end
   additional_exclusions = [
     "*.log", "*.tmp", "*.temp", "*.bak", "*.swp", "*.swo",
     "*.pyc", "*.pyo", "*.class", "*.jar", "*.war", "*.ear",
@@ -219,12 +215,12 @@ def prepare_untracked_files
 
   return if files_to_add.empty?
 
-  add_cmd = ["git", "add", "-N", *files_to_add].map { |p| Shellwords.escape(p) }.join(" ")
+  add_cmd = ["git", "-C", project_root, "add", "-N", *files_to_add].map { |p| Shellwords.escape(p) }.join(" ")
   system("#{add_cmd} 2>/dev/null")
 end
 
-def get_diff_output
-  diff_output = `git diff -U500`
+def get_diff_output(project_root: PROJECT_ROOT)
+  diff_output = `git -C #{Shellwords.escape(project_root)} diff -U500`
   unless $?.success?
     puts "NO: Failed to capture diff for analysis"
     exit 1
@@ -246,7 +242,7 @@ CompletionNotifier.wrap_main do
   prepare_untracked_files
   diff_output = get_diff_output
 
-  response = Verify.new(debug: debug_mode).assess_feature(
+  response = Verify.new(debug: debug_mode, project_root: PROJECT_ROOT).assess_feature(
     feature_request,
     status_output,
     diff_output

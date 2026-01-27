@@ -28,7 +28,10 @@ end
 class NetworkResourceError < StandardError
 end
 
+require_relative "agents_file_handler"
+
 class GeminiClient
+  include AgentsFileHandler
   DEFAULT_MODEL = "gemini-3-flash"
   REQUEST_TIMEOUT = 300
   DEFAULT_PROGRESS_SPEED = 300
@@ -748,14 +751,7 @@ class GeminiClient
   end
 
   def load_env_vars
-    env_file_path = File.join(File.dirname(__dir__), ".env")
-    env_file_path = File.join(Dir.pwd, ".env") unless File.exist?(env_file_path)
-
-    return {} unless File.exist?(env_file_path)
-
-    File.foreach(env_file_path).with_object({}) do |line, h|
-      key, value = line.split("=", 2)
-      h[key.strip] = value.strip if key && value
-    end
+    # This method is now provided by AgentsFileHandler
+    super(Dir.pwd)
   end
 end
