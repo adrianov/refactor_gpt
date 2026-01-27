@@ -20,6 +20,8 @@ require 'reline'
 require 'open3'
 require 'timeout'
 require 'rbconfig'
+require 'shellwords'
+require_relative "lib/agents_file_handler"
 
 # Handles all output formatting and display operations
 class Display
@@ -376,14 +378,11 @@ end
 
 # Handles verification prompts and response parsing
 class VerificationHandler
+  include AgentsFileHandler
+
   def initialize(display, agent_executor)
     @display = display
     @agent_executor = agent_executor
-    @verify_gpt_path = File.join(__dir__, 'verify_gpt.rb')
-  end
-
-  def verify_gpt_available?
-    File.exist?(@verify_gpt_path)
   end
 
   def build_fix_prompt(req)
@@ -424,53 +423,151 @@ class VerificationHandler
     [true, m ? m[1].strip : 'Passed']
   end
 
-  def run_verify_gpt(req)
-    @display.timestamped_puts 'Verifying...'.blue
-    @display.timestamped_puts "Running: verify_gpt.rb '#{req[0..50].gsub("\n", " ")}...'"
-
-    stdout, stderr, status = Open3.capture3('ruby', @verify_gpt_path, req)
-    output = stdout + stderr
-
-    # Always display the full output from verify_gpt.rb to ensure nothing is missed
-    output.each_line { |line| @display.timestamped_puts line.chomp }
-
-    if status.success?
-      verified, desc = parse_res(stdout.strip)
-      [verified, desc || 'Failed']
-    else
-      [false, 'verify_gpt.rb failed']
+  def collect_git_status
+    output = `git status --porcelain --branch 2>&1`
+    unless $?.success?
+      @display.timestamped_puts 'Warning: Failed to get git status'.yellow
+      return ''
     end
+    output
   end
 
-  def build_verification_prompt(req)
-    <<~HEREDOC
-      Verify that the code changes fully implement the following request and introduce no new bugs or regressions:
+  def prepare_untracked_files
+    all_untracked = `git ls-files --others --exclude-standard 2>&1`.split("\n")
+    additional_exclusions = [
+      '*.log', '*.tmp', '*.temp', '*.bak', '*.swp', '*.swo',
+      '*.pyc', '*.pyo', '*.class', '*.jar', '*.war', '*.ear',
+      '*.zip', '*.tar.gz', '*.tgz', '*.rar', '*.exe', '*.dll',
+      '*.so', '*.dylib', '*.bin', '*.dat', '*.orig', '*.rej',
+      '.DS_Store', 'Thumbs.db'
+    ]
+    files_to_add = all_untracked.reject do |file|
+      additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
+    end
 
-      #{req}
+    return if files_to_add.empty?
 
-      Review the git status and diff to assess the changes. After verification, respond with:
+    add_cmd = ['git', 'add', '-N', *files_to_add].map { |p| Shellwords.escape(p) }.join(' ')
+    system("#{add_cmd} 2>/dev/null")
+  end
+
+  def collect_git_diff
+    output = `git diff -U500 2>&1`
+    unless $?.success?
+      @display.timestamped_puts 'Warning: Failed to get git diff'.yellow
+      return ''
+    end
+    output
+  end
+
+  def build_verification_system_instruction
+    agents_content = load_agents_file
+    has_agents = !agents_content.empty?
+
+    instruction_parts = [
+      <<~HEREDOC
+        You are a tool that verifies whether code changes fully implement a requested feature.
+
+        IMPORTANT: This agent is running in non-interactive mode. Do not ask questions, request user input, or wait for confirmation. Work autonomously using available information and make reasonable decisions based on context. Execute tasks directly without seeking clarification.
+      HEREDOC
+    ]
+
+    instruction_parts << "- Ruby development guidelines from AGENTS.md\n" if has_agents
+
+    instruction_parts << <<~HEREDOC
+
+      Task:
+      Verify that the changes fully solve the user's request and introduce no new bugs or regressions.
+
+      You may use any verification method you find appropriate, such as:
+      - Reviewing git diff (run `git diff` to see changes)
+      - Running tests or linting tools
+      - Checking file contents
+      - Any other verification approach you deem suitable
+
+      After verification, respond with:
+>>>>>>> a2db7d8 (refactor: use agent ask mode for primary verification with verify_gpt fallback)
       - "YES: [short description of what was verified]" if the changes fully solve the request with no issues
       - "NO: [short description of what is wrong]" if there are issues
 
       CRITICAL: Your response MUST start with either "YES" or "NO" as the first word. This is required for automated parsing.
+      Always include a brief description after the YES/NO. Keep it specific and concise.
+    HEREDOC
+
+    if has_agents
+      instruction_parts << <<~HEREDOC
+
+        AGENTS.md content (development guidelines to consider):
+        #{agents_content}
+      HEREDOC
+    end
+
+    instruction_parts.join
+  end
+
+  def build_verification_user_content(user_request, status_output, diff_output)
+    content_parts = [
+      "User request: #{user_request}\n\n",
+      "Here is the git status:\n#{status_output.strip}\n\n"
+    ]
+
+    unless diff_output.strip.empty?
+      content_parts << "Here is the git diff for all changes:\n#{diff_output.strip}\n"
+    end
+
+    content_parts.join("\n")
+  end
+
+  def build_verification_prompt(req)
+    status_output = collect_git_status
+    prepare_untracked_files
+    diff_output = collect_git_diff
+
+    system_instruction = build_verification_system_instruction
+    user_content = build_verification_user_content(req, status_output, diff_output)
+
+    <<~HEREDOC
+      #{system_instruction}
+
+      ---
+
+      #{user_content}
     HEREDOC
   end
 
-  def run_agent_verification(model, req)
-    @display.timestamped_puts 'Verifying with agent (plan mode)...'.blue
-    verification_prompt = build_verification_prompt(req)
-    
-    success, output = @agent_executor.run_plan_mode(model, verification_prompt)
-    return [false, 'Agent verification failed'] unless success
+  def run_verification(model, req)
+    @display.timestamped_puts 'Verifying...'.blue
 
-    verified, desc = parse_res(output.strip)
-    [verified, desc || 'Failed']
+    verification_prompt = build_verification_prompt(req)
+    @display.timestamped_puts "Running: agent --mode ask --model #{model} '[verification prompt]'"
+
+    stdout, stderr, status = Open3.capture3('agent', '--mode', 'ask', '--model', model, '--print', verification_prompt)
+    output = stdout + stderr
+    output.each_line { |line| @display.timestamped_puts line.chomp }
+
+    if status.success?
+      verified, desc = parse_res(stdout.strip)
+      return [verified, desc || 'Failed'] unless desc.nil?
+    end
+
+    @display.timestamped_puts 'Primary verification failed, using verify_gpt.rb as fallback...'.yellow
+    run_verification_fallback(req)
   end
 
-  def run_verification(model, req)
-    return run_verify_gpt(req) if verify_gpt_available?
+  def run_verification_fallback(req)
+    verify_script = File.join(__dir__, 'verify_gpt.rb')
+    return [false, 'verify_gpt.rb not found'] unless File.exist?(verify_script)
 
-    run_agent_verification(model, req)
+    @display.timestamped_puts "Running: #{verify_script} '#{req[0..50]}...'"
+
+    stdout, stderr, status = Open3.capture3('ruby', verify_script, req)
+    output = stdout + stderr
+    output.each_line { |line| @display.timestamped_puts line.chomp }
+
+    return [false, 'Verification fallback command failed'] unless status.success?
+
+    verified, desc = parse_res(stdout.strip)
+    [verified, desc || 'Failed']
   end
 
   def retry_with_fix(model, req)
