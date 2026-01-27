@@ -526,7 +526,9 @@ class GeminiClient
 
     required_vars = ["GEMINI_ACCESS_TOKEN"]
     if required_vars.include?(key)
-      warn("Missing required environment variable: #{key}. Please add it to the .env file.")
+      env_dir = script_directory
+      env_path = File.join(env_dir, ".env")
+      warn("Missing required environment variable: #{key}. Please add it to the .env file at #{env_path}.")
       exit 1
     end
     default
@@ -752,6 +754,6 @@ class GeminiClient
 
   def load_env_vars
     # This method is now provided by AgentsFileHandler
-    super(Dir.pwd)
+    super
   end
 end

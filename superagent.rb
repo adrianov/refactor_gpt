@@ -546,11 +546,11 @@ class VerificationHandler
     return parse_yes_res(n) if up.start_with?('YES')
     return parse_no_res(n) if up.start_with?('NO')
 
-    yes_idx = up.index(/\bYES\b/)
-    no_idx = up.index(/\bNO\b/)
+    yes_match = up.match(/\bYES\s*:?/i)
+    no_match = up.match(/\bNO\s*:?/i)
 
-    return parse_no_res(n) if no_idx && (yes_idx.nil? || no_idx < yes_idx)
-    return parse_yes_res(n) if yes_idx && (no_idx.nil? || yes_idx < no_idx)
+    return parse_no_res(n) if no_match && (yes_match.nil? || no_match.begin(0) < yes_match.begin(0))
+    return parse_yes_res(n) if yes_match && (no_match.nil? || yes_match.begin(0) < no_match.begin(0))
 
     [false, res]
   end
@@ -565,13 +565,15 @@ class VerificationHandler
   end
 
   def parse_no_res(n)
-    m = n.match(/\bNO\s*:?\s*([\s\S]+)/i)
-    [false, m ? m[1].strip : 'Failed']
+    m = n.match(/\bNO\s*:?\s*(.*)/im)
+    description = m ? m[1].strip : ""
+    [false, description.empty? ? "Failed" : description]
   end
 
   def parse_yes_res(n)
-    m = n.match(/\bYES\s*:?\s*([\s\S]+)/i)
-    [true, m ? m[1].strip : 'Passed']
+    m = n.match(/\bYES\s*:?\s*(.*)/im)
+    description = m ? m[1].strip : ""
+    [true, description.empty? ? "Passed" : description]
   end
 
   def git_repo?

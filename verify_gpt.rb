@@ -163,8 +163,8 @@ def parse_response(response)
   return parse_yes_response(normalized) if upcased.start_with?("YES")
   return parse_no_response(normalized) if upcased.start_with?("NO")
 
-  yes_match = upcased.match(/\bYES\b/)
-  no_match = upcased.match(/\bNO\b/)
+  yes_match = upcased.match(/\bYES\s*:?/i)
+  no_match = upcased.match(/\bNO\s*:?/i)
 
   return parse_no_response(normalized) if no_match && (yes_match.nil? || no_match.begin(0) < yes_match.begin(0))
   return parse_yes_response(normalized) if yes_match && (no_match.nil? || yes_match.begin(0) < no_match.begin(0))
@@ -173,13 +173,15 @@ def parse_response(response)
 end
 
 def parse_no_response(normalized)
-  match = normalized.match(/\bNO\s*:?\s*([\s\S]+)/i)
-  [false, match ? match[1].strip : "Verification failed"]
+  match = normalized.match(/\bNO\s*:?\s*(.*)/im)
+  description = match ? match[1].strip : ""
+  [false, description.empty? ? "Verification failed" : description]
 end
 
 def parse_yes_response(normalized)
-  match = normalized.match(/\bYES\s*:?\s*([\s\S]+)/i)
-  [true, match ? match[1].strip : "Verification passed"]
+  match = normalized.match(/\bYES\s*:?\s*(.*)/im)
+  description = match ? match[1].strip : ""
+  [true, description.empty? ? "Verification passed" : description]
 end
 
 def display_result(verified, description)
