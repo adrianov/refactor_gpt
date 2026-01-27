@@ -113,6 +113,18 @@ class Display
   def format_duration(sec)
     "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
   end
+
+  def update_terminal_title(title)
+    return unless $stdout.tty? || $stderr.tty?
+
+    sequence = "\033]2;#{title}\007\033]1;#{title}\007"
+    $stdout.print sequence if $stdout.tty?
+    $stdout.flush if $stdout.tty?
+    $stderr.print sequence if $stderr.tty?
+    $stderr.flush if $stderr.tty?
+  rescue StandardError
+    # Ignore terminal title update errors
+  end
 end
 
 # Handles reading user requests from various sources
@@ -974,6 +986,8 @@ class Superagent
     @agent_executor = agent_executor || AgentExecutor.new(@display)
     @verification_handler = verification_handler || VerificationHandler.new(@display, @agent_executor)
     @start_time = nil
+    @current_pass = nil
+    @current_model = nil
   end
 
   def run
@@ -982,9 +996,13 @@ class Superagent
     req = @request_reader.read
     @request_reader.validate(req)
     @display.display_start_message(req)
+    @display.update_terminal_title('Superagent: Starting...')
 
     MODELS.each_with_index do |model, idx|
+      @current_pass = idx + 1
+      @current_model = model
       @display.display_attempt_header(model, idx, MODELS.size)
+      update_title('Running')
 
       success, output = @agent_executor.run(model, req)
       unless success
@@ -996,6 +1014,7 @@ class Superagent
       return if result == :success
     end
 
+    @display.update_terminal_title('✗ Failed')
     @display.display_all_attempts_failed
     @display.display_total_runtime(@start_time)
     @display.display_git_status
@@ -1005,6 +1024,7 @@ class Superagent
   private
 
   def process_model_attempt(model, req)
+    update_title('Verifying')
     verified, desc = @verification_handler.run_verification(model, req)
     @display.timestamped_puts ''
 
@@ -1013,6 +1033,7 @@ class Superagent
     @display.display_verification_result(false, desc)
     @display.timestamped_puts ''
 
+    update_title('Fixing')
     verified, fix_desc = @verification_handler.retry_with_fix(model, req)
     @display.timestamped_puts ''
 
@@ -1023,7 +1044,16 @@ class Superagent
     :continue
   end
 
+  def update_title(task)
+    return unless @current_pass && @current_model
+
+    model_short = @current_model.split('-').first
+    title = "Pass #{@current_pass}/#{MODELS.size}: #{model_short} - #{task}"
+    @display.update_terminal_title(title)
+  end
+
   def handle_success(desc, context = '')
+    @display.update_terminal_title('✓ Done')
     @display.display_verification_result(true, desc, context)
     @display.display_total_runtime(@start_time)
     @display.display_git_status
