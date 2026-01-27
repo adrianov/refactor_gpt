@@ -1021,6 +1021,9 @@ class Superagent
   MODELS = %w[
     auto
     gemini-3-flash
+    gpt-5.2-codex-low-fast
+    gpt-5.2-codex-high-fast
+    composer-1
     claude-4.5-sonnet
     claude-4.5-opus
   ].freeze
