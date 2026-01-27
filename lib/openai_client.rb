@@ -114,7 +114,8 @@ class OpenAiClient
   end
 
   def handle_rate_limit_retry(error, retries, max_retries, base_delay)
-    delay = error.retry_after || [30, base_delay * (4**(retries - 1))].max
+    delays = [5, 10, 30]
+    delay = error.retry_after || delays[retries - 1] || delays.last
     error_msg = error.message.include?("Rate limited by API:") ? error.message.split(": ", 2).last : nil
     base_msg = "⚠️  Rate limited (429)"
     msg = error_msg ? "#{base_msg}: #{error_msg}" : base_msg

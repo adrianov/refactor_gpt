@@ -146,7 +146,8 @@ class GeminiClient
   end
 
   def handle_rate_limit_retry(error, retries, max_retries, base_delay)
-    delay = error.retry_after || [30, base_delay * (4**(retries - 1))].max
+    delays = [5, 10, 30]
+    delay = error.retry_after || delays[retries - 1] || delays.last
     error_msg = error.message.include?("Rate limited by API:") ? error.message.split(": ", 2).last : nil
     base_msg = "⚠️  Rate limited (429)"
     msg = error_msg ? "#{base_msg}: #{error_msg}" : base_msg
@@ -608,23 +609,6 @@ class GeminiClient
     when "API Error"
       ["• Check GEMINI_ACCESS_TOKEN", "• Verify API quota", "• Check model availability"]
     end
-  end
-
-  def print_error_header(error_type, status)
-    puts
-    puts "❌ #{error_type}"
-    puts "┌─ #{"─" * 50}"
-    puts "│ Status: #{status}"
-    puts "│ Time: #{Time.now.strftime("%Y-%m-%d %H:%M:%S")}"
-    puts "├─ #{"─" * 50}"
-  end
-
-  def print_error_details(details)
-    puts "│ Details:"
-    details.split("\n").each { |line| puts "│ #{line}" }
-
-    puts "└─ #{"─" * 50}"
-    puts
   end
 
   def format_error_response(response)
