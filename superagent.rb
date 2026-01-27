@@ -11,8 +11,8 @@
 
 require_relative "lib/completion_notifier"
 require "colorize"
-require "shellwords"
 require "reline"
+require "open3"
 
 CompletionNotifier.setup_exit_hook
 
@@ -75,7 +75,7 @@ end
 
 def wrap_prompt_with_instructions(prompt)
   <<~HEREDOC
-    IMPORTANT: This agent is running in non-interactive mode. You must not ask questions, request user input, or wait for confirmation. Proceed autonomously using available information and make reasonable decisions based on context. Execute the task directly without seeking clarification.
+    IMPORTANT: This agent is running in non-interactive mode. Do not ask questions, request user input, or wait for confirmation. Work autonomously using available information and make reasonable decisions based on context. Execute tasks directly without seeking clarification.
 
     #{prompt}
   HEREDOC
@@ -83,12 +83,11 @@ end
 
 def run_agent_command(model, prompt)
   wrapped_prompt = wrap_prompt_with_instructions(prompt)
-  escaped_prompt = Shellwords.escape(wrapped_prompt)
-  cmd = "agent --print --model #{Shellwords.escape(model)} #{escaped_prompt}"
   timestamped_puts "Running: agent --print --model #{model} '#{prompt[0..50]}#{"..." if prompt.length > 50}'".green
-  output = `#{cmd} 2>&1`
+  stdout, stderr, status = Open3.capture3("agent", "--print", "--model", model, wrapped_prompt)
+  output = stdout + stderr
   output.each_line { |line| timestamped_puts line.chomp }
-  [$?.success?, output]
+  [status.success?, output]
 end
 
 
@@ -150,9 +149,10 @@ def run_verification(model, user_request)
   timestamped_puts "Verifying solution with #{model}...".blue
   timestamped_puts "Running: agent --print --model #{model} [verification prompt]".green
 
-  output = `agent --print --model #{Shellwords.escape(model)} #{Shellwords.escape(wrapped_prompt)} 2>&1`
+  stdout, stderr, status = Open3.capture3("agent", "--print", "--model", model, wrapped_prompt)
+  output = stdout + stderr
   output.each_line { |line| timestamped_puts line.chomp }
-  return [false, nil, output] unless $?.success?
+  return [false, nil, output] unless status.success?
 
   verified, description = parse_verification_response(output.strip)
   [verified, description, output]
