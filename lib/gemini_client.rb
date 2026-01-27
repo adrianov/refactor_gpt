@@ -53,8 +53,9 @@ class GeminiClient
       body = build_request_body(messages, json: json)
       debug_request(body) if @debug
 
-      response = make_api_request(body)
+      response = raw_api_request(body)
       handle_response_errors(response)
+      response = collect_streaming_response(response)
       answer = extract_answer(response)
       debug_response(answer) if @debug
       answer
@@ -65,7 +66,40 @@ class GeminiClient
     handle_parse_error(e, response)
   end
 
+  def stream_answer(messages, json: false)
+    retry_with_backoff do
+      body = build_request_body(messages, json: json)
+      debug_request(body) if @debug
+
+      response = raw_api_request(body)
+      handle_response_errors(response)
+      process_stream_body(response) { |text| yield text }
+    end
+  rescue HTTPX::Error => e
+    handle_http_error(e)
+  end
+
   private
+
+  def process_stream_body(response)
+    response.body.to_s.each_line do |line|
+      text = parse_stream_line(line)
+      yield text if text
+    end
+  end
+
+  def parse_stream_line(line)
+    line = line.strip
+    return nil if line.empty?
+
+    json_str = line.start_with?("data: ") ? line.sub(/^data: /, "").strip : line
+    return nil if json_str.empty? || ["[{", "]", ","].include?(json_str)
+
+    chunk = Oj.load(json_str)
+    extract_chunk_text(chunk)&.to_s
+  rescue Oj::ParseError
+    nil
+  end
 
   def retry_with_backoff(max_retries: 3, base_delay: 1)
     retries = 0
@@ -178,7 +212,7 @@ class GeminiClient
     warn "--- end response ---\n"
   end
 
-  def make_api_request(body)
+  def raw_api_request(body)
     http = HTTPX.plugin(:proxy).with(
       timeout: {read_timeout: @request_timeout,
                 write_timeout: @request_timeout},
@@ -190,14 +224,12 @@ class GeminiClient
 
     endpoint = "#{@api_base_url}/models/#{@model}:streamGenerateContent"
 
-    response = http.post(endpoint,
+    http.post(endpoint,
       headers: {
         "Content-Type" => "application/json",
         "x-goog-api-key" => @api_key
       },
       body: Oj.dump(body, mode: :compat))
-
-    collect_streaming_response(response)
   end
 
   def collect_streaming_response(response)
@@ -205,17 +237,23 @@ class GeminiClient
 
     chunks = []
     response.body.to_s.each_line do |line|
-      next unless line.start_with?("data: ")
-
-      json_str = line.sub(/^data: /, "").strip
-      next if json_str.empty?
-
-      chunks << Oj.load(json_str)
-    rescue Oj::ParseError
-      # Skip malformed JSON lines
+      chunk = parse_stream_line_to_json(line)
+      chunks << chunk if chunk
     end
 
     build_combined_response(chunks, response)
+  end
+
+  def parse_stream_line_to_json(line)
+    line = line.strip
+    return nil if line.empty?
+
+    json_str = line.start_with?("data: ") ? line.sub(/^data: /, "").strip : line
+    return nil if json_str.empty? || ["[{", "]", ","].include?(json_str)
+
+    Oj.load(json_str)
+  rescue Oj::ParseError
+    nil
   end
 
   def build_combined_response(chunks, original_response)
@@ -360,6 +398,10 @@ class GeminiClient
     exit 1
   end
 
+  def extract_chunk_text(chunk)
+    chunk.dig("candidates", 0, "content", "parts", 0, "text")
+  end
+
   def fetch_env(key, default = nil)
     @env_vars ||= load_env_vars
     value = @env_vars.fetch(key, ENV[key] || default)
@@ -403,8 +445,9 @@ class GeminiClient
       body = build_request_body(messages, json: json)
       debug_request(body) if @debug
 
-      response = make_api_request(body)
+      response = raw_api_request(body)
       handle_response_errors(response)
+      response = collect_streaming_response(response)
       answer = extract_answer(response)
       debug_response(answer) if @debug
       answer
@@ -534,9 +577,37 @@ class GeminiClient
   end
 
   def pretty_print_error(error_type, status, details)
-    print_error_header(error_type, status)
-    print_error_details(details)
+    puts "\n❌ #{error_type}"
+    puts "┌─ #{"─" * 50}"
+    puts "│ Status: #{status}"
+    puts "│ Time: #{Time.now.strftime("%Y-%m-%d %H:%M:%S")}"
+    puts "├─ #{"─" * 50}"
+    puts "│ Details:"
+    details.split("\n").each { |line| puts "│ #{line}" }
+    puts "└─ #{"─" * 50}\n"
     print_error_suggestions(error_type)
+  end
+
+  def print_error_suggestions(error_type)
+    suggestions = error_suggestions(error_type)
+    return unless suggestions
+
+    puts "💡 Suggestions:"
+    suggestions.each { |suggestion| puts "   #{suggestion}" }
+    puts
+  end
+
+  def error_suggestions(error_type)
+    case error_type
+    when "Connection Failed"
+      ["• Check your internet connection", "• Try again later", "• Verify API endpoint"]
+    when "Request Timeout"
+      ["• Request too large", "• Try shorter prompt", "• Check REQUEST_TIMEOUT"]
+    when "DNS Resolution Failed"
+      ["• Check DNS settings", "• Verify GEMINI_BASE_URL", "• Try different network"]
+    when "API Error"
+      ["• Check GEMINI_ACCESS_TOKEN", "• Verify API quota", "• Check model availability"]
+    end
   end
 
   def print_error_header(error_type, status)
@@ -557,66 +628,12 @@ class GeminiClient
   end
 
   def format_error_response(response)
-    parts = []
-    add_error_details(parts, response)
-    add_response_details(parts, response)
-    add_full_inspect(parts, response)
-    parts.join("\n")
-  end
-
-  def add_error_details(parts, response)
-    parts << "Class: #{response.class}"
-    parts << "Error: #{response.error}" if response.respond_to?(:error) && response.error
-    parts << "Message: #{response.message}" if response.respond_to?(:message) && response.message
-    parts << "Request: #{response.request}" if response.respond_to?(:request) && response.request
-  end
-
-  def add_response_details(parts, response)
-    return unless response.respond_to?(:response) && response.response
-
-    parts << "Response Status: #{response.response.status}" if response.response.respond_to?(:status)
-    add_response_body(parts, response)
-  end
-
-  def add_response_body(parts, response)
-    return unless response.response.respond_to?(:body) && response.response.body
-
-    parts << "Response Body: #{response.response.body}"
-  end
-
-  def add_full_inspect(parts, response)
-    parts << "Full Inspect:"
-    parts << response.inspect
-  end
-
-  def print_error_suggestions(error_type)
-    suggestions = error_suggestions(error_type)
-    return unless suggestions
-
-    puts "💡 Suggestions:"
-    suggestions.each { |suggestion| puts "   #{suggestion}" }
-    puts
-  end
-
-  def error_suggestions(error_type)
-    case error_type
-    when "Connection Closed (HTTP/2)", "Connection Failed"
-      ["• Check your internet connection",
-        "• Try again in a few moments",
-        "• Verify API endpoint is accessible"]
-    when "Request Timeout"
-      ["• Request was too large or server is busy",
-        "• Try with a shorter prompt",
-        "• Check REQUEST_TIMEOUT environment variable"]
-    when "DNS Resolution Failed"
-      ["• Check your DNS settings",
-        "• Verify GEMINI_BASE_URL environment variable",
-        "• Try using a different network"]
-    when "API Error"
-      ["• Check your API key (GEMINI_ACCESS_TOKEN)",
-        "• Verify API quota and billing",
-        "• Check if the model is available"]
-    end
+    [
+      "Class: #{response.class}",
+      "Error: #{response.error if response.respond_to?(:error)}",
+      "Response Status: #{response.response.status if response.respond_to?(:response)}",
+      "Full Inspect:\n#{response.inspect}"
+    ].join("\n")
   end
 
   def load_env_vars
