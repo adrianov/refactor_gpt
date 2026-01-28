@@ -212,7 +212,6 @@ Features:
 - Creates detailed technical explanations with code analysis and integration impact
 - Includes specific file paths and line numbers for all changes
 - Uses `glow` for formatted Markdown output when available
-- Incorporates AGENTS.md development guidelines when present
 - Provides testing recommendations and developer notes for the changes
 
 ## Safety Features
