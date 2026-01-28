@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'reline'
+
 # Handles reading user requests from argv, stdin, or interactive input.
 class RequestReader
     def initialize(display)
@@ -7,7 +9,7 @@ class RequestReader
       @plan_mode = false
     end
 
-    attr_reader :plan_mode
+  attr_reader :plan_mode
 
     def read_from_argv
       return nil if ARGV.empty?
@@ -18,7 +20,6 @@ class RequestReader
         args.delete('--plan')
       end
       args.delete('--print')
-
       args.join(' ') unless args.empty?
     end
 
@@ -27,10 +28,14 @@ class RequestReader
     end
 
     def read_interactive
-      puts 'Enter request:'.cyan
-      puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
+      @display.puts 'Enter request:'.cyan
+      @display.puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
       $stdout.puts ''
 
+      read_interactive_silent
+    end
+
+    def read_interactive_silent
       lines = []
       loop do
         line = read_interactive_line(lines)
@@ -40,7 +45,8 @@ class RequestReader
 
         lines << line
       end
-      lines.join("\n")
+      result = lines.join("\n")
+      result.strip.empty? ? nil : result
     end
 
     def read_interactive_line(lines)
@@ -54,8 +60,11 @@ class RequestReader
       line
     rescue Interrupt
       $stdout.puts ''
-      puts 'Interrupted. Exiting.'.yellow
+      @display.puts 'Interrupted. Exiting.'.yellow
       exit 0
+    rescue StandardError => e
+      @display.puts "Error reading input: #{e.message}".yellow
+      return nil
     end
 
     def read
@@ -65,7 +74,7 @@ class RequestReader
     def validate(req)
       return true if req && !req.strip.empty?
 
-      puts 'No request provided. Exiting.'.yellow
+      @display.puts 'No request provided. Exiting.'.yellow
       exit 1
     end
   end

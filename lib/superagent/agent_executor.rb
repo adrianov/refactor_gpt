@@ -39,15 +39,17 @@ class AgentExecutor
     output = `ps ax -o comm,args 2>/dev/null`
     return false if output.empty?
 
-    output.each_line.any? do |line|
-      next if line.strip.empty?
+    output.each_line.any? { |line| line_matches_runner?(line, runner) }
+  end
 
-      comm, args = line.split(nil, 2)
-      next if args.nil? || !%w[ruby node python].include?(comm)
-      next unless args.match?(/\b(?:bundle\s+exec\s+)?#{runner}(?:\s|$)/)
+  def line_matches_runner?(line, runner)
+    return false if line.strip.empty?
 
-      !args.match?(/\b(?:grep|find|vim|nano|emacs|less|more|cat|head|tail|ag|rg)\s/)
-    end
+    comm, args = line.split(nil, 2)
+    return false if args.nil? || !%w[ruby node python].include?(comm)
+    return false unless args.match?(/\b(?:bundle\s+exec\s+)?#{runner}(?:\s|$)/)
+
+    !args.match?(/\b(?:grep|find|vim|nano|emacs|less|more|cat|head|tail|ag|rg)\s/)
   end
 
   def get_all_descendants(parent_pid)
@@ -68,8 +70,7 @@ class AgentExecutor
     queue = [parent_pid.to_i]
     while queue.any?
       curr = queue.shift
-      children = p_to_c[curr]
-      if children
+      if (children = p_to_c[curr])
         descendants.concat(children)
         queue.concat(children)
       end
@@ -84,31 +85,41 @@ class AgentExecutor
   end
 
   def wrap_prompt(p)
-    previous_requests = @session_tracker&.get_session_request_history || []
-    last_summary = @session_tracker&.get_last_agent_summary
-    
     parts = []
-    
-    agents_content = load_agents_content
-    if agents_content && !agents_content.strip.empty?
-      parts << "\n\nProject guidelines (from AGENTS.md or AGENTS.rb):\n#{agents_content.strip}"
-    end
-    
-    if last_summary && !last_summary.strip.empty?
-      parts << "\n\nFinal summary from previous agent run:\n#{last_summary.strip}"
-    end
-    
-    if previous_requests.any?
-      parts << "\n\nPrevious requests in this session:\n" +
-               previous_requests.map.with_index(1) { |prev_req, idx| "#{idx}. #{prev_req}" }.join("\n")
-    end
-    
-    parts << "\n\nIMPORTANT: This agent runs in non-interactive mode. " \
-             "You must make all decisions autonomously and execute tasks directly " \
-             "without requesting user input, clarification, or confirmation. " \
-             "Proceed with implementation based on the available context and your best judgment."
-    
-    p + parts.join
+    parts << guidelines_section
+    parts << summary_section
+    parts << history_section
+    parts << non_interactive_notice
+    p + parts.compact.join
+  end
+
+  def guidelines_section
+    content = load_agents_content
+    return nil if content.nil? || content.strip.empty?
+
+    "\n\nProject guidelines (from AGENTS.md or AGENTS.rb):\n#{content.strip}"
+  end
+
+  def summary_section
+    summary = @session_tracker&.get_last_agent_summary
+    return nil if summary.nil? || summary.strip.empty?
+
+    "\n\nFinal summary from previous agent run:\n#{summary.strip}"
+  end
+
+  def history_section
+    history = @session_tracker&.get_session_request_history || []
+    return nil if history.empty?
+
+    "\n\nPrevious requests in this session:\n" +
+      history.map.with_index(1) { |req, idx| "#{idx}. #{req}" }.join("\n")
+  end
+
+  def non_interactive_notice
+    "\n\nIMPORTANT: This agent runs in non-interactive mode. " \
+    "You must make all decisions autonomously and execute tasks directly " \
+    "without requesting user input, clarification, or confirmation. " \
+    "Proceed with implementation based on the available context and your best judgment."
   end
 
   def load_agents_content
@@ -126,22 +137,18 @@ class AgentExecutor
   end
 
   def parse_json_stream_line(line)
-    return [nil, nil, nil, nil, nil] if line.nil? || line.strip.empty? || line.include?('=>')
-    return [nil, nil, nil, nil, nil] if line.match?(/[:"']role["']/) && line.match?(/[:"']user["']/)
+    return [nil] * 5 if line.nil? || line.strip.empty? || line.include?('=>')
+    return [nil] * 5 if line.match?(/[:"']role["']/) && line.match?(/[:"']user["']/)
 
     json_obj = JSON.parse(line.strip)
     type = json_obj['type']
-    
-    return [nil, nil, nil, nil, nil] if type == 'thinking' && (json_obj['text'].nil? || json_obj['text'].empty?)
-    
-    text = extract_text_from_json(json_obj)&.to_s
-    text = nil if text&.empty?
-    
-    [type, text, json_obj['request_id'] || json_obj['stream_id'] || type, 
-     extract_command_from_json(json_obj), 
+    return [nil] * 5 if type == 'thinking' && (json_obj['text'].nil? || json_obj['text'].empty?)
+
+    [type, extract_text_from_json(json_obj)&.to_s, json_obj['request_id'] || json_obj['stream_id'] || type,
+     extract_command_from_json(json_obj),
      (extract_tool_call_info(json_obj) if %w[tool_call tool_result].include?(type))]
   rescue JSON::ParserError
-    [nil, nil, nil, nil, nil]
+    [nil] * 5
   end
 
   def extract_text_from_json(json_obj)
@@ -223,16 +230,13 @@ class AgentExecutor
     return nil unless %w[tool_call tool_result].include?(json_obj['type'])
 
     tool_call = json_obj['tool_call'] || json_obj
-    subtype = json_obj['subtype']
-    
     func_name = extract_tool_name(tool_call, json_obj)
     return nil unless func_name
 
-    func_args = extract_tool_args(tool_call, json_obj)
-    args_str = parse_tool_args(func_args)
-
-    tool_info = { name: func_name, arguments: args_str, subtype: subtype }
-    @tools_used << tool_info.dup unless @tools_used.any? { |t| t[:name] == func_name && t[:subtype] == subtype }
+    tool_info = { name: func_name, arguments: parse_tool_args(extract_tool_args(tool_call, json_obj)), 
+subtype: json_obj['subtype'] }
+    @tools_used << tool_info.dup unless @tools_used.any? { |t|
+ t[:name] == func_name && t[:subtype] == tool_info[:subtype] }
     
     tool_info
   end
@@ -287,10 +291,18 @@ class AgentExecutor
       cmd.match?(/^[a-z]+\s+[a-z]/i)
   end
 
-  def build_command(model:, verification_mode: false, plan_mode: false)
-    cmd = ['agent', '--print', '--stream-partial-output', '--output-format', 'stream-json']
+  def build_command(model:, plan_mode: false, verification_mode: false)
+    cmd = %w[
+      agent
+      --print
+      --output-format
+      stream-json
+      --force
+      --model
+      gemini-3-flash
+    ]
     cmd << '--plan' if plan_mode
-    verification_mode ? cmd.concat(%w[--mode ask]) : cmd << '--force'
+    cmd.concat(['--mode', 'ask']) if verification_mode
     cmd.concat(['--model', model])
     cmd
   end
@@ -322,6 +334,7 @@ class AgentExecutor
 
   def run_with_timeout_monitoring(model, wrapped, verification_mode: false)
     @tools_used = []
+    @verification_mode = verification_mode
     return run_without_timeout(model, wrapped, verification_mode: verification_mode) if test_runner_running?
 
     @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil, 
@@ -330,7 +343,7 @@ start: nil }
     timeout_thread = start_timeout_thread
 
     begin
-      execute_agent_process(model, wrapped, verification_mode)
+      execute_agent_process(model, wrapped, verification_mode: verification_mode)
     ensure
       @state[:complete] = true
       monitor_thread&.kill
@@ -352,18 +365,7 @@ start: nil }
         stdin.close
         stdout_stderr.each_line do |line|
           raw += line
-          type, text, stream_id, command, tool = parse_json_stream_line(line.strip)
-          @display.display_tool_call(tool) if tool
-          @display.puts "Running: #{command}".green if command && !command.empty?
-          if text && !text.empty?
-            if type == 'result'
-              final = text
-            elsif type == 'thinking'
-              @display.print_thinking_indicator
-            elsif type == 'assistant' || type.nil?
-              @display.print_word(text, stream_id: stream_id)
-            end
-          end
+          final = process_json_stream_line(line, final)
         end
         status = wait_thr.value
         @display.flush_word_buffer
@@ -408,6 +410,7 @@ start: nil }
 
   def run_without_timeout(model, wrapped, verification_mode: false)
     @tools_used = []
+    @verification_mode = verification_mode
     @display.reset_stream_tracking
     cmd = build_command(model: model, verification_mode: verification_mode)
     display_command(cmd, wrapped)
@@ -419,24 +422,33 @@ start: nil }
         stdin.close
         stdout_stderr.each_line do |line|
           raw += line
-          type, text, stream_id, command, tool = parse_json_stream_line(line.strip)
-          @display.display_tool_call(tool) if tool
-          @display.puts "Running: #{command}".green if command && !command.empty?
-          if text && !text.empty?
-            if type == 'result'
-              final = text
-            elsif type == 'thinking'
-              @display.print_thinking_indicator unless verification_mode
-            elsif (type == 'assistant' || type.nil?) && !verification_mode
-              @display.print_word(text, stream_id: stream_id)
-            end
-          end
+          final = process_json_stream_line(line, final)
         end
         finalize_execution(raw, final, wait_thr)
       end
     rescue StandardError => e
       @display.puts "❌ Agent execution error: #{e.message}".red
       [nil, nil, Struct.new(:success?).new(false)]
+    end
+  end
+
+  def process_json_stream_line(line, final)
+    type, text, stream_id, command, tool = parse_json_stream_line(line.strip)
+    @display.display_tool_call(tool) if tool
+    @display.puts "Running: #{command}".green if command && !command.empty?
+    return final unless text && !text.empty?
+
+    case type
+    when 'result'
+      text
+    when 'thinking'
+      @display.print_thinking_indicator
+      final
+    when 'assistant', nil
+      @display.print_word(text, stream_id: stream_id)
+      final
+    else
+      final
     end
   end
 
@@ -483,7 +495,7 @@ start: nil }
     Process.kill('KILL', @state[:pid]) unless @state[:complete]
   end
 
-  def execute_agent_process(model, wrapped, verification_mode)
+  def execute_agent_process(model, wrapped, verification_mode: false)
     @display.reset_stream_tracking
     cmd = build_command(model: model, verification_mode: verification_mode)
     display_command(cmd, wrapped)
@@ -492,11 +504,11 @@ start: nil }
       @state[:start] = @state[:last_chunk] = Time.now
       stdin.write(wrapped)
       stdin.close
-      process_agent_output(stdout_stderr, wait_thr, verification_mode)
+      process_agent_output(stdout_stderr, wait_thr)
     end
   end
 
-  def process_agent_output(stdout_stderr, wait_thr, verification_mode)
+  def process_agent_output(stdout_stderr, wait_thr)
     raw, final, buffer = '', '', ''
     loop do
       break if @state[:timed_out]
@@ -506,38 +518,30 @@ start: nil }
           @state[:last_chunk] = Time.now
           raw += chunk
           buffer += chunk
-          buffer, final = process_buffer(buffer, final, verification_mode)
+          buffer, final = process_buffer(buffer, final)
         rescue EOFError then break
         end
       elsif !wait_thr.alive?
-        remaining = stdout_stderr.read rescue nil
-        if remaining
-          raw += remaining
-          buffer += remaining
-          _, final = process_buffer(buffer, final, verification_mode)
-        end
+        process_remaining_output(stdout_stderr, raw, final, buffer)
         break
       end
     end
     finalize_execution(raw, final, wait_thr)
   end
 
-  def process_buffer(buffer, final, verification_mode)
-      while (idx = buffer.index("\n"))
+  def process_remaining_output(stdout_stderr, _raw, final, buffer)
+    remaining = stdout_stderr.read rescue nil
+    if remaining
+      buffer += remaining
+      _, _ = process_buffer(buffer, final)
+    end
+  end
+
+  def process_buffer(buffer, final)
+    while (idx = buffer.index("\n"))
       line = buffer[0..idx].strip
       buffer = buffer[(idx + 1)..-1] || ''
-      type, text, stream_id, command, tool = parse_json_stream_line(line)
-      @display.display_tool_call(tool) if tool
-      @display.puts "Running: #{command}".green if command && !command.empty?
-      if text && !text.empty?
-        if type == 'result'
-          final = text
-        elsif type == 'thinking'
-          @display.print_thinking_indicator unless verification_mode
-        elsif (type == 'assistant' || type.nil?) && !verification_mode
-          @display.print_word(text, stream_id: stream_id)
-        end
-      end
+      final = process_json_stream_line(line, final)
     end
     [buffer, final]
   end
@@ -556,21 +560,10 @@ start: nil }
     $stdout.puts ''
     @display.puts "Tools applied (#{@tools_used.size}):".cyan
     @tools_used.each do |tool|
-      args_str = format_tool_args_for_display(tool[:arguments])
+      args_str = @display.format_tool_call_args(tool[:arguments])
       display_text = args_str ? "  • #{tool[:name]}(#{args_str})" : "  • #{tool[:name]}"
       $stdout.puts display_text.colorize(:light_blue)
     end
     $stdout.puts ''
-  end
-
-  def format_tool_args_for_display(args)
-    return nil unless args
-
-    if args.is_a?(Hash)
-      args_str = args.map { |k, v| "#{k}: #{v.inspect}" }.join(', ')
-      args_str.length > 100 ? args_str[0..100] + '...' : args_str
-    elsif args.is_a?(String) && !args.empty?
-      args.length > 100 ? args[0..100] + '...' : args
-    end
   end
 end
