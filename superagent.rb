@@ -29,25 +29,27 @@ class Display
 
     timestamp = Time.now.strftime("[%H:%M:%S] ")
     if args.first.is_a?(String)
-      # Handle colorized strings which might have escape codes at the beginning
-      if args[0].start_with?("\e[")
-        # Find the first 'm' which ends the escape sequence
-        m_index = args[0].index('m')
-        if m_index
-          # Insert timestamp after the first color escape sequence
-          args[0] = args[0][0..m_index] + timestamp + args[0][m_index+1..-1]
-        else
-          args[0] = "#{timestamp}#{args[0]}"
-        end
-      else
-        args[0] = "#{timestamp}#{args[0]}"
-      end
+      args[0] = format_with_timestamp(args[0], timestamp)
     else
       super(timestamp)
     end
     super(*args)
-    super("") # Newline after
     $stdout.flush
+  end
+
+  private
+
+  def format_with_timestamp(text, timestamp)
+    # Handle colorized strings which might have escape codes at the beginning
+    if text.start_with?("\e[")
+      # Find the first 'm' which ends the escape sequence
+      m_index = text.index('m')
+      if m_index
+        # Insert timestamp after the first color escape sequence
+        return text[0..m_index] + timestamp + text[m_index + 1..-1]
+      end
+    end
+    "#{timestamp}#{text}"
   end
 
   def timestamped_puts(message)
@@ -120,13 +122,13 @@ class Display
     return unless is_late_night
 
     messages = [
-      "🌙 It's getting late! Your code will still be here tomorrow, and you'll tackle it with fresh eyes and renewed energy.",
-      "⏰ Late night coding session detected! Remember, a well-rested mind writes better code. Tomorrow will be a productive day!",
-      "🌆 The clock says it's time to wind down. Your future self will thank you for getting some rest. Tomorrow's productivity awaits!",
-      "💤 It's past bedtime! Your code isn't going anywhere, but your energy is. Rest up for an amazing day of coding tomorrow!",
-      "🌃 Late night warrior! While your dedication is admirable, remember that tomorrow you'll be even more productive with some rest.",
-      "⭐ Burning the midnight oil? That's dedication! But even the best developers need sleep. Tomorrow will be a great day for coding!",
-      "🌙 Late night coding is impressive, but so is a good night's sleep. Your code will be waiting for you tomorrow, ready for your refreshed mind!"
+      "🌙 It's getting late! Your code will still be here tomorrow, and you'll tackle it with fresh eyes.",
+      "⏰ Late night coding session! Remember, a well-rested mind writes better code. Tomorrow will be productive!",
+      "🌆 The clock says it's time to wind down. Your future self will thank you for getting some rest.",
+      "💤 It's past bedtime! Your code isn't going anywhere, but your energy is. Rest up for an amazing day!",
+      "🌃 Late night warrior! Dedication is admirable, but remember that tomorrow you'll be even more productive.",
+      "⭐ Burning the midnight oil? That's dedication! But even the best developers need sleep. Rest up!",
+      "🌙 Late night coding is impressive, but so is a good night's sleep. Your code will be waiting for you."
     ]
 
     message = messages.sample
@@ -254,7 +256,6 @@ class Display
     end
   end
 
-  private
 
   def process_complete_lines
     return if @text_buffer.empty?
@@ -747,27 +748,6 @@ class AgentExecutor
 
       output = (stdout || '') + (stderr || '')
       # Output is already processed and displayed by run_with_timeout_monitoring
-      # Only display non-JSON lines that might be error messages
-      output.each_line do |line|
-        stripped = line.strip
-        next if stripped.empty?
-        # Skip any line that looks like JSON or structured data
-        next if stripped.start_with?('{') || stripped.start_with?('[')
-        # Skip lines that look like Ruby hash syntax with =>
-        next if stripped.include?('=>')
-        # Skip user JSON lines (various formats)
-        next if (stripped.include?('"role"') || stripped.include?("'role'") || stripped.include?(':role')) &&
-                (stripped.include?('"user"') || stripped.include?("'user'") || stripped.include?(':user'))
-        # Skip valid JSON lines
-        begin
-          JSON.parse(stripped)
-          next
-        rescue JSON::ParserError
-          # Display only non-JSON error messages that aren't already displayed
-          @display.timestamped_puts line.chomp
-        end
-      end
-
       return [status.success?, output] if status.success?
 
       if retryable_network_error?(output) && retries < max_retries
@@ -1165,36 +1145,15 @@ class Superagent
   end
 
   def run(start_model_index: 0, request: nil)
-    update_terminal_title('Initializing...')
-    @display.check_late_night_reminder
-    @start_time = Time.now unless request
-    @display.suggest_git_init unless request
-    @display.update_git_status unless request
+    initialize_run(request)
     req = sanitize_request(request || @request_reader.read)
     @request_reader.validate(req)
-
     @display.display_start_message(req)
 
     return run_plan_mode(req) if @request_reader.plan_mode
 
-    @current_model_index = start_model_index
-    MODELS[@current_model_index..-1].each_with_index do |model, relative_idx|
-      idx = @current_model_index + relative_idx
-      @current_pass = idx + 1
-      @current_model = model
-      update_terminal_title("Attempting: #{model}")
-      @display.display_attempt_header(model, idx, MODELS.size)
-
-      success, output = @agent_executor.run(model, req)
-      unless success
-        @display.display_agent_failure(output)
-        next
-      end
-
-      return if process_model_attempt(model, req) == :success
-    end
-
-    handle_final_failure
+    execute_attempts(start_model_index, req)
+    handle_final_failure unless @last_attempt_success
   end
 
   def run_plan_mode(req)
@@ -1219,6 +1178,33 @@ class Superagent
 
   private
 
+  def initialize_run(request)
+    update_terminal_title('Initializing...')
+    @display.check_late_night_reminder
+    @start_time = Time.now unless request
+    @display.suggest_git_init unless request
+    @display.update_git_status unless request
+  end
+
+  def execute_attempts(start_index, req)
+    @current_model_index = start_index
+    MODELS[@current_model_index..-1].each_with_index do |model, relative_idx|
+      idx = @current_model_index + relative_idx
+      @current_pass = idx + 1
+      @current_model = model
+      update_terminal_title("Attempting: #{model}")
+      @display.display_attempt_header(model, idx, MODELS.size)
+
+      success, output = @agent_executor.run(model, req)
+      unless success
+        @display.display_agent_failure(output)
+        next
+      end
+
+      break if process_model_attempt(model, req) == :success
+    end
+  end
+
   def process_model_attempt(model, req)
     update_terminal_title("Verifying: #{model}")
     verified, desc = @verification_handler.run_verification(model, req)
@@ -1227,6 +1213,7 @@ class Superagent
     if verified
       handle_success(desc)
       handle_final_success(req)
+      @last_attempt_success = true
       return :success
     end
 
@@ -1240,8 +1227,11 @@ class Superagent
     if verified
       handle_success(fix_desc, 'after retry')
       handle_final_success(req)
+      @last_attempt_success = true
       return :success
     end
+
+    @last_attempt_success = false
 
     @display.display_verification_result(false, fix_desc, 'after retry')
     $stdout.puts ''
