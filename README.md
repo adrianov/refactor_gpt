@@ -116,7 +116,6 @@ Features:
 - **Multi-model fallback**: Sequentially tries Gemini, Claude, and other models.
 - **Automatic verification**: Uses a separate agent pass to verify that changes solve the request.
 - **Self-correction**: Automatically retries with specific fix instructions if verification fails.
-- **Non-interactive execution**: Proceeds autonomously without seeking clarification, ideal for long-running tasks.
 - **Detailed logging**: Provides timestamped logs and tracks git status throughout the process.
 - **Performance tracking**: Reports total runtime upon completion.
 - **Interactive mode**: Supports interactive request input if no arguments are provided.
