@@ -27,7 +27,7 @@ class VerificationHandler
     return '' unless previous_requests.any?
 
     "\n\nPrevious requests in this session:\n" +
-      previous_requests.map.with_index(1) { |prev_req, idx| "#{idx}. #{prev_req}" }.join("\n")
+      previous_requests.map.with_index(1) { |prev_req, idx| "#{idx}. #{to_utf8(prev_req)}" }.join("\n")
   end
 
   def parse_res(res)
@@ -135,7 +135,7 @@ class VerificationHandler
     if prev_utf8 && !prev_utf8.strip.empty?
       content_parts << "Final response from previous agent run:\n#{prev_utf8.strip}\n"
     end
-    content_parts.join("\n")
+    content_parts.map { |p| to_utf8(p) }.join("\n")
   end
 
   def build_verification_prompt(req, previous_agent_response = nil)
