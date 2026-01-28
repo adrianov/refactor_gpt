@@ -44,8 +44,7 @@ class SessionTracker
     client = create_ask_client
     return {continuation: false, tags: []} unless client
 
-    prompt = build_continuation_analysis_prompt(new_request, previous_session[:request])
-    response = query_ask_client(client, prompt)
+    response = query_ask_client(client, build_continuation_analysis_prompt(new_request, previous_session[:request]))
     parse_continuation_response(response)
   rescue StandardError => e
     @display.puts "Warning: Failed to analyze continuation: #{e.message}".yellow
@@ -54,13 +53,16 @@ class SessionTracker
 
   def generate_session_description(request, tags = [])
     client = create_ask_client
-    return "Session: #{request[0..100]}..." unless client
+    return default_description(request) unless client
 
-    prompt = build_description_prompt(request, tags)
-    response = query_ask_client(client, prompt)
-    extract_description(response) || "Session: #{request[0..100]}..."
+    response = query_ask_client(client, build_description_prompt(request, tags))
+    extract_description(response) || default_description(request)
   rescue StandardError => e
     @display.puts "Warning: Failed to generate description: #{e.message}".yellow
+    default_description(request)
+  end
+
+  def default_description(request)
     "Session: #{request[0..100]}..."
   end
 
@@ -304,7 +306,7 @@ class SessionTracker
   def extract_tags(tags_text)
     return [] if tags_text.empty? || tags_text.upcase == "NONE"
 
-    tags_text.split(",").map(&:strip).reject(&:empty?).select { |tag| tag.start_with?("#") }
+    tags_text.split(",").map(&:strip).select { |tag| tag.start_with?("#") }
   end
 
   def extract_description(response)

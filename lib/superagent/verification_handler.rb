@@ -13,15 +13,7 @@ class VerificationHandler
   end
 
   def build_fix_prompt(req)
-    previous_requests = @session_tracker&.get_session_request_history || []
-    previous_requests_text = if previous_requests.any?
-                                "\n\nPrevious requests in this session:\n" +
-                                  previous_requests.map.with_index(1) { |prev_req, idx|
- "#{idx}. #{prev_req}" }.join("\n")
-                              else
-                                ''
-                              end
-
+    previous_requests_text = format_previous_requests
     <<~HEREDOC
       Original request: #{req}#{previous_requests_text}
 
@@ -29,6 +21,14 @@ class VerificationHandler
 
       Review the codebase and make the necessary corrections.
     HEREDOC
+  end
+
+  def format_previous_requests
+    previous_requests = @session_tracker&.get_session_request_history || []
+    return '' unless previous_requests.any?
+
+    "\n\nPrevious requests in this session:\n" +
+      previous_requests.map.with_index(1) { |prev_req, idx| "#{idx}. #{prev_req}" }.join("\n")
   end
 
   def parse_res(res)
@@ -61,55 +61,39 @@ class VerificationHandler
 
   def parse_no_res(n)
     m = n.match(/\bNO\b\s*:?\s*(.*)/i)
-    return [false, 'Failed'] unless m
+    return [false, 'Failed'] unless m && !m[1].strip.empty?
 
-    description = m[1].strip
-    return [false, 'Failed'] if description.empty?
-
-    parts = description.split(/\b(?:YES|NO)\s*:?\s*/i)
-    cleaned = parts.first.strip
-    cleaned = remove_duplicates(cleaned)
-
-    [false, cleaned.empty? ? 'Failed' : cleaned]
+    [false, remove_duplicates(m[1].strip.split(/\b(?:YES|NO)\s*:?\s*/i).first.strip)]
   end
 
   def parse_yes_res(n)
     m = n.match(/\bYES\b\s*:?\s*(.*)/i)
-    return [true, 'Passed'] unless m
+    return [true, 'Passed'] unless m && !m[1].strip.empty?
 
-    description = m[1].strip
-    return [true, 'Passed'] if description.empty?
-
-    parts = description.split(/\b(?:YES|NO)\s*:?\s*/i)
-    cleaned = parts.first.strip
-    cleaned = remove_duplicates(cleaned)
-
-    [true, cleaned.empty? ? 'Passed' : cleaned]
+    [true, remove_duplicates(m[1].strip.split(/\b(?:YES|NO)\s*:?\s*/i).first.strip)]
   end
 
   def remove_duplicates(text)
     return text if text.length < 20
 
-    normalized = text.gsub(/\s+/, ' ').strip
-    text_length = normalized.length
-    half_length = text_length / 2
-    return text if half_length < 10
+    norm = text.gsub(/\s+/, ' ').strip
+    half = norm.length / 2
+    return text if half < 10
 
-    first_half = normalized[0, half_length]
-    second_half = normalized[half_length..-1] || ''
+    first = norm[0, half]
+    second = (norm[half..] || '').gsub(/\s+/, ' ').strip
     
-    return text if second_half.length < 10
-    
-    normalized_second = second_half.gsub(/\s+/, ' ').strip
-    
-    if first_half == normalized_second[0, first_half.length] ||
-       (normalized_second.length >= first_half.length * 0.8 && 
-        normalized_second.start_with?(first_half[0, (first_half.length * 0.8).to_i]))
-      original_half = text.length / 2
-      return text[0, original_half].strip
-    end
-    
-    text
+    check_and_strip(text, first, second)
+  end
+
+  def check_and_strip(text, first, second)
+    return text if second.length < 10
+
+    duplicate_detected?(first, second) ? text[0, text.length / 2].strip : text
+  end
+
+  def duplicate_detected?(first, second)
+    second.start_with?(first[0, (first.length * 0.8).to_i])
   end
 
   def build_verification_system_instruction
@@ -140,22 +124,13 @@ class VerificationHandler
       - Use minimal formatting only - avoid excessive markdown or formatting
       - Keep your response short and concise - one sentence is sufficient
       - The description after YES/NO should be brief and specific
+      - DO NOT use thinking blocks or any other output format. Just the YES/NO response.
     HEREDOC
   end
 
   def build_verification_user_content(user_request, previous_agent_response)
     content_parts = []
-
-    previous_requests = @session_tracker&.get_session_request_history || []
-    previous_requests_text = if previous_requests.any?
-                                "\n\nPrevious requests in this session:\n" +
-                                  previous_requests.map.with_index(1) { |prev_req, idx|
-"#{idx}. #{prev_req}" }.join("\n")
-                              else
-                                ''
-                              end
-
-    content_parts << "Current user request: #{user_request}#{previous_requests_text}\n\n"
+    content_parts << "Current user request: #{user_request}#{format_previous_requests}\n\n"
 
     if previous_agent_response && !previous_agent_response.strip.empty?
       content_parts << "Final response from previous agent run:\n#{previous_agent_response.strip}\n"
@@ -166,20 +141,10 @@ class VerificationHandler
 
   def build_verification_prompt(req, previous_agent_response = nil)
     user_content = build_verification_user_content(req, previous_agent_response)
-
-    <<~HEREDOC
-      #{build_verification_system_instruction}
-
-      ---
-
-      #{user_content}
-    HEREDOC
+    "#{build_verification_system_instruction}\n\n---\n\n#{user_content}"
   end
 
   def run_verification(model, req, previous_agent_response = nil)
-    $stdout.puts ''
-    @display.puts 'Verifying...'.blue
-
     verification_prompt = build_verification_prompt(req, previous_agent_response)
     start_time = Time.now
     success, output = @agent_executor.run(model, verification_prompt, verification_mode: true)
@@ -196,9 +161,10 @@ class VerificationHandler
     $stdout.puts ''
 
     success, fix_output = @agent_executor.run(model, fix_prompt)
-    return [false, nil, 0] unless success
+    return [false, nil, 0, nil] unless success
 
-    run_verification(model, req, fix_output)
+    verified, desc, review_time = run_verification(model, req, fix_output)
+    [verified, desc, review_time, fix_output]
   end
 
 end

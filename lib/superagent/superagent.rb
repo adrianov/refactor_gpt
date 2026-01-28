@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require 'set'
-require 'reline'
 require_relative "display"
 require_relative "request_reader"
 require_relative "agent_executor"
@@ -31,14 +29,25 @@ class Superagent
     claude-4.5-opus
   ].freeze
 
-  def initialize(display: Display.new, request_reader: nil, agent_executor: nil, verification_handler: nil, 
-session_tracker: nil)
+  def initialize(
+    display: Display.new,
+    request_reader: nil,
+    agent_executor: nil,
+    verification_handler: nil,
+    session_tracker: nil
+  )
     @display = display
     @session_tracker = session_tracker || SessionTracker.new(@display)
     @request_reader = request_reader || RequestReader.new(@display)
-    @agent_executor = agent_executor || AgentExecutor.new(@display, session_tracker: @session_tracker)
-    @verification_handler = verification_handler || VerificationHandler.new(@display, @agent_executor, 
-session_tracker: @session_tracker)
+    @agent_executor = agent_executor || AgentExecutor.new(
+      @display,
+      session_tracker: @session_tracker
+    )
+    @verification_handler = verification_handler || VerificationHandler.new(
+      @display,
+      @agent_executor,
+      session_tracker: @session_tracker
+    )
     @start_time = nil
     @current_pass = nil
     @current_model = nil
@@ -74,19 +83,6 @@ session_tracker: @session_tracker)
     handle_final_failure unless @last_attempt_success
   end
 
-  private
-
-  def determine_start_index(model_index_from_request, start_model_index)
-    if @session_continuation
-      model_index_from_request ? [model_index_from_request, @current_model_index].max : @current_model_index
-    else
-      @current_model_index = 0
-      model_index_from_request || 0
-    end
-  end
-
-  public
-
   def run_plan_mode(req, start_index = 0)
     update_terminal_title('Planning...')
     @display.puts 'Running in plan mode...'.cyan
@@ -109,6 +105,15 @@ session_tracker: @session_tracker)
   end
 
   private
+
+  def determine_start_index(model_index_from_request, start_model_index)
+    if @session_continuation
+      model_index_from_request ? [model_index_from_request, @current_model_index].max : @current_model_index
+    else
+      @current_model_index = 0
+      model_index_from_request || start_model_index
+    end
+  end
 
   def initialize_run(request)
     update_terminal_title('Initializing...')
@@ -142,11 +147,11 @@ session_tracker: @session_tracker)
     @display.display_attempt_header(model, idx, MODELS.size)
     
     start = Time.now
-    success, output, reason = @agent_executor.run(model, req)
+    success, output, = @agent_executor.run(model, req)
     elapsed = Time.now - start
 
     unless success
-      record_network_failure(model, output, elapsed, reason)
+      record_network_failure(model, output, elapsed)
       return :continue
     end
 
@@ -159,7 +164,7 @@ session_tracker: @session_tracker)
     result
   end
 
-  def record_network_failure(model, output, implementation_time, _failure_reason)
+  def record_network_failure(model, output, implementation_time)
     @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
     @display.display_agent_failure(output)
     pass_timing = {
@@ -176,13 +181,19 @@ session_tracker: @session_tracker)
 
   def process_verification_and_fix(model, req)
     pass_start = Time.now
-    pass_timing = { pass: @current_pass, model: model, implementation_time: @current_implementation_time, review_time: 0, fix_time: 0, total_time: 0 }
+    pass_timing = {
+      pass: @current_pass,
+      model: model,
+      implementation_time: @current_implementation_time,
+      review_time: 0,
+      fix_time: 0,
+      total_time: 0
+    }
 
     update_terminal_title("Verifying: #{model}")
     verified, desc, review_time = @verification_handler.run_verification(model, req, @current_agent_output)
     pass_timing[:review_time] = review_time
     $stdout.puts ''
-    save_agent_summary(verified ? "YES: #{desc}" : "NO: #{desc}")
 
     if verified
       finalize_success(pass_timing, pass_start, desc, req)
@@ -197,11 +208,11 @@ session_tracker: @session_tracker)
   def retry_verification_with_fix(model, req, pass_timing, pass_start)
     update_terminal_title("Retrying: #{model}")
     fix_start = Time.now
-    verified, desc, review_time = @verification_handler.retry_with_fix(model, req)
+    verified, desc, review_time, fix_output = @verification_handler.retry_with_fix(model, req)
     pass_timing[:fix_time] = Time.now - fix_start - (review_time || 0)
     pass_timing[:review_time] += (review_time || 0)
     $stdout.puts ''
-    save_agent_summary(verified ? "YES: #{desc}" : "NO: #{desc}")
+    save_agent_summary(fix_output) if fix_output
 
     if verified
       finalize_success(pass_timing, pass_start, desc, req, 'after retry')
@@ -248,10 +259,14 @@ session_tracker: @session_tracker)
     return unless $stdin.tty?
 
     InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
+    prompt_for_new_request(previous_req)
+  end
+
+  def prompt_for_new_request(previous_req)
     update_terminal_title('✅ Passed')
     $stdout.puts "\nEnter the new request:\n(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)\n\n"
 
-    raw_new_req = read_next_request
+    raw_new_req = @request_reader.read_interactive_silent
     return if raw_new_req.to_s.strip.empty?
 
     model_index = extract_model_index(raw_new_req)
@@ -259,17 +274,28 @@ session_tracker: @session_tracker)
     return if new_req.to_s.strip.empty?
 
     exit 1 unless InstanceLock.acquire_lock
+    execute_new_request(new_req, previous_req, model_index)
+  end
 
+  def execute_new_request(new_req, previous_req, model_index)
     analysis = @session_tracker.analyze_continuation(new_req, previous_req ? {request: previous_req} : nil)
-    record_attempt_failure(@current_model) if analysis[:continuation] && user_disagrees_with_verification?(analysis[:tags])
+    if analysis[:continuation] && user_disagrees_with_verification?(analysis[:tags])
+      record_attempt_failure(@current_model)
+    end
     
     start_index = analysis[:continuation] ? [model_index || 0, @current_model_index].max : (model_index || 0)
     start_index = [[start_index, 0].max, MODELS.size - 1].min
 
-    @display.puts "\nStarting #{analysis[:continuation] ? 'continuation' : 'new request'}#{analysis[:tags].empty? ? '' : " [#{analysis[:tags].join(', ')}]" } from #{MODELS[start_index]}...\n\n".yellow
+    display_continuation_message(analysis, start_index)
     @request_reader = RequestReader.new(@display)
     @request_reader.instance_variable_set(:@plan_mode, false)
     run(start_model_index: start_index, request: new_req)
+  end
+
+  def display_continuation_message(analysis, start_index)
+    continuation_text = analysis[:continuation] ? 'continuation' : 'new request'
+    tags_text = analysis[:tags].empty? ? '' : " [#{analysis[:tags].join(', ')}]"
+    @display.puts "\nStarting #{continuation_text}#{tags_text} from #{MODELS[start_index]}...\n\n".yellow
   end
 
   def handle_plan_success
@@ -305,38 +331,6 @@ session_tracker: @session_tracker)
     $stderr.flush if $stderr.tty?
   rescue StandardError
     # Ignore terminal title update errors
-  end
-
-  def read_next_request
-    lines = []
-    loop do
-      line = read_next_request_line(lines)
-      return nil if line.nil?
-      break if line == :done
-      next if line == :continue
-
-      lines << line
-    end
-    result = lines.join("\n")
-    result.strip.empty? ? nil : result
-  end
-
-  def read_next_request_line(lines)
-    line = Reline.readline(lines.empty? ? '> ' : '  ', true)
-    return nil if line.nil?
-
-    line = line.strip
-    return :done if line.empty? && !lines.empty?
-    return :continue if line.empty?
-
-    line
-  rescue Interrupt
-    $stdout.puts ''
-    @display.puts 'Interrupted. Exiting.'.yellow
-    exit 0
-  rescue StandardError => e
-    @display.puts "Error reading input: #{e.message}".yellow
-    return nil
   end
 
   def analyze_session_continuation(req)
