@@ -40,6 +40,8 @@ class Display
   def initialize
     @text_buffer = ''
     @at_start_of_line = true
+    @current_stream_id = nil
+    @has_printed_in_stream = false
   end
 
   def check_late_night_reminder
@@ -68,27 +70,35 @@ class Display
     exit 0
   end
 
-  def print_word(text)
+  def print_word(text, stream_id: nil)
     return if text.nil? || text.empty?
 
     @text_buffer ||= ''
     @at_start_of_line ||= true
     @has_printed_content ||= false
 
+    # Check if this is a new stream
+    is_new_stream = stream_id && stream_id != @current_stream_id
+    if is_new_stream
+      @current_stream_id = stream_id
+      @has_printed_in_stream = false
+    end
+
     # Add text to buffer
     @text_buffer += text
 
     # Process complete lines (ending with newline) - these get timestamps
-    process_complete_lines
+    process_complete_lines(stream_id: stream_id, is_new_stream: is_new_stream)
 
     # If buffer is getting large and no newlines, print it
-    # Add timestamp only if at start of line
+    # Add timestamp only if at start of line and new stream
     if @text_buffer.length > 200 && !@text_buffer.include?("\n")
-      ensure_timestamp if @at_start_of_line
+      ensure_timestamp(is_new_stream: is_new_stream) if @at_start_of_line
       $stdout.print @text_buffer
       @text_buffer = ''
       @at_start_of_line = false
       @has_printed_content = true
+      @has_printed_in_stream = true
       $stdout.flush
     end
   end
@@ -106,7 +116,7 @@ class Display
     process_complete_lines
 
     # Print any remaining buffered content
-    # Only add timestamp if we're at start of line (after processing newlines above)
+    # Only add timestamp if we're at start of line and haven't printed in stream yet
     unless @text_buffer.strip.empty?
       ensure_timestamp if @at_start_of_line
       $stdout.print @text_buffer
@@ -115,8 +125,14 @@ class Display
       @text_buffer = ''
       @at_start_of_line = true
       @has_printed_content = true
+      @has_printed_in_stream = true
       $stdout.flush
     end
+  end
+
+  def reset_stream_tracking
+    @current_stream_id = nil
+    @has_printed_in_stream = false
   end
 
   def display_git_status
@@ -252,7 +268,7 @@ class Display
     "#{timestamp}#{text}"
   end
 
-  def process_complete_lines
+  def process_complete_lines(stream_id: nil, is_new_stream: false)
     return if @text_buffer.empty?
 
     # Process all complete lines (ending with newline)
@@ -264,8 +280,9 @@ class Display
       # Print the line content (without the newline, we'll add it separately)
       line_content = line_with_newline.chomp
       unless line_content.empty?
-        ensure_timestamp
+        ensure_timestamp(is_new_stream: is_new_stream)
         $stdout.print line_content
+        @has_printed_in_stream = true
       end
 
       # Print the newline and reset state for next line
@@ -276,8 +293,12 @@ class Display
     end
   end
 
-  def ensure_timestamp
+  def ensure_timestamp(is_new_stream: false)
     return unless @at_start_of_line
+
+    # Only add timestamp if we haven't printed in current stream yet
+    # is_new_stream is used to reset @has_printed_in_stream when stream changes
+    return if @has_printed_in_stream && !is_new_stream
 
     timestamp = Time.now.strftime("[%H:%M:%S] ")
     $stdout.print timestamp
@@ -459,8 +480,8 @@ class AgentExecutor
   end
 
   def parse_json_stream_line(line)
-    return [nil, nil] if line.nil? || line.strip.empty? || line.include?('=>')
-    return [nil, nil] if (line.include?('"role"') || line.include?("'role'") || line.include?(':role')) &&
+    return [nil, nil, nil] if line.nil? || line.strip.empty? || line.include?('=>')
+    return [nil, nil, nil] if (line.include?('"role"') || line.include?("'role'") || line.include?(':role')) &&
                         (line.include?('"user"') || line.include?("'user'") || line.include?(':user'))
 
     json_obj = JSON.parse(line.strip)
@@ -469,9 +490,12 @@ class AgentExecutor
 
     text = text.to_s unless text.nil?
     text = nil if text&.empty?
-    [type, text]
+    
+    # Generate stream ID from type and request_id if available
+    stream_id = json_obj['request_id'] || json_obj['stream_id'] || type
+    [type, text, stream_id]
   rescue JSON::ParserError
-    [nil, nil]
+    [nil, nil, nil]
   end
 
   def extract_text_from_json(json_obj)
@@ -584,6 +608,7 @@ class AgentExecutor
     end
 
     begin
+      @display.reset_stream_tracking
       cmd = build_and_display_command('--model', model, wrapped, verification_mode: verification_mode)
       Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
         process_pid = wait_thr.pid
@@ -609,12 +634,12 @@ class AgentExecutor
                 line = line_buffer[0..newline_idx]
                 line_buffer = line_buffer[(newline_idx + 1)..-1] || ''
 
-                type, text = parse_json_stream_line(line.strip)
+                type, text, stream_id = parse_json_stream_line(line.strip)
                 if text && !text.empty?
                   if type == 'result'
                     final_result = text
                   else
-                    @display.print_word(text)
+                    @display.print_word(text, stream_id: stream_id)
                   end
                 end
               end
@@ -636,12 +661,12 @@ class AgentExecutor
                   line = line_buffer[0..newline_idx]
                   line_buffer = line_buffer[(newline_idx + 1)..-1] || ''
 
-                  type, text = parse_json_stream_line(line.strip)
+                  type, text, stream_id = parse_json_stream_line(line.strip)
                   if text && !text.empty?
                     if type == 'result'
                       final_result = text
                     else
-                      @display.print_word(text)
+                      @display.print_word(text, stream_id: stream_id)
                     end
                   end
                 end
@@ -663,12 +688,12 @@ class AgentExecutor
 
         # Process any remaining incomplete line in line_buffer
         unless line_buffer.empty?
-          type, text = parse_json_stream_line(line_buffer.strip)
+          type, text, stream_id = parse_json_stream_line(line_buffer.strip)
           if text && !text.empty?
             if type == 'result'
               final_result = text
             else
-              @display.print_word(text)
+              @display.print_word(text, stream_id: stream_id)
             end
           end
         end
@@ -702,18 +727,19 @@ class AgentExecutor
   end
 
   def run_without_timeout(model, wrapped, verification_mode: false)
+    @display.reset_stream_tracking
     cmd = build_and_display_command('--model', model, wrapped, verification_mode: verification_mode)
     stdout, stderr, status = Open3.capture3(*cmd)
     raw_output = stdout + stderr
     final_result = ''
 
     raw_output.each_line do |line|
-      type, text = parse_json_stream_line(line.strip)
+      type, text, stream_id = parse_json_stream_line(line.strip)
       if text && !text.empty?
         if type == 'result'
           final_result = text
         else
-          @display.print_word(text)
+          @display.print_word(text, stream_id: stream_id)
         end
       end
     end
@@ -758,6 +784,7 @@ class AgentExecutor
   end
 
   def run_plan_mode(model, p)
+    @display.reset_stream_tracking
     wrapped = wrap_prompt(p)
     cmd = build_and_display_command('--plan', '--model', model, wrapped)
     
@@ -766,12 +793,12 @@ class AgentExecutor
     final_result = ''
     
     raw_output.each_line do |line|
-      type, text = parse_json_stream_line(line.strip)
+      type, text, stream_id = parse_json_stream_line(line.strip)
       if text && !text.empty?
         if type == 'result'
           final_result = text
         else
-          @display.print_word(text)
+          @display.print_word(text, stream_id: stream_id)
         end
       end
     end
