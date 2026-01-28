@@ -16,6 +16,7 @@ module CompletionNotifier
     return if @already_notified
 
     @already_notified = true
+    @script_dir ||= find_project_root
     play_sound(success)
   end
 
@@ -47,7 +48,7 @@ module CompletionNotifier
   def self.find_sound_file(filename)
     return File.expand_path(filename) if File.exist?(filename)
 
-    script_dir = @script_dir || File.dirname(File.expand_path($PROGRAM_NAME))
+    script_dir = @script_dir || find_project_root
     sounds_dir = File.join(script_dir, 'sounds')
     sounds_path = File.join(sounds_dir, filename)
     return sounds_path if File.exist?(sounds_path)
@@ -56,6 +57,19 @@ module CompletionNotifier
     return script_path if File.exist?(script_path)
 
     nil
+  end
+
+  def self.find_project_root
+    return @script_dir if @script_dir && File.exist?(File.join(@script_dir, 'sounds'))
+
+    lib_dir = File.dirname(File.expand_path(__FILE__))
+    project_root = File.dirname(lib_dir)
+    return project_root if File.exist?(File.join(project_root, 'sounds'))
+
+    script_dir = File.dirname(File.expand_path($PROGRAM_NAME))
+    return script_dir if File.exist?(File.join(script_dir, 'sounds'))
+
+    Dir.pwd if File.exist?(File.join(Dir.pwd, 'sounds'))
   end
 
   def self.set_exit_status(status)
@@ -70,7 +84,7 @@ module CompletionNotifier
     return if @hook_setup
 
     @hook_setup = true
-    @script_dir = File.dirname(File.expand_path($PROGRAM_NAME))
+    @script_dir = find_project_root
 
     at_exit do
       # Skip notification if already notified (e.g., after analysis completion)
