@@ -1,16 +1,20 @@
 # frozen_string_literal: true
 
 # Handles all output formatting and display operations for superagent.
+# Color gamma: timestamps muted, body text soft (avoids straining white).
 class Display
+    TIMESTAMP_COLOR = :light_blue
+    BODY_COLOR = :light_black
+
     def puts(*args)
       @at_start_of_line = true
       return super(*args) if args.empty? || args.first.to_s.strip.empty?
 
-      timestamp = Time.now.strftime("[%H:%M:%S] ")
+      ts = timestamp_str
       if args.first.is_a?(String)
-        args[0] = format_with_timestamp(args[0], timestamp)
+        args[0] = format_with_timestamp(args[0], ts)
       else
-        super(timestamp)
+        super(ts)
       end
       super(*args)
       $stdout.flush
@@ -67,7 +71,7 @@ class Display
 
       if @text_buffer.length > 200 && !@text_buffer.include?("\n")
         ensure_timestamp(is_new_stream: is_new_stream) if @at_start_of_line
-        $stdout.print @text_buffer
+        $stdout.print body(@text_buffer)
         @text_buffer = ''
         @at_start_of_line = false
         @has_printed_content = true
@@ -86,7 +90,7 @@ class Display
 
       unless @text_buffer.strip.empty?
         ensure_timestamp if @at_start_of_line
-        $stdout.print @text_buffer
+        $stdout.print body(@text_buffer)
         $stdout.puts '' unless @text_buffer.end_with?("\n")
         @text_buffer = ''
         @at_start_of_line = true
@@ -109,7 +113,7 @@ class Display
       return if status.empty?
 
       puts 'Git status:'.cyan
-      status.each_line { |line| $stdout.puts "  #{line.chomp}" }
+      status.each_line { |line| $stdout.puts body("  #{line.chomp}") }
       $stdout.puts ''
       display_git_diff
     end
@@ -139,7 +143,7 @@ class Display
 
       if desc && !desc.empty?
         puts "#{prefix}#{suffix}:".send(verified ? :green : :yellow)
-        desc.each_line { |line| $stdout.puts "  #{line.chomp}" }
+        desc.each_line { |line| $stdout.puts body("  #{line.chomp}") }
       elsif verified
         puts "#{prefix}#{suffix}! Success.".send(:green)
       else
@@ -159,7 +163,7 @@ class Display
       if output && !output.strip.empty?
         $stdout.puts ''
         $stdout.puts 'Agent output:'.yellow
-        output.each_line { |line| $stdout.puts "  #{line.chomp}" }
+        output.each_line { |line| $stdout.puts body("  #{line.chomp}") }
       end
       $stdout.puts ''
     end
@@ -179,7 +183,7 @@ class Display
       system("git fetch > #{File::NULL} 2>&1")
       status_output = `git status 2>&1`
       if $?.success?
-        status_output.strip.each_line { |line| $stdout.puts line.chomp }
+        status_output.strip.each_line { |line| $stdout.puts body(line.chomp) }
       else
         puts 'Warning: Failed to get git status'.yellow
       end
@@ -193,16 +197,16 @@ class Display
       puts '💡 Suggestion: Initialize a git repository for better tracking and verification.'.yellow
       $stdout.puts ''
       puts 'Advantages:'.cyan
-      $stdout.puts '  • Automatic change tracking - see exactly what was modified'
-      $stdout.puts '  • Faster verification - uses git diff instead of reading all files'
-      $stdout.puts '  • Better context for AI - only changed code is analyzed'
-      $stdout.puts '  • Easy rollback - revert changes if needed'
-      $stdout.puts '  • Version history - track your code evolution'
+      $stdout.puts body('  • Automatic change tracking - see exactly what was modified')
+      $stdout.puts body('  • Faster verification - uses git diff instead of reading all files')
+      $stdout.puts body('  • Better context for AI - only changed code is analyzed')
+      $stdout.puts body('  • Easy rollback - revert changes if needed')
+      $stdout.puts body('  • Version history - track your code evolution')
       $stdout.puts ''
 
       return unless $stdin.tty?
 
-      puts 'Initialize git repository? (y/N)'.white
+      puts 'Initialize git repository? (y/N)'.colorize(BODY_COLOR)
       answer = $stdin.gets.to_s.chomp.downcase
 
       if answer == 'y'
@@ -222,12 +226,20 @@ class Display
 
     private
 
-    def format_with_timestamp(text, timestamp)
+    def timestamp_str
+      Time.now.strftime("[%H:%M:%S] ").colorize(TIMESTAMP_COLOR)
+    end
+
+    def body(str)
+      str.to_s.colorize(BODY_COLOR)
+    end
+
+    def format_with_timestamp(text, ts)
       if text.start_with?("\e[")
         m_index = text.index('m')
-        return text[0..m_index] + timestamp + text[m_index + 1..-1] if m_index
+        return text[0..m_index] + ts + text[m_index + 1..-1] if m_index
       end
-      "#{timestamp}#{text}"
+      "#{ts}#{text}"
     end
 
     def process_complete_lines(stream_id: nil, is_new_stream: false)
@@ -241,7 +253,7 @@ class Display
         unless line_content.empty? || line_content == @last_printed_line
           @last_printed_line = line_content
           ensure_timestamp(is_new_stream: is_new_stream)
-          $stdout.print line_content
+          $stdout.print body(line_content)
           @has_printed_in_stream = true
         end
 
@@ -256,8 +268,7 @@ class Display
       return unless @at_start_of_line
       return if @has_printed_in_stream && !is_new_stream
 
-      timestamp = Time.now.strftime("[%H:%M:%S] ")
-      $stdout.print timestamp
+      $stdout.print timestamp_str
       @at_start_of_line = false
     end
 
@@ -265,4 +276,3 @@ class Display
       "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
     end
   end
-end
