@@ -743,30 +743,32 @@ def build_all_warnings_prompt(selected_warnings)
   prompt_parts.join("\n")
 end
 
-def fix_warning_with_agent(warning)
-  prompt = build_warning_prompt(warning)
-  cmd = ["agent", "--print", "--stream-partial-output", "--output-format", "stream-json", prompt].map { |arg|
- Shellwords.escape(arg) }.join(" ")
-  puts "Running: #{cmd}".green
-  system(cmd)
-end
-
-def display_warnings_summary(selected_warnings)
-  puts "Fixing #{selected_warnings.size} warning(s) at once...".cyan
-  puts "Warnings to fix:".yellow
-  selected_warnings.each_with_index do |warning, idx|
-    puts "  #{idx + 1}. #{warning['file']}:#{warning['line']} - #{warning['cop']}".yellow
+  def fix_warning_with_agent(warning)
+    prompt = build_warning_prompt(warning)
+    cmd = ["agent", "--print", "--output-format", "stream-json", prompt].map { |arg|
+      Shellwords.escape(arg)
+    }.join(" ")
+    puts "Running: #{cmd}".green
+    system(cmd)
   end
-end
 
-def fix_all_warnings_with_agent(selected_warnings)
-  prompt = build_all_warnings_prompt(selected_warnings)
-  display_warnings_summary(selected_warnings)
-  cmd = ["agent", "--print", "--stream-partial-output", "--output-format", "stream-json", prompt].map { |arg|
- Shellwords.escape(arg) }.join(" ")
-  puts "Running: agent --print [prompt]".green
-  system(cmd)
-end
+  def display_warnings_summary(selected_warnings)
+    puts "Fixing #{selected_warnings.size} warning(s) at once...".cyan
+    puts "Warnings to fix:".yellow
+    selected_warnings.each_with_index do |warning, idx|
+      puts "  #{idx + 1}. #{warning['file']}:#{warning['line']} - #{warning['cop']}".yellow
+    end
+  end
+
+  def fix_all_warnings_with_agent(selected_warnings)
+    prompt = build_all_warnings_prompt(selected_warnings)
+    display_warnings_summary(selected_warnings)
+    cmd = ["agent", "--print", "--output-format", "stream-json", prompt].map { |arg|
+      Shellwords.escape(arg)
+    }.join(" ")
+    puts "Running: agent --print [prompt]".green
+    system(cmd)
+  end
 
 def display_consecutive_warning(warning, idx, total)
   puts "\nWarning #{idx + 1}/#{total}: #{warning['file']}:#{warning['line']} - #{warning['cop']}".cyan
