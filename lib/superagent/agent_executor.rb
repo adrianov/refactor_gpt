@@ -12,9 +12,10 @@ class AgentExecutor
   TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
   TEST_RUNNER_CHECK_INTERVAL = 2
 
-  def initialize(display)
+  def initialize(display, session_tracker: nil)
     @display = display
     @tools_used = []
+    @session_tracker = session_tracker
   end
 
   def test_runner_running?(pid = nil)
@@ -102,7 +103,26 @@ class AgentExecutor
   end
 
   def wrap_prompt(p)
-    p
+    previous_requests = @session_tracker&.get_session_request_history || []
+    last_summary = @session_tracker&.get_last_agent_summary
+    
+    parts = []
+    
+    if last_summary && !last_summary.strip.empty?
+      parts << "\n\nFinal summary from previous agent run:\n#{last_summary.strip}"
+    end
+    
+    if previous_requests.any?
+      parts << "\n\nPrevious requests in this session:\n" +
+               previous_requests.map.with_index(1) { |prev_req, idx| "#{idx}. #{prev_req}" }.join("\n")
+    end
+    
+    parts << "\n\nIMPORTANT: This agent runs in non-interactive mode. " \
+             "You must make all decisions autonomously and execute tasks directly " \
+             "without requesting user input, clarification, or confirmation. " \
+             "Proceed with implementation based on the available context and your best judgment."
+    
+    p + parts.join
   end
 
   def parse_json_stream_line(line)

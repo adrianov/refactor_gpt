@@ -64,12 +64,18 @@ class SessionTracker
     "Session: #{request[0..100]}..."
   end
 
-  def save_session(request, description, tags, continuation)
+  def save_session(request, description, tags, continuation, last_agent_summary = :not_provided)
+    previous_session = load_previous_session
+    request_history = build_request_history(continuation, previous_session)
+    agent_summary = determine_agent_summary(continuation, previous_session, last_agent_summary)
+
     session_data = {
       request: request,
       description: description,
       tags: tags,
       continuation: continuation,
+      request_history: request_history,
+      last_agent_summary: agent_summary,
       timestamp: Time.now.to_i,
       cwd: Dir.pwd
     }
@@ -77,6 +83,37 @@ class SessionTracker
     session_file = session_file_path
     File.write(session_file, JSON.pretty_generate(session_data))
     cleanup_old_sessions
+  end
+
+  def build_request_history(continuation, previous_session)
+    return [] unless continuation && previous_session && previous_session[:request_history]
+
+    previous_session[:request_history] + [previous_session[:request]]
+  end
+
+  def determine_agent_summary(continuation, previous_session, last_agent_summary)
+    return last_agent_summary unless last_agent_summary == :not_provided
+
+    return nil unless continuation
+    return nil unless previous_session && previous_session[:last_agent_summary]
+
+    previous_session[:last_agent_summary]
+  end
+
+  def get_session_request_history
+    session_data = load_previous_session
+    return [] unless session_data
+
+    history = session_data[:request_history] || []
+    previous_request = session_data[:request]
+    history + (previous_request ? [previous_request] : [])
+  end
+
+  def get_last_agent_summary
+    session_data = load_previous_session
+    return nil unless session_data
+
+    session_data[:last_agent_summary]
   end
 
   private
