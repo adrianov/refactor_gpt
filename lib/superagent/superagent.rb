@@ -6,6 +6,7 @@ require_relative "display"
 require_relative "request_reader"
 require_relative "agent_executor"
 require_relative "verification_handler"
+require_relative "session_tracker"
 require_relative "../completion_notifier"
 require_relative "../instance_lock"
 require_relative "../../ask_gpt"
@@ -29,26 +30,38 @@ class Superagent
     claude-4.5-opus
   ].freeze
 
-  def initialize(display: Display.new, request_reader: nil, agent_executor: nil, verification_handler: nil)
+  def initialize(display: Display.new, request_reader: nil, agent_executor: nil, verification_handler: nil, 
+session_tracker: nil)
     @display = display
     @request_reader = request_reader || RequestReader.new(@display)
     @agent_executor = agent_executor || AgentExecutor.new(@display)
     @verification_handler = verification_handler || VerificationHandler.new(@display, @agent_executor)
+    @session_tracker = session_tracker || SessionTracker.new(@display)
     @start_time = nil
     @current_pass = nil
     @current_model = nil
     @current_model_index = 0
     @pass_timings = []
     @feature_start_time = nil
+    @session_description = nil
+    @session_tags = []
+    @session_continuation = false
+    @current_request = nil
   end
 
   def run(start_model_index: 0, request: nil)
     initialize_run(request)
-    req = sanitize_request(request || @request_reader.read)
+    raw_req = request || @request_reader.read
+    model_index_from_request = extract_model_index(raw_req)
+    start_model_index = model_index_from_request if model_index_from_request
+    req = sanitize_request(raw_req)
     @request_reader.validate(req)
-    @display.display_start_message(req)
+    @current_request = req
+    
+    analyze_session_continuation(req)
+    @display.display_start_message(req, @session_continuation, @session_tags)
 
-    return run_plan_mode(req) if @request_reader.plan_mode
+    return run_plan_mode(req, start_model_index) if @request_reader.plan_mode
 
     @feature_start_time = Time.now
     @pass_timings = []
@@ -56,12 +69,13 @@ class Superagent
     handle_final_failure unless @last_attempt_success
   end
 
-  def run_plan_mode(req)
+  def run_plan_mode(req, start_index = 0)
     update_terminal_title('Planning...')
     @display.puts 'Running in plan mode...'.cyan
     $stdout.puts ''
 
-    MODELS.each_with_index do |model, idx|
+    MODELS[start_index..-1].each_with_index do |model, relative_idx|
+      idx = start_index + relative_idx
       @current_pass = idx + 1
       @current_model = model
       update_terminal_title("Planning: #{model}")
@@ -139,7 +153,6 @@ class Superagent
     if verified
       pass_timing[:total_time] = Time.now - pass_start_time + @current_implementation_time
       @pass_timings << pass_timing
-      @display.display_pass_timing(pass_timing)
       handle_success(desc)
       handle_final_success(req)
       @last_attempt_success = true
@@ -159,7 +172,6 @@ class Superagent
     if verified
       pass_timing[:total_time] = Time.now - pass_start_time + @current_implementation_time
       @pass_timings << pass_timing
-      @display.display_pass_timing(pass_timing)
       handle_success(fix_desc, 'after retry')
       handle_final_success(req)
       @last_attempt_success = true
@@ -181,12 +193,19 @@ class Superagent
     @display.display_verification_result(true, desc, context)
     @display.display_total_runtime(@start_time)
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
+    @display.display_passes_recap(@pass_timings)
+    @display.display_git_diff
     @display.display_git_status
+    @display.display_session_description(@session_description) if @session_description
   end
 
   def handle_final_success(previous_req = nil)
     update_terminal_title(true)
     CompletionNotifier.notify_completion(success: true)
+    
+    # Save current session with the request that was just processed
+    current_req = previous_req || @current_request
+    save_current_session(current_req) if current_req
 
     return unless $stdin.tty?
 
@@ -199,7 +218,11 @@ class Superagent
     @display.puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
     $stdout.puts ''
 
-    new_req = sanitize_request(read_next_request)
+    raw_new_req = read_next_request
+    return unless raw_new_req && !raw_new_req.strip.empty?
+
+    model_index_from_request = extract_model_index(raw_new_req)
+    new_req = sanitize_request(raw_new_req)
     return unless new_req && !new_req.strip.empty?
 
     new_lock_path = InstanceLock.acquire_lock
@@ -208,10 +231,10 @@ class Superagent
       exit 1
     end
 
-    analysis = analyze_request_continuation(new_req, previous_req)
+    analysis = @session_tracker.analyze_continuation(new_req, previous_req ? {request: previous_req} : nil)
     is_continuation = analysis[:continuation]
     tags = analysis[:tags]
-    start_index = is_continuation ? @current_model_index : 0
+    start_index = model_index_from_request || (is_continuation ? @current_model_index : 0)
     start_index = [[start_index, 0].max, MODELS.size - 1].min
 
     $stdout.puts ''
@@ -239,6 +262,8 @@ class Superagent
     @display.display_total_runtime(@start_time)
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_git_status
+    @display.display_session_description(@session_description) if @session_description
+    save_current_session(@current_request) if @current_request
     CompletionNotifier.notify_completion(success: false)
     update_terminal_title(false)
     exit 1
@@ -291,89 +316,50 @@ class Superagent
     return nil
   end
 
-  def analyze_request_continuation(new_req, previous_req)
-    return {continuation: false, tags: []} if previous_req.nil? || new_req.nil?
-
-    client = create_ask_client
-    return {continuation: false, tags: []} unless client
-
-    prompt = build_continuation_analysis_prompt(new_req, previous_req)
-    response = query_ask_client(client, prompt)
-    parse_continuation_response(response)
-  rescue StandardError => e
-    @display.puts "Warning: Failed to analyze request continuation: #{e.message}".yellow
-    {continuation: false, tags: []}
-  end
-
-  def create_ask_client
-    return AskGeminiClient.new(progress: false) if Utility.gemini_configured?
-    return AskGptClient.new if Utility.openai_configured?
-
-    nil
-  end
-
-  def build_continuation_analysis_prompt(new_req, previous_req)
-    <<~HEREDOC
-      Analyze the relationship between two requests and classify the new request.
-
-      Previous request:
-      #{previous_req}
-
-      New request:
-      #{new_req}
-
-      Tasks:
-      1. Determine if the new request continues the previous work (YES) or starts a new session (NO)
-      2. Identify applicable tags from: #bug, #regression, #improvement, #feature, #refactoring, #chore, #documentation, #test, #performance, #security
-
-      Response format (required):
-      CONTINUATION: YES or NO
-      TAGS: comma-separated tags (e.g., #bug, #improvement) or NONE
-
-      Examples:
-      - "fix login error" → CONTINUATION: NO, TAGS: #bug
-      - "also add email validation" → CONTINUATION: YES, TAGS: #feature
-      - "optimize database queries" → CONTINUATION: NO, TAGS: #improvement, #performance
-      - "refactor user service" → CONTINUATION: NO, TAGS: #refactoring
-    HEREDOC
-  end
-
-  def query_ask_client(client, prompt)
-    if client.is_a?(AskGeminiClient)
-      client.ask([{role: "user", content: prompt}], title: nil)
+  def analyze_session_continuation(req)
+    previous_session = @session_tracker.load_previous_session
+    
+    if previous_session
+      analysis = @session_tracker.analyze_continuation(req, previous_session)
+      @session_continuation = analysis[:continuation]
+      @session_tags = analysis[:tags]
     else
-      system_msg = "You are a request analyzer. Provide concise, structured responses."
-      messages = [
-        {role: "system", content: system_msg},
-        {role: "user", content: prompt}
-      ]
-      client.ask(messages, title: nil)
+      @session_continuation = false
+      classification = @session_tracker.classify_request(req)
+      @session_tags = classification[:tags]
     end
+    
+    @session_description = @session_tracker.generate_session_description(req, @session_tags)
   end
 
-  def parse_continuation_response(response)
-    return {continuation: false, tags: []} unless response
-
-    continuation_match = response.match(/CONTINUATION:\s*(YES|NO)/i)
-    tags_match = response.match(/TAGS:\s*(.+?)(?:\n|$)/i)
-
-    continuation = continuation_match && continuation_match[1].upcase == "YES"
-    tags_text = tags_match ? tags_match[1].strip : ""
-    tags = extract_tags(tags_text)
-
-    {continuation: continuation, tags: tags}
-  end
-
-  def extract_tags(tags_text)
-    return [] if tags_text.empty? || tags_text.upcase == "NONE"
-
-    tags_text.split(",").map(&:strip).reject(&:empty?).select { |tag| tag.start_with?("#") }
+  def save_current_session(req)
+    @session_tracker.save_session(req, @session_description, @session_tags, @session_continuation)
   end
 
   def sanitize_request(req)
     return req if req.nil?
 
     cleaned = req.gsub(NON_INTERACTIVE_NOTICE, "\n").strip
+    cleaned = remove_model_mentions(cleaned)
     cleaned.gsub(/\n{3,}/, "\n\n")
+  end
+
+  def extract_model_index(req)
+    return nil if req.nil?
+
+    req.scan(/@(\S+)/).flatten.each do |mention|
+      model_index = MODELS.index(mention)
+      return model_index if model_index
+    end
+    nil
+  end
+
+  def remove_model_mentions(req)
+    return req if req.nil?
+
+    cleaned = req.gsub(/@(\S+)/) do |match|
+      MODELS.include?($1) ? '' : match
+    end
+    cleaned.gsub(/\s+/, ' ').strip
   end
 end

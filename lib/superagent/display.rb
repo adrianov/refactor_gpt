@@ -115,7 +115,6 @@ class Display
       puts 'Git status:'.cyan
       status.each_line { |line| $stdout.puts body("  #{line.chomp}") }
       $stdout.puts ''
-      display_git_diff
     end
 
     def display_git_diff
@@ -125,8 +124,26 @@ class Display
       $stdout.puts ''
     end
 
-    def display_start_message(req)
+    def display_session_description(description)
+      return unless description && !description.strip.empty?
+
+      $stdout.puts ''
+      puts "Session: #{description}".cyan
+      $stdout.puts ''
+    end
+
+    def display_start_message(req, continuation = false, tags = [])
       puts "\nSuperagent:".cyan
+      
+      if continuation
+        tag_display = tags.empty? ? '' : " [#{tags.join(', ')}]"
+        puts "↻ Continuing previous session#{tag_display}".light_blue
+        $stdout.puts ''
+      elsif tags.any?
+        puts "🆕 New session [#{tags.join(', ')}]".light_blue
+        $stdout.puts ''
+      end
+      
       puts req.yellow
       $stdout.puts ''
       display_git_status
@@ -284,6 +301,34 @@ class Display
       puts "  Review: #{format_duration(total_review)}".light_blue
       puts "  Fix: #{format_duration(total_fix)}".light_blue
       puts "  Total: #{format_duration(total_feature_time)}".cyan
+      $stdout.puts ''
+    end
+
+    def display_passes_recap(pass_timings)
+      return unless pass_timings && !pass_timings.empty?
+
+      $stdout.puts ''
+      puts "Models used and timings:".cyan
+      
+      pass_timings.each do |pass|
+        model = pass[:model] || 'unknown'
+        pass_num = pass[:pass] || '?'
+        
+        puts "  Pass #{pass_num}: #{model}".light_blue
+        
+        impl_time = pass[:implementation_time] || 0
+        puts "    Implementation: #{format_duration(impl_time)}".light_black if impl_time > 0
+        
+        review_time = pass[:review_time] || 0
+        puts "    Review: #{format_duration(review_time)}".light_black if review_time > 0
+        
+        fix_time = pass[:fix_time] || 0
+        puts "    Fix: #{format_duration(fix_time)}".light_black if fix_time > 0
+        
+        total_time = pass[:total_time] || 0
+        puts "    Total: #{format_duration(total_time)}".cyan if total_time > 0
+      end
+      
       $stdout.puts ''
     end
 
