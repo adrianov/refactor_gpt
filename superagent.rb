@@ -19,6 +19,7 @@ require 'json'
 require_relative "lib/agents_file_handler"
 require_relative "lib/diff_processor"
 require_relative "lib/completion_notifier"
+require_relative "lib/instance_lock"
 
 # Handles all output formatting and display operations
 class Display
@@ -184,9 +185,10 @@ class RequestReader
   def initialize(display)
     @display = display
     @plan_mode = false
+    @force_mode = false
   end
 
-  attr_reader :plan_mode
+  attr_reader :plan_mode, :force_mode
 
   def read_from_argv
     return nil if ARGV.empty?
@@ -196,6 +198,11 @@ class RequestReader
       @plan_mode = true
       args.delete('--plan')
     end
+    if args.include?('--force')
+      @force_mode = true
+      args.delete('--force')
+    end
+    args.delete('--print')
 
     args.join(' ') unless args.empty?
   end
@@ -255,8 +262,9 @@ class AgentExecutor
   TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
   TEST_RUNNER_CHECK_INTERVAL = 2
 
-  def initialize(display)
+  def initialize(display, force_mode: false)
     @display = display
+    @force_mode = force_mode
   end
 
   def test_runner_running?(pid = nil)
@@ -344,11 +352,7 @@ class AgentExecutor
   end
 
   def wrap_prompt(p)
-    <<~HEREDOC
-      IMPORTANT: This agent is running in non-interactive mode. Do not ask questions, request user input, or wait for confirmation. Work autonomously using available information and make reasonable decisions based on context. Execute tasks directly without seeking clarification.
-
-      #{p}
-    HEREDOC
+    p
   end
 
   def parse_json_stream_line(line)
@@ -387,7 +391,9 @@ class AgentExecutor
   end
 
   def build_and_display_command(*args)
-    cmd = ['agent', '--print', '--output-format', 'stream-json', *args]
+    cmd = ['agent', '--print', '--output-format', 'stream-json']
+    cmd << '--force' if @force_mode
+    cmd.concat(args)
     display_cmd = cmd.map do |arg|
       if arg.length > 50 || arg.include?("\n")
         "'#{arg[0..50].gsub("\n", " ")}...'"
@@ -605,13 +611,21 @@ class AgentExecutor
       end
 
       output = (stdout || '') + (stderr || '')
+      # Output is already processed and displayed by run_with_timeout_monitoring
+      # Only display non-JSON lines that might be error messages
       output.each_line do |line|
         stripped = line.strip
         next if stripped.empty?
+        # Skip any line that looks like JSON or structured data
+        next if stripped.start_with?('{') || stripped.start_with?('[')
+        # Skip lines that look like Ruby hash syntax with =>
+        next if stripped.include?('=>') && (stripped.include?('{') || stripped.include?('['))
+        # Skip valid JSON lines
         begin
           JSON.parse(stripped)
           next
         rescue JSON::ParserError
+          # Display only non-JSON error messages
           @display.timestamped_puts line.chomp
         end
       end
@@ -812,8 +826,6 @@ class VerificationHandler
     instruction_parts = [
       <<~HEREDOC
         You are a tool that verifies whether code changes fully implement a requested feature.
-
-        IMPORTANT: This agent is running in non-interactive mode. Do not ask questions, request user input, or wait for confirmation. Work autonomously using available information and make reasonable decisions based on context. Execute tasks directly without seeking clarification.
       HEREDOC
     ]
 
@@ -1091,25 +1103,30 @@ class Superagent
   def initialize(display: Display.new, request_reader: nil, agent_executor: nil, verification_handler: nil)
     @display = display
     @request_reader = request_reader || RequestReader.new(@display)
-    @agent_executor = agent_executor || AgentExecutor.new(@display)
+    force_mode = @request_reader.force_mode
+    @agent_executor = agent_executor || AgentExecutor.new(@display, force_mode: force_mode)
     @verification_handler = verification_handler || VerificationHandler.new(@display, @agent_executor)
     @start_time = nil
     @current_pass = nil
     @current_model = nil
+    @current_model_index = 0
   end
 
-  def run
+  def run(start_model_index: 0, request: nil)
     @display.check_late_night_reminder
-    @start_time = Time.now
-    @display.suggest_git_init
-    @display.update_git_status
-    req = @request_reader.read
+    @start_time = Time.now unless request
+    @display.suggest_git_init unless request
+    @display.update_git_status unless request
+    req = request || @request_reader.read
     @request_reader.validate(req)
+
     @display.display_start_message(req)
 
     return run_plan_mode(req) if @request_reader.plan_mode
 
-    MODELS.each_with_index do |model, idx|
+    @current_model_index = start_model_index
+    MODELS[@current_model_index..-1].each_with_index do |model, relative_idx|
+      idx = @current_model_index + relative_idx
       @current_pass = idx + 1
       @current_model = model
       @display.display_attempt_header(model, idx, MODELS.size)
@@ -1121,7 +1138,11 @@ class Superagent
       end
 
       result = process_model_attempt(model, req)
-      return handle_final_success if result == :success
+      if result == :success
+        @current_model_index = idx
+        handle_final_success(req)
+        return
+      end
     end
 
     handle_final_failure
@@ -1174,10 +1195,36 @@ class Superagent
     :success
   end
 
-  def handle_final_success
+  def handle_final_success(previous_req = nil)
     CompletionNotifier.notify_completion(success: true)
     update_terminal_title(true)
-    @display.wait_for_enter
+    @display.display_total_runtime(@start_time)
+    @display.display_git_status
+
+    return unless $stdin.tty?
+
+    @display.timestamped_puts ''
+    @display.timestamped_puts 'Enter the new request:'.cyan
+    @display.timestamped_puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
+    @display.timestamped_puts ''
+
+    new_req = read_next_request
+    return unless new_req
+
+    is_fix_or_improvement = detect_fix_or_improvement(new_req, previous_req)
+    start_index = is_fix_or_improvement ? @current_model_index : 0
+
+    @display.timestamped_puts ''
+    if is_fix_or_improvement
+      @display.timestamped_puts "Continuing with model cascade from #{MODELS[start_index]}...".yellow
+    else
+      @display.timestamped_puts "Starting new request from first model...".yellow
+    end
+    @display.timestamped_puts ''
+
+    @request_reader = RequestReader.new(@display)
+    @request_reader.instance_variable_set(:@plan_mode, false)
+    run(start_model_index: start_index, request: new_req)
   end
 
   def handle_plan_success
@@ -1199,18 +1246,103 @@ class Superagent
     exit 1
   end
 
-  def update_terminal_title(success)
+  def update_terminal_title(phase)
     return unless $stdout.tty? || $stderr.tty?
 
-    status = success ? '✅ Done' : '❌ Error'
-    sequence = "\033]0;#{status}\007"
+    title = case phase
+            when true then '✅ Done'
+            when false then '❌ Error'
+            else phase.to_s
+            end
+    sequence = "\033]0;#{title}\007"
     $stderr.print sequence if $stderr.tty?
     $stderr.flush if $stderr.tty?
   rescue StandardError
     # Ignore terminal title update errors
   end
+
+  def read_next_request
+    lines = []
+    loop do
+      line = read_next_request_line(lines)
+      return nil if line.nil?
+      break if line == :done
+      next if line == :continue
+
+      lines << line
+    end
+    lines.join("\n")
+  end
+
+  def read_next_request_line(lines)
+    line = Reline.readline(lines.empty? ? '> ' : '  ', true)
+    return nil if line.nil?
+
+    line = line.strip
+    return :done if line.empty? && !lines.empty?
+    return :continue if line.empty?
+
+    line
+  rescue Interrupt
+    @display.timestamped_puts ''
+    @display.timestamped_puts 'Interrupted. Exiting.'.yellow
+    exit 0
+  end
+
+  def detect_fix_or_improvement(new_req, previous_req)
+    return false if previous_req.nil? || new_req.nil?
+
+    new_lower = new_req.downcase
+    prev_lower = previous_req.downcase
+
+    fix_keywords = %w[fix bug error issue problem broken wrong incorrect failed failure]
+    improvement_keywords = %w[improve enhance better optimize refine adjust modify update change]
+    continuation_keywords = %w[also and continue add more]
+
+    is_fix = fix_keywords.any? { |keyword| new_lower.include?(keyword) }
+    is_improvement = improvement_keywords.any? { |keyword| new_lower.include?(keyword) }
+    is_continuation = continuation_keywords.any? { |keyword| new_lower.start_with?(keyword) || new_lower.match?(/\b#{keyword}\s/) }
+
+    return true if is_fix || is_improvement || is_continuation
+
+    new_words = new_lower.split(/\s+/)
+    prev_words = prev_lower.split(/\s+/)
+    common_words = new_words & prev_words
+    common_ratio = common_words.size.to_f / [new_words.size, prev_words.size].max
+
+    common_ratio > 0.3
+  end
 end
 
 if __FILE__ == $PROGRAM_NAME
-  Superagent.new(display: Display.new).run
+  CompletionNotifier.setup_exit_hook
+  display = Display.new
+  lock_path = nil
+  request_reader = RequestReader.new(display)
+  pre_read_request = nil
+  
+  begin
+    if InstanceLock.lock_exists?
+      display.timestamped_puts ''
+      display.timestamped_puts 'Another instance is running in the current directory.'.yellow
+      display.timestamped_puts 'You can enter your request now. It will be processed after the current instance completes.'.yellow
+      display.timestamped_puts ''
+      pre_read_request = request_reader.read
+      request_reader.validate(pre_read_request)
+      display.timestamped_puts ''
+      display.timestamped_puts 'Waiting for the current instance to complete...'.yellow
+      display.timestamped_puts ''
+    end
+    
+    lock_path = InstanceLock.acquire_lock
+    
+    unless lock_path
+      display.timestamped_puts 'Failed to acquire instance lock. Exiting.'.red
+      exit 1
+    end
+    
+    Superagent.new(display: display, request_reader: request_reader).run(request: pre_read_request)
+  ensure
+    InstanceLock.release_lock(lock_path) if lock_path
+  end
 end
