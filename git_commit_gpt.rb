@@ -354,7 +354,7 @@ end
 # Main execution
 def parse_arguments(args)
   debug_mode = args.include?("--debug")
-  cli_hint_parts = args.reject { |arg| arg == "--debug" }
+  cli_hint_parts = args.reject { |arg| arg == "--debug" || arg == "--print" }
 
   [debug_mode, cli_hint_parts.join(" ").to_s.strip]
 end
@@ -941,57 +941,57 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
 end
 
 # Entry point
-CompletionNotifier.wrap_main do
-  debug_mode, cli_hint = parse_arguments(ARGV)
+CompletionNotifier.setup_exit_hook
 
-  # Change to git root directory to ensure consistent path handling
-  git_root = get_git_root
-  Dir.chdir(git_root)
+debug_mode, cli_hint = parse_arguments(ARGV)
 
-  recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
-  recent_commands = get_recent_commands
+# Change to git root directory to ensure consistent path handling
+git_root = get_git_root
+Dir.chdir(git_root)
 
-  loop do
-    plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
-    break if plan_result.nil?
+recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
+recent_commands = get_recent_commands
 
-    commits = plan_result["commits"]
-    warnings = plan_result["warnings"]
-    quality_assessment = plan_result["quality_assessment"]
-    excluded_files = plan_result["excluded_files"]
+loop do
+  plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
+  break if plan_result.nil?
 
-    warnings_fixed = handle_rubocop_warnings
+  commits = plan_result["commits"]
+  warnings = plan_result["warnings"]
+  quality_assessment = plan_result["quality_assessment"]
+  excluded_files = plan_result["excluded_files"]
 
-    if warnings_fixed
-      puts "\nFiles have changed after fixing warnings. Re-planning commits...".cyan
-      recent_commands = get_recent_commands
-      next
-    end
+  warnings_fixed = handle_rubocop_warnings
 
-    CompletionNotifier.notify_completion(success: true)
-    display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
-    execute_commits(commits)
-    break
+  if warnings_fixed
+    puts "\nFiles have changed after fixing warnings. Re-planning commits...".cyan
+    recent_commands = get_recent_commands
+    next
   end
 
-  # Check if there's a remote before asking to push
-  remote_output = `git remote 2>/dev/null`.strip
-  has_remote = !remote_output.empty?
+  CompletionNotifier.notify_completion(success: true)
+  display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
+  execute_commits(commits)
+  break
+end
 
-  if has_remote
-    puts "Do you want to push? (y/N)".white
-    push_answer = $stdin.gets.to_s.chomp.downcase
+# Check if there's a remote before asking to push
+remote_output = `git remote 2>/dev/null`.strip
+has_remote = !remote_output.empty?
 
-    if push_answer == "y"
-      puts "Running: git push".green
-      success = system("git push")
-      exit(success ? 0 : 1)
-    else
-      puts "Changes committed but not pushed.".yellow
-      exit 0
-    end
+if has_remote
+  puts "Do you want to push? (y/N)".white
+  push_answer = $stdin.gets.to_s.chomp.downcase
+
+  if push_answer == "y"
+    puts "Running: git push".green
+    success = system("git push")
+    exit(success ? 0 : 1)
   else
-    puts "Changes committed. No remote configured to push to.".yellow
+    puts "Changes committed but not pushed.".yellow
     exit 0
   end
+else
+  puts "Changes committed. No remote configured to push to.".yellow
+  exit 0
 end

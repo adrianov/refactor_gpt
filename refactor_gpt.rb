@@ -440,14 +440,14 @@ class RefactorGptRunner
 end
 
 # Script entry point
-CompletionNotifier.wrap_main do
-  if ARGV.empty?
-    puts(
-      "Usage: #{File.basename($PROGRAM_NAME)} <file1> [file2 ...] " \
-      '["Instructions what to do."]'
-    )
-    exit 1
-  end
+CompletionNotifier.setup_exit_hook
 
-  RefactorGptRunner.new.run(ARGV)
+if ARGV.empty?
+  puts(
+    "Usage: #{File.basename($PROGRAM_NAME)} <file1> [file2 ...] " \
+    '["Instructions what to do."]'
+  )
+  exit 1
 end
+
+RefactorGptRunner.new.run(ARGV)

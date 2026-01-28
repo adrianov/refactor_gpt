@@ -239,14 +239,16 @@ ARGV.each do |arg|
   user_instruction_parts << arg
 end
 
-CompletionNotifier.wrap_main do
-  if user_instruction_parts.empty?
-    puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] \"What to do\"".cyan
-    exit
-  end
+CompletionNotifier.setup_exit_hook
 
-  user_instruction = user_instruction_parts.join(" ")
-  ai = OpenAi.new(debug: debug_mode)
+if user_instruction_parts.empty?
+  puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] \"What to do\"".cyan
+  exit
+end
+
+user_instruction = user_instruction_parts.join(" ")
+
+ai = OpenAi.new(debug: debug_mode)
 
   result = ai.analyze_request(user_instruction)
 
@@ -285,4 +287,3 @@ CompletionNotifier.wrap_main do
       puts "Command not executed.".yellow
     end
   end
-end

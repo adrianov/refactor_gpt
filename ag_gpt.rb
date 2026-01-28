@@ -146,16 +146,17 @@ unless check_ag_installed
   exit(1)
 end
 
-CompletionNotifier.wrap_main do
-  if ARGV.empty?
-    puts "Search through your code with human language."
-    puts "Usage: #{File.basename($PROGRAM_NAME)} \"What to search in human language\""
-    exit(0)
-  end
+CompletionNotifier.setup_exit_hook
 
-  user_instruction = ARGV.join(" ")
-  openai = OpenAi.new
-  bash_command = openai.bash_command(user_instruction)
+if ARGV.empty?
+  puts "Search through your code with human language."
+  puts "Usage: #{File.basename($PROGRAM_NAME)} \"What to search in human language\""
+  exit(0)
+end
+
+user_instruction = ARGV.join(" ")
+openai = OpenAi.new
+bash_command = openai.bash_command(user_instruction)
 
   puts "Generated bash command: #{bash_command}"
 
@@ -189,4 +190,3 @@ CompletionNotifier.wrap_main do
   else
     puts "Command not executed."
   end
-end

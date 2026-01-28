@@ -74,17 +74,17 @@ module CompletionNotifier
 
     at_exit do
       # Skip notification if already notified (e.g., after analysis completion)
-      next if @already_notified
+      unless @already_notified
+        # Capture exit status from global exception if available
+        if $!.is_a?(SystemExit)
+          set_exit_status($!.status)
+        elsif $!
+          mark_exception
+        end
 
-      # Capture exit status from global exception if available
-      if $!.is_a?(SystemExit)
-        set_exit_status($!.status)
-      elsif $!
-        mark_exception
+        success = determine_success
+        notify_completion(success: success)
       end
-
-      success = determine_success
-      notify_completion(success: success)
     end
   end
 
@@ -108,16 +108,5 @@ module CompletionNotifier
   def self.exit_with_status(code)
     set_exit_status(code)
     exit(code)
-  end
-
-  def self.wrap_main
-    setup_exit_hook
-    yield
-  rescue SystemExit => e
-    set_exit_status(e.status)
-    raise
-  rescue StandardError => e
-    mark_exception
-    raise
   end
 end

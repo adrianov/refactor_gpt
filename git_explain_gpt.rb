@@ -357,10 +357,11 @@ def clean_glow_line(line)
 end
 
 # Entry point
-CompletionNotifier.wrap_main do
-  debug_mode = parse_arguments(ARGV)
+CompletionNotifier.setup_exit_hook
 
-  status_output = run_cmd("git status --porcelain --branch")
+debug_mode = parse_arguments(ARGV)
+
+status_output = run_cmd("git status --porcelain --branch")
 
   if status_output.lines.count { |line| !line.start_with?("##") }.zero?
     puts "No changes to explain.".yellow
@@ -409,4 +410,3 @@ CompletionNotifier.wrap_main do
 
   display_with_glow(explanation)
   run_interactive_questions(explanation, debug_mode) if $stdin.tty?
-end

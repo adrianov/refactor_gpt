@@ -76,8 +76,6 @@ class Verify
     instruction_parts = [
       <<~HEREDOC
         You are a tool that verifies whether code changes fully implement a requested feature.
-
-        IMPORTANT: This agent is running in non-interactive mode. Do not ask questions, request user input, or wait for confirmation. Work autonomously using available information and make reasonable decisions based on context. Execute tasks directly without seeking clarification.
       HEREDOC
     ]
 
@@ -232,11 +230,12 @@ def get_diff_output(project_root: PROJECT_ROOT)
   diff_output
 end
 
-CompletionNotifier.wrap_main do
-  debug_mode, _cli_hint = parse_arguments(ARGV)
-  feature_request = get_feature_request(ARGV)
+CompletionNotifier.setup_exit_hook
 
-  status_output = run_cmd("git status --porcelain --branch")
+debug_mode, _cli_hint = parse_arguments(ARGV)
+feature_request = get_feature_request(ARGV)
+
+status_output = run_cmd("git status --porcelain --branch")
 
   if status_output.lines.count { |line| !line.start_with?("##") }.zero?
     puts "NO: No changes to assess."
@@ -254,4 +253,3 @@ CompletionNotifier.wrap_main do
 
   verified, description = parse_response(response)
   display_result(verified, description)
-end
