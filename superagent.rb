@@ -66,13 +66,6 @@ class Display
     @at_start_of_line ||= true
     @has_printed_content ||= false
 
-    # If we've already printed content and we're starting new text, ensure newline
-    # This separates different messages/chunks
-    if @has_printed_content && @at_start_of_line && @text_buffer.empty?
-      $stdout.puts '' unless @text_buffer.end_with?("\n")
-      @at_start_of_line = true
-    end
-
     # Add text to buffer
     @text_buffer += text
 
@@ -607,8 +600,11 @@ class AgentExecutor
 
                 type, text = parse_json_stream_line(line.strip)
                 if text && !text.empty?
-                  @display.print_word(text)
-                  final_result = text if type == 'result'
+                  if type == 'result'
+                    final_result = text
+                  else
+                    @display.print_word(text)
+                  end
                 end
               end
             rescue EOFError
@@ -627,14 +623,17 @@ class AgentExecutor
                 line_buffer.each_line do |line|
                   type, text = parse_json_stream_line(line.strip)
                   if text && !text.empty?
-                    text_buffer += text
-                    # Display complete lines
-                    while (newline_idx = text_buffer.index("\n"))
-                      line_to_display = text_buffer[0..newline_idx].strip
-                      text_buffer = text_buffer[(newline_idx + 1)..-1] || ''
-                      puts line_to_display unless line_to_display.empty?
+                    if type == 'result'
+                      final_result = text
+                    else
+                      text_buffer += text
+                      # Display complete lines
+                      while (newline_idx = text_buffer.index("\n"))
+                        line_to_display = text_buffer[0..newline_idx].strip
+                        text_buffer = text_buffer[(newline_idx + 1)..-1] || ''
+                        puts line_to_display unless line_to_display.empty?
+                      end
                     end
-                    final_result = text if type == 'result'
                   end
                 end
               end
@@ -659,8 +658,11 @@ class AgentExecutor
             remaining.each_line do |line|
               type, text = parse_json_stream_line(line.strip)
               if text && !text.empty?
-                @display.print_word(text)
-                final_result = text if type == 'result'
+                if type == 'result'
+                  final_result = text
+                else
+                  @display.print_word(text)
+                end
               end
             end
           end
@@ -704,8 +706,11 @@ class AgentExecutor
     raw_output.each_line do |line|
       type, text = parse_json_stream_line(line.strip)
       if text && !text.empty?
-        @display.print_word(text)
-        final_result = text if type == 'result'
+        if type == 'result'
+          final_result = text
+        else
+          @display.print_word(text)
+        end
       end
     end
 
@@ -780,8 +785,11 @@ class AgentExecutor
     raw_output.each_line do |line|
       type, text = parse_json_stream_line(line.strip)
       if text && !text.empty?
-        @display.print_word(text)
-        final_result = text if type == 'result'
+        if type == 'result'
+          final_result = text
+        else
+          @display.print_word(text)
+        end
       end
     end
     
@@ -1127,8 +1135,7 @@ class Superagent
   MODELS = %w[
     auto
     gemini-3-flash
-    gpt-5.2-codex-low-fast
-    gpt-5.2-codex-high-fast
+    gpt-5.2-codex
     gemini-3-pro
     composer-1
     claude-4.5-sonnet
