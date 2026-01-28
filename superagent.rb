@@ -20,7 +20,11 @@ require_relative "lib/instance_lock"
 
 if __FILE__ == $PROGRAM_NAME
   CompletionNotifier.setup_exit_hook
-  display = Display.new
+  skip_midnight_check = ARGV.include?('--skip-midnight') || ARGV.include?('--no-midnight')
+  ARGV.delete('--skip-midnight')
+  ARGV.delete('--no-midnight')
+  
+  display = Display.new(skip_midnight_check: skip_midnight_check)
   lock_path = nil
   request_reader = RequestReader.new(display)
   pre_read_request = nil

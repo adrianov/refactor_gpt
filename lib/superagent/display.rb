@@ -11,16 +11,12 @@ class Display
       return super(*args) if args.empty? || args.first.to_s.strip.empty?
 
       ts = timestamp_str
-      if args.first.is_a?(String)
-        args[0] = format_with_timestamp(args[0], ts)
-      else
-        super(ts)
-      end
+      args[0] = format_with_timestamp(args[0], ts) if args.first.is_a?(String)
       super(*args)
       $stdout.flush
     end
 
-    def initialize
+    def initialize(skip_midnight_check: false)
       @text_buffer = ''
       @at_start_of_line = true
       @current_stream_id = nil
@@ -28,9 +24,12 @@ class Display
       @last_printed_line = nil
       @thinking_indicator_count = 0
       @last_thinking_indicator_time = nil
+      @skip_midnight_check = skip_midnight_check
     end
 
     def check_late_night_reminder
+      return if @skip_midnight_check
+      
       now = Time.now
       hour = now.hour
       minute = now.min
@@ -62,7 +61,6 @@ class Display
 
       @text_buffer ||= ''
       @at_start_of_line ||= true
-      @has_printed_content ||= false
 
       is_new_stream = stream_id && stream_id != @current_stream_id
       if is_new_stream
@@ -79,7 +77,6 @@ class Display
         $stdout.print body(@text_buffer)
         @text_buffer = ''
         @at_start_of_line = false
-        @has_printed_content = true
         @has_printed_in_stream = true
         $stdout.flush
       end
@@ -94,13 +91,12 @@ class Display
       @text_buffer = @text_buffer.sub(/\n{2,}\z/, "\n")
       process_complete_lines
 
-      unless @text_buffer.strip.empty?
+        unless @text_buffer.strip.empty?
         ensure_timestamp if @at_start_of_line
         $stdout.print body(@text_buffer)
         $stdout.puts '' unless @text_buffer.end_with?("\n")
         @text_buffer = ''
         @at_start_of_line = true
-        @has_printed_content = true
         @has_printed_in_stream = true
         $stdout.flush
       end
@@ -165,7 +161,13 @@ class Display
 
     def display_start_message(req, continuation = false, tags = [])
       puts "\nSuperagent:".cyan
-      
+      display_session_type(continuation, tags)
+      puts req.yellow
+      $stdout.puts ''
+      display_git_status
+    end
+
+    def display_session_type(continuation, tags)
       if continuation
         tag_display = tags.empty? ? '' : " [#{tags.join(', ')}]"
         puts "↻ Continuing previous session#{tag_display}".light_blue
@@ -174,10 +176,6 @@ class Display
         puts "🆕 New session [#{tags.join(', ')}]".light_blue
         $stdout.puts ''
       end
-      
-      puts req.yellow
-      $stdout.puts ''
-      display_git_status
     end
 
     def display_attempt_header(model, idx, total)
@@ -225,52 +223,109 @@ class Display
 
       func_name = tool_call_info[:name]
       subtype = tool_call_info[:subtype]
-      args_str = format_tool_call_args(tool_call_info[:arguments])
+      formatted_args = format_tool_call_args(tool_call_info[:arguments])
       
-      status_icon = case subtype
-                    when 'started' then '▶'
-                    when 'completed' then '✓'
-                    else '🔧'
-                    end
+      tool_part = build_tool_part(func_name, subtype, formatted_args)
+      status_badge = build_status_badge(subtype)
       
-      status_text = case subtype
-                    when 'started' then 'starting'
-                    when 'completed' then 'completed'
-                    else ''
-                    end
+      puts tool_part + status_badge
+    end
+
+    def build_tool_part(func_name, subtype, formatted_args)
+      status_icon = get_status_icon(subtype)
+      status_color = get_status_color(subtype)
+      tool_name_color = :light_blue
       
-      display_text = if args_str
-                       "#{status_icon} Tool: #{func_name}(#{args_str})#{status_text.empty? ? '' : " [#{status_text}]"}"
-                     else
-                       "#{status_icon} Tool: #{func_name}#{status_text.empty? ? '' : " [#{status_text}]"}"
-                     end
+      icon_part = "#{status_icon} ".colorize(status_color)
+      name_part = "#{func_name}".colorize(tool_name_color)
       
-      color = subtype == 'completed' ? :green : :cyan
-      puts display_text.send(color)
+      return icon_part + name_part unless formatted_args
+      
+      args_part = formatted_args.colorize(:light_black)
+      icon_part + name_part + "(".colorize(:light_black) + args_part + ")".colorize(:light_black)
+    end
+
+    def get_status_icon(subtype)
+      case subtype
+      when 'started' then '▶'
+      when 'completed' then '✓'
+      else '🔧'
+      end
+    end
+
+    def get_status_color(subtype)
+      case subtype
+      when 'completed' then :green
+      when 'started' then :cyan
+      else :yellow
+      end
+    end
+
+    def build_status_badge(subtype)
+      case subtype
+      when 'completed' then " [completed]".colorize(:green)
+      when 'started' then " [starting]".colorize(:cyan)
+      else ''
+      end
     end
 
     def format_tool_call_args(args)
       return nil unless args
+      return format_hash_args(args) if args.is_a?(Hash)
+      return format_string_args(args) if args.is_a?(String) && !args.empty?
+      
+      nil
+    end
 
-      if args.is_a?(Hash)
-        filtered_args = args.reject { |k, _| %w[explanation toolCallId].include?(k) }
-        return nil if filtered_args.empty?
-        
-        args_str = filtered_args.map do |k, v|
-          value = case v
-                  when String
-                    v.length > 50 ? "#{v[0..50]}..." : v
-                  when Hash, Array
-                    v.inspect.length > 50 ? "#{v.inspect[0..50]}..." : v.inspect
-                  else
-                    v.inspect
-                  end
-          "#{k}: #{value}"
-        end.join(', ')
-        args_str.length > 100 ? args_str[0..100] + '...' : args_str
-      elsif args.is_a?(String) && !args.empty?
-        args.length > 100 ? args[0..100] + '...' : args
+    def format_hash_args(args)
+      filtered_args = args.reject { |k, _| %w[explanation toolCallId].include?(k) }
+      return nil if filtered_args.empty?
+      
+      formatted_parts = filtered_args.map { |k, v| "#{k}: #{format_arg_value(v)}" }
+      args_str = formatted_parts.join(', ')
+      truncate_string(args_str, 120)
+    end
+
+    def format_string_args(args)
+      truncate_string(args, 120)
+    end
+
+    def truncate_string(str, max_length)
+      return str if str.length <= max_length
+      "#{str[0..(max_length - 4)]}..."
+    end
+
+    def format_arg_value(v)
+      case v
+      when String
+        format_string_value(v)
+      when Hash, Array
+        format_inspect_value(v)
+      else
+        v.inspect
       end
+    end
+
+    def format_string_value(v)
+      return v if v.length <= 50
+      return format_path_value(v) if v.include?('/') && v.length > 40
+      
+      "#{v[0..47]}..."
+    end
+
+    def format_path_value(v)
+      parts = v.split('/')
+      filename = parts.last
+      
+      return "#{parts[0..-2].join('/')}/...#{filename[-27..-1]}" if filename.length > 30
+      return "#{parts[0]}/...#{parts[-2]}/#{filename}" if parts.length > 3
+      
+      v.length > 50 ? "#{v[0..47]}..." : v
+    end
+
+    def format_inspect_value(v)
+      inspected = v.inspect
+      inspected.length > 50 ? "#{inspected[0..47]}..." : inspected
     end
 
     def git_repo?
@@ -331,23 +386,17 @@ class Display
       $stdout.puts ''
       puts "Pass #{pass_timing[:pass]} timing:".cyan
       
-      if pass_timing[:implementation_time]
-        puts "  Implementation: #{format_duration(pass_timing[:implementation_time])}".light_blue
-      end
-      
-      if pass_timing[:review_time]
-        puts "  Review: #{format_duration(pass_timing[:review_time])}".light_blue
-      end
-      
-      if pass_timing[:fix_time]
-        puts "  Fix: #{format_duration(pass_timing[:fix_time])}".light_blue
-      end
-      
-      if pass_timing[:total_time]
-        puts "  Total: #{format_duration(pass_timing[:total_time])}".cyan
-      end
+      display_timing_item("Implementation", pass_timing[:implementation_time], :light_blue)
+      display_timing_item("Review", pass_timing[:review_time], :light_blue)
+      display_timing_item("Fix", pass_timing[:fix_time], :light_blue)
+      display_timing_item("Total", pass_timing[:total_time], :cyan)
       
       $stdout.puts ''
+    end
+
+    def display_timing_item(label, time, color)
+      return unless time
+      puts "  #{label}: #{format_duration(time)}".send(color)
     end
 
     def display_feature_timing(pass_timings, feature_start_time)
@@ -373,27 +422,24 @@ class Display
 
       $stdout.puts ''
       puts "Models used and timings:".cyan
-      
-      pass_timings.each do |pass|
-        model = pass[:model] || 'unknown'
-        pass_num = pass[:pass] || '?'
-        
-        puts "  Pass #{pass_num}: #{model}".light_blue
-        
-        impl_time = pass[:implementation_time] || 0
-        puts "    Implementation: #{format_duration(impl_time)}".light_black if impl_time > 0
-        
-        review_time = pass[:review_time] || 0
-        puts "    Review: #{format_duration(review_time)}".light_black if review_time > 0
-        
-        fix_time = pass[:fix_time] || 0
-        puts "    Fix: #{format_duration(fix_time)}".light_black if fix_time > 0
-        
-        total_time = pass[:total_time] || 0
-        puts "    Total: #{format_duration(total_time)}".cyan if total_time > 0
-      end
-      
+      pass_timings.each { |pass| display_single_pass_recap(pass) }
       $stdout.puts ''
+    end
+
+    def display_single_pass_recap(pass)
+      model = pass[:model] || 'unknown'
+      pass_num = pass[:pass] || '?'
+      puts "  Pass #{pass_num}: #{model}".light_blue
+      
+      display_pass_detail("Implementation", pass[:implementation_time])
+      display_pass_detail("Review", pass[:review_time])
+      display_pass_detail("Fix", pass[:fix_time])
+      display_pass_detail("Total", pass[:total_time], color: :cyan)
+    end
+
+    def display_pass_detail(label, time, color: :light_black)
+      return unless time && time > 0
+      puts "    #{label}: #{format_duration(time)}".send(color)
     end
 
     private
@@ -431,7 +477,6 @@ class Display
 
         $stdout.puts ''
         @at_start_of_line = true
-        @has_printed_content = true
         $stdout.flush
       end
     end
