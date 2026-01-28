@@ -155,7 +155,7 @@ class Display
     end
 
     def display_verification_result(verified, desc, context = '')
-      prefix = verified ? '✓ Passed' : '✗ Failed'
+      prefix = verified ? '✔ Passed' : '✗ Failed'
       suffix = context.empty? ? '' : " #{context}"
 
       if desc && !desc.empty?
