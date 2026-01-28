@@ -24,6 +24,8 @@ class Display
       @last_printed_line = nil
       @thinking_indicator_count = 0
       @last_thinking_indicator_time = nil
+      @tool_line_in_progress = false
+      @last_tool_line_length = nil
       @skip_midnight_check = skip_midnight_check
     end
 
@@ -108,6 +110,8 @@ class Display
       @last_printed_line = nil
       @thinking_indicator_count = 0
       @last_thinking_indicator_time = nil
+      @tool_line_in_progress = false
+      @last_tool_line_length = nil
     end
 
     def print_thinking_indicator
@@ -502,6 +506,10 @@ class Display
     end
 
     def print_tool_line_started(text)
+      if @tool_line_in_progress
+        $stdout.puts ''
+        @at_start_of_line = true
+      end
       line = "#{timestamp_str}#{body(text)}"
       @last_tool_line_length = strip_ansi(line).length
       $stdout.print line
