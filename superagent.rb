@@ -107,38 +107,30 @@ class Display
     end
   end
 
-  private
+  def check_late_night_reminder
+    now = Time.now
+    hour = now.hour
+    minute = now.min
 
-  def process_complete_lines
-    return if @text_buffer.empty?
+    # Check if time is between 23:30 and 6:00
+    is_late_night = (hour == 23 && minute >= 30) || (hour >= 0 && hour < 6)
+    return unless is_late_night
 
-    # Process all complete lines (ending with newline)
-    while (newline_idx = @text_buffer.index("\n"))
-      # Get the complete line including the newline
-      line_with_newline = @text_buffer[0..newline_idx]
-      @text_buffer = @text_buffer[(newline_idx + 1)..-1] || ''
+    messages = [
+      "🌙 It's getting late! Your code will still be here tomorrow, and you'll tackle it with fresh eyes and renewed energy.",
+      "⏰ Late night coding session detected! Remember, a well-rested mind writes better code. Tomorrow will be a productive day!",
+      "🌆 The clock says it's time to wind down. Your future self will thank you for getting some rest. Tomorrow's productivity awaits!",
+      "💤 It's past bedtime! Your code isn't going anywhere, but your energy is. Rest up for an amazing day of coding tomorrow!",
+      "🌃 Late night warrior! While your dedication is admirable, remember that tomorrow you'll be even more productive with some rest.",
+      "⭐ Burning the midnight oil? That's dedication! But even the best developers need sleep. Tomorrow will be a great day for coding!",
+      "🌙 Late night coding is impressive, but so is a good night's sleep. Your code will be waiting for you tomorrow, ready for your refreshed mind!"
+    ]
 
-      # Print the line content (without the newline, we'll add it separately)
-      line_content = line_with_newline.chomp
-      unless line_content.empty?
-        ensure_timestamp
-        $stdout.print line_content
-      end
-
-      # Print the newline and reset state for next line
-      $stdout.puts ''
-      @at_start_of_line = true
-      @has_printed_content = true
-      $stdout.flush
-    end
-  end
-
-  def ensure_timestamp
-    return unless @at_start_of_line
-
-    timestamp = Time.now.strftime("[%H:%M:%S] ")
-    $stdout.print timestamp
-    @at_start_of_line = false
+    message = messages.sample
+    $stdout.puts ''
+    puts message.yellow
+    $stdout.puts ''
+    exit 0
   end
 
   def display_git_status
@@ -217,36 +209,6 @@ class Display
     $stdout.puts ''
   end
 
-  def format_duration(sec)
-    "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
-  end
-
-  def check_late_night_reminder
-    now = Time.now
-    hour = now.hour
-    minute = now.min
-
-    # Check if time is between 23:30 and 6:00
-    is_late_night = (hour == 23 && minute >= 30) || (hour >= 0 && hour < 6)
-    return unless is_late_night
-
-    messages = [
-      "🌙 It's getting late! Your code will still be here tomorrow, and you'll tackle it with fresh eyes and renewed energy.",
-      "⏰ Late night coding session detected! Remember, a well-rested mind writes better code. Tomorrow will be a productive day!",
-      "🌆 The clock says it's time to wind down. Your future self will thank you for getting some rest. Tomorrow's productivity awaits!",
-      "💤 It's past bedtime! Your code isn't going anywhere, but your energy is. Rest up for an amazing day of coding tomorrow!",
-      "🌃 Late night warrior! While your dedication is admirable, remember that tomorrow you'll be even more productive with some rest.",
-      "⭐ Burning the midnight oil? That's dedication! But even the best developers need sleep. Tomorrow will be a great day for coding!",
-      "🌙 Late night coding is impressive, but so is a good night's sleep. Your code will be waiting for you tomorrow, ready for your refreshed mind!"
-    ]
-
-    message = messages.sample
-    $stdout.puts ''
-    puts message.yellow
-    $stdout.puts ''
-    exit 0
-  end
-
   def suggest_git_init
     return if git_repo?
 
@@ -279,6 +241,44 @@ class Display
       puts 'Skipping git initialization.'.yellow
       $stdout.puts ''
     end
+  end
+
+  private
+
+  def process_complete_lines
+    return if @text_buffer.empty?
+
+    # Process all complete lines (ending with newline)
+    while (newline_idx = @text_buffer.index("\n"))
+      # Get the complete line including the newline
+      line_with_newline = @text_buffer[0..newline_idx]
+      @text_buffer = @text_buffer[(newline_idx + 1)..-1] || ''
+
+      # Print the line content (without the newline, we'll add it separately)
+      line_content = line_with_newline.chomp
+      unless line_content.empty?
+        ensure_timestamp
+        $stdout.print line_content
+      end
+
+      # Print the newline and reset state for next line
+      $stdout.puts ''
+      @at_start_of_line = true
+      @has_printed_content = true
+      $stdout.flush
+    end
+  end
+
+  def ensure_timestamp
+    return unless @at_start_of_line
+
+    timestamp = Time.now.strftime("[%H:%M:%S] ")
+    $stdout.print timestamp
+    @at_start_of_line = false
+  end
+
+  def format_duration(sec)
+    "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
   end
 end
 
