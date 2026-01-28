@@ -12,12 +12,13 @@ module CompletionNotifier
   @script_dir = nil
   @already_notified = false
 
-  def self.notify_completion(success: true)
+  def self.notify_completion(success: true, title: nil)
     return if @already_notified
 
     @already_notified = true
     @script_dir ||= find_project_root
     play_sound(success)
+    set_terminal_title(title) if title
   end
 
   def self.play_sound(success)
@@ -122,5 +123,16 @@ module CompletionNotifier
   def self.exit_with_status(code)
     set_exit_status(code)
     exit(code)
+  end
+
+  def self.set_terminal_title(title)
+    return unless title
+
+    # Use ANSI escape sequence to set terminal title
+    # \033]0; sets both icon and window title
+    print "\033]0;#{title}\007"
+    $stdout.flush
+  rescue StandardError => e
+    warn "Warning: Failed to set terminal title: #{e.message}" if ENV["DEBUG"]
   end
 end

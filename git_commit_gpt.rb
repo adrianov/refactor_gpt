@@ -969,7 +969,7 @@ loop do
     next
   end
 
-  CompletionNotifier.notify_completion(success: true)
+  CompletionNotifier.notify_completion(success: true, title: "✓ Commit Planning Done")
   display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
   execute_commits(commits)
   break
