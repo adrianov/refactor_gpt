@@ -23,11 +23,47 @@ require_relative "lib/instance_lock"
 
 # Handles all output formatting and display operations
 class Display
-  def timestamped_puts(*args)
-    args.each do |arg|
-      time = Time.now.strftime('%Y-%m-%d %H:%M:%S')
-      puts "[#{time}] #{arg}"
+  def puts(*args)
+    @at_start_of_line = true
+    return super(*args) if args.empty? || args.first.to_s.strip.empty?
+
+    timestamp = Time.now.strftime("[%H:%M:%S] ")
+    if args.first.is_a?(String)
+      # Handle colorized strings which might have escape codes at the beginning
+      if args[0].start_with?("\e[")
+        # Find the first 'm' which ends the escape sequence
+        m_index = args[0].index('m')
+        if m_index
+          # Insert timestamp after the first color escape sequence
+          args[0] = args[0][0..m_index] + timestamp + args[0][m_index+1..-1]
+        else
+          args[0] = "#{timestamp}#{args[0]}"
+        end
+      else
+        args[0] = "#{timestamp}#{args[0]}"
+      end
+    else
+      super(timestamp)
     end
+    super(*args)
+    super("") # Newline after
+    $stdout.flush
+  end
+
+  def timestamped_puts(message)
+    puts message
+  end
+
+  def print_word(text)
+    @at_start_of_line ||= true
+    if @at_start_of_line && !text.strip.empty?
+      timestamp = Time.now.strftime("[%H:%M:%S] ")
+      print timestamp
+      @at_start_of_line = false
+    end
+    print text
+    @at_start_of_line = true if text.include?("\n")
+    $stdout.flush
   end
 
   def display_git_status
@@ -36,21 +72,21 @@ class Display
     status = `git status --short 2>&1`.strip
     return if status.empty?
 
-    timestamped_puts 'Git status:'.cyan
-    status.each_line { |line| timestamped_puts "  #{line.chomp}" }
-    timestamped_puts ''
+    puts 'Git status:'.cyan
+    status.each_line { |line| $stdout.puts "  #{line.chomp}" }
+    $stdout.puts ''
   end
 
   def display_start_message(req)
-    timestamped_puts "\nSuperagent:".cyan
-    timestamped_puts req.yellow
-    timestamped_puts ''
+    puts "\nSuperagent:".cyan
+    puts req.yellow
+    $stdout.puts ''
     display_git_status
   end
 
   def display_attempt_header(model, idx, total)
-    timestamped_puts "--- Attempt #{idx + 1}/#{total}: #{model} ---".blue
-    timestamped_puts ''
+    puts "--- Attempt #{idx + 1}/#{total}: #{model} ---".blue
+    $stdout.puts ''
   end
 
   def display_verification_result(verified, desc, context = '')
@@ -58,12 +94,12 @@ class Display
     suffix = context.empty? ? '' : " #{context}"
 
     if desc && !desc.empty?
-      timestamped_puts "#{prefix}#{suffix}:".send(verified ? :green : :yellow)
-      desc.each_line { |line| timestamped_puts "  #{line.chomp}" }
+      puts "#{prefix}#{suffix}:".send(verified ? :green : :yellow)
+      desc.each_line { |line| $stdout.puts "  #{line.chomp}" }
     elsif verified
-      timestamped_puts "#{prefix}#{suffix}! Success.".send(:green)
+      puts "#{prefix}#{suffix}! Success.".send(:green)
     else
-      timestamped_puts "#{prefix}#{suffix}! #{context.empty? ? 'Retrying...' : 'Next...'}".send(:yellow)
+      puts "#{prefix}#{suffix}! #{context.empty? ? 'Retrying...' : 'Next...'}".send(:yellow)
     end
   end
 
@@ -71,21 +107,21 @@ class Display
     return unless start_time
 
     elapsed = Time.now - start_time
-    timestamped_puts "Run time: #{format_duration(elapsed)}".cyan
+    puts "Run time: #{format_duration(elapsed)}".cyan
   end
 
   def display_agent_failure(output = nil)
-    timestamped_puts 'Agent failed. Next...'.yellow
+    puts 'Agent failed. Next...'.yellow
     if output && !output.strip.empty?
-      timestamped_puts ''
-      timestamped_puts 'Agent output:'.yellow
-      output.each_line { |line| timestamped_puts "  #{line.chomp}" }
+      $stdout.puts ''
+      $stdout.puts 'Agent output:'.yellow
+      output.each_line { |line| $stdout.puts "  #{line.chomp}" }
     end
-    timestamped_puts ''
+    $stdout.puts ''
   end
 
   def display_all_attempts_failed
-    timestamped_puts 'All attempts failed.'.red
+    puts 'All attempts failed.'.red
   end
 
   def git_repo?
@@ -95,29 +131,20 @@ class Display
   def update_git_status
     return unless git_repo?
 
-    timestamped_puts 'Updating git status...'.cyan
+    puts 'Updating git status...'.cyan
     system("git fetch > #{File::NULL} 2>&1")
     status_output = `git status 2>&1`
     if $?.success?
-      timestamped_puts status_output.strip
+      status_output.strip.each_line { |line| $stdout.puts line.chomp }
     else
-      timestamped_puts 'Warning: Failed to get git status'.yellow
+      puts 'Warning: Failed to get git status'.yellow
     end
-    timestamped_puts ''
+    $stdout.puts ''
   end
 
   def format_duration(sec)
     "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
   end
-
-  def wait_for_enter
-    return unless $stdin.tty?
-
-    timestamped_puts ''
-    timestamped_puts 'Press Enter to continue...'.cyan
-    $stdin.gets
-  end
-
 
   def check_late_night_reminder
     now = Time.now
@@ -139,43 +166,43 @@ class Display
     ]
 
     message = messages.sample
-    timestamped_puts ''
-    timestamped_puts message.yellow
-    timestamped_puts ''
+    $stdout.puts ''
+    puts message.yellow
+    $stdout.puts ''
     exit 0
   end
 
   def suggest_git_init
     return if git_repo?
 
-    timestamped_puts ''
-    timestamped_puts '💡 Suggestion: Initialize a git repository for better tracking and verification.'.yellow
-    timestamped_puts ''
-    timestamped_puts 'Advantages:'.cyan
-    timestamped_puts '  • Automatic change tracking - see exactly what was modified'
-    timestamped_puts '  • Faster verification - uses git diff instead of reading all files'
-    timestamped_puts '  • Better context for AI - only changed code is analyzed'
-    timestamped_puts '  • Easy rollback - revert changes if needed'
-    timestamped_puts '  • Version history - track your code evolution'
-    timestamped_puts ''
+    $stdout.puts ''
+    puts '💡 Suggestion: Initialize a git repository for better tracking and verification.'.yellow
+    $stdout.puts ''
+    puts 'Advantages:'.cyan
+    $stdout.puts '  • Automatic change tracking - see exactly what was modified'
+    $stdout.puts '  • Faster verification - uses git diff instead of reading all files'
+    $stdout.puts '  • Better context for AI - only changed code is analyzed'
+    $stdout.puts '  • Easy rollback - revert changes if needed'
+    $stdout.puts '  • Version history - track your code evolution'
+    $stdout.puts ''
 
     return unless $stdin.tty?
 
-    timestamped_puts 'Initialize git repository? (y/N)'.white
+    puts 'Initialize git repository? (y/N)'.white
     answer = $stdin.gets.to_s.chomp.downcase
 
     if answer == 'y'
-      timestamped_puts 'Running: git init'.green
+      puts 'Running: git init'.green
       success = system('git init')
       if success
-        timestamped_puts 'Git repository initialized successfully.'.green
+        puts 'Git repository initialized successfully.'.green
       else
-        timestamped_puts 'Failed to initialize git repository.'.yellow
+        puts 'Failed to initialize git repository.'.yellow
       end
-      timestamped_puts ''
+      $stdout.puts ''
     else
-      timestamped_puts 'Skipping git initialization.'.yellow
-      timestamped_puts ''
+      puts 'Skipping git initialization.'.yellow
+      $stdout.puts ''
     end
   end
 end
@@ -212,9 +239,9 @@ class RequestReader
   end
 
   def read_interactive
-    @display.timestamped_puts 'Enter request:'.cyan
-    @display.timestamped_puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
-    @display.timestamped_puts ''
+    puts 'Enter request:'.cyan
+    puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
+    $stdout.puts ''
 
     lines = []
     loop do
@@ -238,8 +265,8 @@ class RequestReader
 
     line
   rescue Interrupt
-    @display.timestamped_puts ''
-    @display.timestamped_puts 'Interrupted. Exiting.'.yellow
+    $stdout.puts ''
+    puts 'Interrupted. Exiting.'.yellow
     exit 0
   end
 
@@ -250,7 +277,7 @@ class RequestReader
   def validate(req)
     return true if req && !req.strip.empty?
 
-    @display.timestamped_puts 'No request provided. Exiting.'.yellow
+    puts 'No request provided. Exiting.'.yellow
     exit 1
   end
 end
@@ -356,32 +383,11 @@ class AgentExecutor
   end
 
   def parse_json_stream_line(line)
-    return [nil, nil] if line.nil? || line.strip.empty?
+    return [nil, nil] if line.nil? || line.strip.empty? || line.include?('=>')
 
     json_obj = JSON.parse(line.strip)
     type = json_obj['type']
-    text = nil
-
-    case type
-    when 'assistant'
-      content = json_obj.dig('message', 'content')
-      if content.is_a?(Array)
-        text_content = content.find { |c| c['type'] == 'text' }
-        text = text_content['text'] if text_content
-      elsif content.is_a?(String)
-        text = content
-      end
-      text ||= json_obj.dig('message', 'text')
-      text ||= json_obj['text']
-    when 'result'
-      text = json_obj['result']
-    when 'step'
-      text = json_obj['step'] || json_obj['text'] || json_obj['content']
-    when 'tool_call', 'tool_result'
-      text = json_obj['text'] || json_obj['content'] || json_obj['result']
-    else
-      text = json_obj['text'] || json_obj['content'] || json_obj['result'] || json_obj['message']
-    end
+    text = extract_text_from_json(json_obj)
 
     text = text.to_s.strip unless text.nil?
     text = nil if text&.empty?
@@ -390,8 +396,29 @@ class AgentExecutor
     [nil, nil]
   end
 
+  def extract_text_from_json(json_obj)
+    case json_obj['type']
+    when 'assistant'
+      content = json_obj.dig('message', 'content')
+      if content.is_a?(Array)
+        text_content = content.find { |c| c['type'] == 'text' }
+        text_content ? text_content['text'] : nil
+      elsif content.is_a?(String)
+        content
+      else
+        json_obj.dig('message', 'text') || json_obj['text']
+      end
+    when 'result'
+      json_obj['result']
+    when 'step', 'tool_call', 'tool_result'
+      json_obj['step'] || json_obj['text'] || json_obj['content'] || json_obj['result']
+    else
+      json_obj['text'] || json_obj['content'] || json_obj['result'] || json_obj['message']
+    end
+  end
+
   def build_and_display_command(*args)
-    cmd = ['agent', '--print', '--output-format', 'stream-json']
+    cmd = ['agent', '--print', '--stream-partial-output', '--output-format', 'stream-json']
     cmd << '--force' if @force_mode
     cmd.concat(args)
     display_cmd = cmd.map do |arg|
@@ -401,7 +428,7 @@ class AgentExecutor
         arg
       end
     end.join(' ')
-    @display.timestamped_puts "Running: #{display_cmd}"
+    puts "Running: #{display_cmd}"
     cmd
   end
 
@@ -416,22 +443,8 @@ class AgentExecutor
   def run_with_timeout_monitoring(model, wrapped)
     # Check if a test runner is already running in the system before starting the agent
     if test_runner_running?
-      @display.timestamped_puts '⚠️  Test runner already running in system, no timeout applied'.yellow
-      cmd = build_and_display_command('--model', model, wrapped)
-      stdout, stderr, status = Open3.capture3(*cmd)
-      raw_output = stdout + stderr
-      final_result = ''
-
-      raw_output.each_line do |line|
-        type, text = parse_json_stream_line(line.strip)
-        if text && !text.empty?
-          @display.timestamped_puts text
-          final_result = text if type == 'result'
-        end
-      end
-
-      output = final_result.empty? ? raw_output : final_result
-      return [output, '', status]
+      puts '⚠️  Test runner already running in system, no timeout applied'.yellow
+      return run_without_timeout(model, wrapped)
     end
 
     test_runner_detected = false
@@ -451,7 +464,7 @@ class AgentExecutor
           unless test_runner_detected
             test_runner_detected = true
             timeout_disabled = true
-            @display.timestamped_puts '⚠️  Test runner detected (child of agent), disabling timeout'.yellow
+            puts '⚠️  Test runner detected (child of agent), disabling timeout'.yellow
           end
         end
       end
@@ -466,7 +479,7 @@ class AgentExecutor
           total_execution_time = Time.now - execution_start_time
           if total_execution_time >= MAX_EXECUTION_TIMEOUT && !execution_complete
             timed_out = true
-            @display.timestamped_puts "❌ Agent timed out after #{MAX_EXECUTION_TIMEOUT}s maximum execution time".red
+            puts "❌ Agent timed out after #{MAX_EXECUTION_TIMEOUT}s maximum execution time".red
             Process.kill('TERM', process_pid) if process_pid
             sleep 2
             Process.kill('KILL', process_pid) if process_pid && !execution_complete
@@ -479,7 +492,7 @@ class AgentExecutor
         time_since_last_chunk = Time.now - last_chunk_time
         if time_since_last_chunk >= EXECUTION_TIMEOUT && !execution_complete
           timed_out = true
-          @display.timestamped_puts "❌ Agent timed out after #{EXECUTION_TIMEOUT}s without receiving data".red
+          puts "❌ Agent timed out after #{EXECUTION_TIMEOUT}s without receiving data".red
           Process.kill('TERM', process_pid) if process_pid
           sleep 2
           Process.kill('KILL', process_pid) if process_pid && !execution_complete
@@ -498,6 +511,7 @@ class AgentExecutor
         final_result = ''
         stdin.close
         line_buffer = ''
+        text_buffer = ''
 
         loop do
           break if timed_out
@@ -516,7 +530,7 @@ class AgentExecutor
 
                 type, text = parse_json_stream_line(line.strip)
                 if text && !text.empty?
-                  @display.timestamped_puts text
+                  @display.print_word(text)
                   final_result = text if type == 'result'
                 end
               end
@@ -536,7 +550,13 @@ class AgentExecutor
                 line_buffer.each_line do |line|
                   type, text = parse_json_stream_line(line.strip)
                   if text && !text.empty?
-                    @display.timestamped_puts text
+                    text_buffer += text
+                    # Display complete lines
+                    while (newline_idx = text_buffer.index("\n"))
+                      line_to_display = text_buffer[0..newline_idx].strip
+                      text_buffer = text_buffer[(newline_idx + 1)..-1] || ''
+                      puts line_to_display unless line_to_display.empty?
+                    end
                     final_result = text if type == 'result'
                   end
                 end
@@ -545,7 +565,7 @@ class AgentExecutor
               # Stream closed, no more data
             rescue IOError => e
               # Error reading remaining data, log and continue
-              @display.timestamped_puts "Warning: Error reading remaining output: #{e.message}".yellow
+              puts "Warning: Error reading remaining output: #{e.message}".yellow
             end
             break
           end
@@ -562,12 +582,13 @@ class AgentExecutor
             remaining.each_line do |line|
               type, text = parse_json_stream_line(line.strip)
               if text && !text.empty?
-                @display.timestamped_puts text
+                @display.print_word(text)
                 final_result = text if type == 'result'
               end
             end
           end
         end
+
 
         execution_complete = true
 
@@ -594,6 +615,24 @@ class AgentExecutor
     end
   end
 
+  def run_without_timeout(model, wrapped)
+    cmd = build_and_display_command('--model', model, wrapped)
+    stdout, stderr, status = Open3.capture3(*cmd)
+    raw_output = stdout + stderr
+    final_result = ''
+
+    raw_output.each_line do |line|
+      type, text = parse_json_stream_line(line.strip)
+      if text && !text.empty?
+        @display.print_word(text)
+        final_result = text if type == 'result'
+      end
+    end
+
+    output = final_result.empty? ? raw_output : final_result
+    [output, '', status]
+  end
+
   def run(model, p, max_retries: 3, base_delay: 1)
     wrapped = wrap_prompt(p)
     retries = 0
@@ -606,7 +645,7 @@ class AgentExecutor
           return [false, "Timeout after #{EXECUTION_TIMEOUT}s"] if stdout.nil?
         end
       rescue StandardError => e
-        @display.timestamped_puts "❌ Agent execution error: #{e.message}".red
+        puts "❌ Agent execution error: #{e.message}".red
         return [false, "Execution error: #{e.message}"]
       end
 
@@ -619,13 +658,13 @@ class AgentExecutor
         # Skip any line that looks like JSON or structured data
         next if stripped.start_with?('{') || stripped.start_with?('[')
         # Skip lines that look like Ruby hash syntax with =>
-        next if stripped.include?('=>') && (stripped.include?('{') || stripped.include?('['))
+        next if stripped.include?('=>')
         # Skip valid JSON lines
         begin
           JSON.parse(stripped)
           next
         rescue JSON::ParserError
-          # Display only non-JSON error messages
+          # Display only non-JSON error messages that aren't already displayed
           @display.timestamped_puts line.chomp
         end
       end
@@ -635,7 +674,7 @@ class AgentExecutor
       if retryable_network_error?(output) && retries < max_retries
         retries += 1
         delay = base_delay * (2**(retries - 1))
-        @display.timestamped_puts "⚠️  Network error, retrying in #{delay}s... (#{retries}/#{max_retries})".yellow
+        puts "⚠️  Network error, retrying in #{delay}s... (#{retries}/#{max_retries})".yellow
         sleep(delay)
         next
       end
@@ -655,7 +694,7 @@ class AgentExecutor
     raw_output.each_line do |line|
       type, text = parse_json_stream_line(line.strip)
       if text && !text.empty?
-        @display.timestamped_puts text
+        @display.print_word(text)
         final_result = text if type == 'result'
       end
     end
@@ -663,7 +702,7 @@ class AgentExecutor
     output = final_result.empty? ? raw_output : final_result
     [status.success?, output]
   rescue StandardError => e
-    @display.timestamped_puts "❌ Agent execution error: #{e.message}".red
+    puts "❌ Agent execution error: #{e.message}".red
     [false, "Execution error: #{e.message}"]
   end
 end
@@ -696,16 +735,17 @@ class VerificationHandler
     n = normalize_response(res)
     up = n.upcase
 
-    return parse_yes_res(n) if up.start_with?('YES')
-    return parse_no_res(n) if up.start_with?('NO')
+    # Prioritize NO if both are present and NO comes first
+    yes_match = up.match(/\bYES\b/i)
+    no_match = up.match(/\bNO\b/i)
 
-    yes_match = up.match(/\bYES\s*:?/i)
-    no_match = up.match(/\bNO\s*:?/i)
-
-    return parse_no_res(n) if no_match && (yes_match.nil? || no_match.begin(0) < yes_match.begin(0))
-    return parse_yes_res(n) if yes_match && (no_match.nil? || yes_match.begin(0) < no_match.begin(0))
-
-    [false, res]
+    if no_match && (yes_match.nil? || no_match.begin(0) < yes_match.begin(0))
+      parse_no_res(n)
+    elsif yes_match
+      parse_yes_res(n)
+    else
+      [false, res]
+    end
   end
 
   def normalize_response(res)
@@ -718,15 +758,15 @@ class VerificationHandler
   end
 
   def parse_no_res(n)
-    m = n.match(/\bNO\s*:?\s*(.*)/im)
-    description = m ? m[1].strip : ""
-    [false, description.empty? ? "Failed" : description]
+    m = n.match(/\bNO\b\s*:?\s*(.*)/i)
+    description = m ? m[1].strip : ''
+    [false, description.empty? ? 'Failed' : description]
   end
 
   def parse_yes_res(n)
-    m = n.match(/\bYES\s*:?\s*(.*)/im)
-    description = m ? m[1].strip : ""
-    [true, description.empty? ? "Passed" : description]
+    m = n.match(/\bYES\b\s*:?\s*(.*)/i)
+    description = m ? m[1].strip : ''
+    [true, description.empty? ? 'Passed' : description]
   end
 
   def git_repo?
@@ -905,11 +945,10 @@ class VerificationHandler
     diff_output = collect_git_diff
     file_contents = collect_file_contents
 
-    system_instruction = build_verification_system_instruction
     user_content = build_verification_user_content(req, status_output, diff_output, file_contents)
 
     <<~HEREDOC
-      #{system_instruction}
+      #{build_verification_system_instruction}
 
       ---
 
@@ -917,98 +956,29 @@ class VerificationHandler
     HEREDOC
   end
 
-  def run_verification(model, req)
-    @display.timestamped_puts 'Verifying...'.blue
+  def ask_user_verification
+    return [false, 'Not in interactive mode'] unless $stdin.tty?
 
-    verification_prompt = build_verification_prompt(req)
-    cmd = @agent_executor.build_and_display_command('--mode', 'ask', '--model', model, verification_prompt)
+    $stdout.puts ''
+    $stdout.puts 'Is the feature or fix complete and free of bugs or regressions? (y/N)'.cyan
+    answer = $stdin.gets.to_s.chomp.downcase
+    $stdout.puts ''
 
-    raw_output = ''
-    final_result = ''
-
-    Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
-      stdin.close
-      line_buffer = ''
-
-      loop do
-        ready = IO.select([stdout_stderr], nil, nil, 0.5)
-        if ready
-          begin
-            chunk = stdout_stderr.readpartial(4096)
-            raw_output += chunk
-            line_buffer += chunk
-
-            while (newline_idx = line_buffer.index("\n"))
-              line = line_buffer[0..newline_idx]
-              line_buffer = line_buffer[(newline_idx + 1)..-1] || ''
-
-              type, text = @agent_executor.parse_json_stream_line(line.strip)
-              if text && !text.empty?
-                @display.timestamped_puts text
-                final_result = text if type == 'result'
-              end
-            end
-          rescue EOFError
-            break
-          rescue IO::WaitReadable
-            next
-          end
-        elsif !wait_thr.alive?
-          begin
-            remaining = stdout_stderr.read
-            if remaining
-              raw_output += remaining
-              line_buffer += remaining
-
-              line_buffer.each_line do |line|
-                type, text = @agent_executor.parse_json_stream_line(line.strip)
-                if text && !text.empty?
-                  @display.timestamped_puts text
-                  final_result = text if type == 'result'
-                end
-              end
-            end
-          rescue EOFError
-            # Stream closed, no more data
-          rescue IOError => e
-            # Error reading remaining data, log and continue
-            @display.timestamped_puts "Warning: Error reading remaining output: #{e.message}".yellow
-          end
-          break
-        end
-      end
-
-      begin
-        remaining = stdout_stderr.read rescue ''
-        if remaining
-          raw_output += remaining
-          remaining.each_line do |line|
-            type, text = @agent_executor.parse_json_stream_line(line.strip)
-            if text && !text.empty?
-              @display.timestamped_puts text
-              final_result = text if type == 'result'
-            end
-          end
-        end
-      rescue EOFError, IOError
-        # Stream closed or error reading
-      end
-
-      begin
-        status = wait_thr.value
-      rescue StandardError
-        status = Struct.new(:success?).new(false)
-      end
-
-      output = final_result.empty? ? raw_output.strip : final_result.strip
-
-      if status.success?
-        verified, desc = parse_res(output)
-        return [verified, desc || 'Failed'] unless desc.nil?
-      end
+    case answer
+    when 'y', 'yes'
+      [true, 'User confirmed implementation is complete']
+    else
+      [false, 'User indicated implementation needs work']
     end
+  end
 
-    @display.timestamped_puts 'Primary verification failed, using verify_gpt.rb as fallback...'.yellow
+  def run_verification(model, req)
+    puts 'Verifying...'.blue
+
+    result = ask_user_verification
+    return result if result[0] != false || $stdin.tty?
+
+    @display.timestamped_puts 'Not in interactive mode, using verify_gpt.rb as fallback...'.yellow
     run_verification_fallback(req)
   end
 
@@ -1016,7 +986,7 @@ class VerificationHandler
     verify_script = File.join(__dir__, 'verify_gpt.rb')
     return [false, 'verify_gpt.rb not found'] unless File.exist?(verify_script)
 
-    @display.timestamped_puts "Running: #{verify_script} '#{req[0..50]}...'"
+    puts "Running: #{verify_script} '#{req[0..50]}...'"
 
     stdout, stderr, status = Open3.capture3('ruby', verify_script, req)
     output = stdout + stderr
@@ -1030,8 +1000,8 @@ class VerificationHandler
 
   def retry_with_fix(model, req)
     fix_prompt = build_fix_prompt(req)
-    @display.timestamped_puts "Retrying #{model} with fix...".blue
-    @display.timestamped_puts ''
+    puts "Retrying #{model} with fix...".blue
+    $stdout.puts ''
 
     success, _output = @agent_executor.run(model, fix_prompt)
     return [false, nil] unless success
@@ -1077,18 +1047,25 @@ class VerificationHandler
   end
 
   def truncate_file_contents(file_contents, max_bytes)
-    return "" if max_bytes <= 0
+    return '' if max_bytes <= 0
 
     truncated = file_contents.byteslice(0, max_bytes)
     last_newline = truncated.rindex("\n")
     return truncated if last_newline.nil?
 
-    truncated.byteslice(0, last_newline + 1) + "\n... (file contents truncated due to size limit)\n"
+    "#{truncated.byteslice(0, last_newline + 1)}\n... (file contents truncated due to size limit)\n"
   end
 end
 
 # Main orchestrator class for superagent execution
 class Superagent
+  NON_INTERACTIVE_NOTICE = /
+    (?:^|\n)
+    IMPORTANT:\s+This\s+agent\s+is\s+running\s+in\s+non-interactive\s+mode\.
+    .*?
+    Execute\s+tasks\s+directly\s+without\s+seeking\s+clarification\.
+    \s*
+  /mix
   MODELS = %w[
     auto
     gemini-3-flash
@@ -1113,11 +1090,13 @@ class Superagent
   end
 
   def run(start_model_index: 0, request: nil)
+    update_terminal_title('Initializing...')
     @display.check_late_night_reminder
     @start_time = Time.now unless request
     @display.suggest_git_init unless request
     @display.update_git_status unless request
-    req = request || @request_reader.read
+    update_terminal_title('Reading request...')
+    req = sanitize_request(request || @request_reader.read)
     @request_reader.validate(req)
 
     @display.display_start_message(req)
@@ -1129,6 +1108,7 @@ class Superagent
       idx = @current_model_index + relative_idx
       @current_pass = idx + 1
       @current_model = model
+      update_terminal_title("Attempting: #{model}")
       @display.display_attempt_header(model, idx, MODELS.size)
 
       success, output = @agent_executor.run(model, req)
@@ -1137,24 +1117,21 @@ class Superagent
         next
       end
 
-      result = process_model_attempt(model, req)
-      if result == :success
-        @current_model_index = idx
-        handle_final_success(req)
-        return
-      end
+      return if process_model_attempt(model, req) == :success
     end
 
     handle_final_failure
   end
 
   def run_plan_mode(req)
-    @display.timestamped_puts 'Running in plan mode...'.cyan
-    @display.timestamped_puts ''
+    update_terminal_title('Planning...')
+    puts 'Running in plan mode...'.cyan
+    $stdout.puts ''
 
     MODELS.each_with_index do |model, idx|
       @current_pass = idx + 1
       @current_model = model
+      update_terminal_title("Planning: #{model}")
       @display.display_attempt_header(model, idx, MODELS.size)
 
       success, output = @agent_executor.run_plan_mode(model, req)
@@ -1169,21 +1146,31 @@ class Superagent
   private
 
   def process_model_attempt(model, req)
+    update_terminal_title("Verifying: #{model}")
     verified, desc = @verification_handler.run_verification(model, req)
-    @display.timestamped_puts ''
+    $stdout.puts ''
 
-    return handle_success(desc) if verified
+    if verified
+      handle_success(desc)
+      handle_final_success(req)
+      return :success
+    end
 
     @display.display_verification_result(false, desc)
-    @display.timestamped_puts ''
+    $stdout.puts ''
 
+    update_terminal_title("Retrying: #{model}")
     verified, fix_desc = @verification_handler.retry_with_fix(model, req)
-    @display.timestamped_puts ''
+    $stdout.puts ''
 
-    return handle_success(fix_desc, 'after retry') if verified
+    if verified
+      handle_success(fix_desc, 'after retry')
+      handle_final_success(req)
+      return :success
+    end
 
     @display.display_verification_result(false, fix_desc, 'after retry')
-    @display.timestamped_puts ''
+    $stdout.puts ''
     :continue
   end
 
@@ -1192,35 +1179,30 @@ class Superagent
     @display.display_verification_result(true, desc, context)
     @display.display_total_runtime(@start_time)
     @display.display_git_status
-    :success
   end
 
   def handle_final_success(previous_req = nil)
     CompletionNotifier.notify_completion(success: true)
     update_terminal_title(true)
-    @display.display_total_runtime(@start_time)
-    @display.display_git_status
 
     return unless $stdin.tty?
 
-    @display.timestamped_puts ''
-    @display.timestamped_puts 'Enter the new request:'.cyan
-    @display.timestamped_puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
-    @display.timestamped_puts ''
+    update_terminal_title('Reading request...')
+    $stdout.puts ''
+    puts 'Enter the new request:'.cyan
+    puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
+    $stdout.puts ''
 
-    new_req = read_next_request
-    return unless new_req
+    new_req = sanitize_request(read_next_request)
+    return unless new_req && !new_req.strip.empty?
 
     is_fix_or_improvement = detect_fix_or_improvement(new_req, previous_req)
     start_index = is_fix_or_improvement ? @current_model_index : 0
+    start_index = [[start_index, 0].max, MODELS.size - 1].min
 
-    @display.timestamped_puts ''
-    if is_fix_or_improvement
-      @display.timestamped_puts "Continuing with model cascade from #{MODELS[start_index]}...".yellow
-    else
-      @display.timestamped_puts "Starting new request from first model...".yellow
-    end
-    @display.timestamped_puts ''
+    $stdout.puts ''
+    puts "Starting #{is_fix_or_improvement ? 'continuation' : 'new request'} from #{MODELS[start_index]}...".yellow
+    $stdout.puts ''
 
     @request_reader = RequestReader.new(@display)
     @request_reader.instance_variable_set(:@plan_mode, false)
@@ -1232,7 +1214,6 @@ class Superagent
     @display.display_git_status
     CompletionNotifier.notify_completion(success: true)
     update_terminal_title(true)
-    @display.wait_for_enter
     exit 0
   end
 
@@ -1242,7 +1223,6 @@ class Superagent
     @display.display_git_status
     CompletionNotifier.notify_completion(success: false)
     update_terminal_title(false)
-    @display.wait_for_enter
     exit 1
   end
 
@@ -1271,7 +1251,8 @@ class Superagent
 
       lines << line
     end
-    lines.join("\n")
+    result = lines.join("\n")
+    result.strip.empty? ? nil : result
   end
 
   def read_next_request_line(lines)
@@ -1284,9 +1265,12 @@ class Superagent
 
     line
   rescue Interrupt
-    @display.timestamped_puts ''
-    @display.timestamped_puts 'Interrupted. Exiting.'.yellow
+    $stdout.puts ''
+    puts 'Interrupted. Exiting.'.yellow
     exit 0
+  rescue StandardError => e
+    puts "Error reading input: #{e.message}".yellow
+    return nil
   end
 
   def detect_fix_or_improvement(new_req, previous_req)
@@ -1295,6 +1279,17 @@ class Superagent
     new_lower = new_req.downcase
     prev_lower = previous_req.downcase
 
+    return true if check_keywords(new_lower)
+
+    new_words = new_lower.split(/\s+/)
+    prev_words = prev_lower.split(/\s+/)
+    common_words = new_words & prev_words
+    common_ratio = common_words.size.to_f / [new_words.size, prev_words.size].max
+
+    common_ratio > 0.3
+  end
+
+  def check_keywords(new_lower)
     fix_keywords = %w[fix bug error issue problem broken wrong incorrect failed failure]
     improvement_keywords = %w[improve enhance better optimize refine adjust modify update change]
     continuation_keywords = %w[also and continue add more]
@@ -1303,14 +1298,14 @@ class Superagent
     is_improvement = improvement_keywords.any? { |keyword| new_lower.include?(keyword) }
     is_continuation = continuation_keywords.any? { |keyword| new_lower.start_with?(keyword) || new_lower.match?(/\b#{keyword}\s/) }
 
-    return true if is_fix || is_improvement || is_continuation
+    is_fix || is_improvement || is_continuation
+  end
 
-    new_words = new_lower.split(/\s+/)
-    prev_words = prev_lower.split(/\s+/)
-    common_words = new_words & prev_words
-    common_ratio = common_words.size.to_f / [new_words.size, prev_words.size].max
+  def sanitize_request(req)
+    return req if req.nil?
 
-    common_ratio > 0.3
+    cleaned = req.gsub(NON_INTERACTIVE_NOTICE, "\n").strip
+    cleaned.gsub(/\n{3,}/, "\n\n")
   end
 end
 
@@ -1323,21 +1318,21 @@ if __FILE__ == $PROGRAM_NAME
   
   begin
     if InstanceLock.lock_exists?
-      display.timestamped_puts ''
-      display.timestamped_puts 'Another instance is running in the current directory.'.yellow
-      display.timestamped_puts 'You can enter your request now. It will be processed after the current instance completes.'.yellow
-      display.timestamped_puts ''
+      $stdout.puts ''
+      puts 'Another instance is running in the current directory.'.yellow
+      puts 'You can enter your request now. It will be processed after the current instance completes.'.yellow
+      $stdout.puts ''
       pre_read_request = request_reader.read
       request_reader.validate(pre_read_request)
-      display.timestamped_puts ''
-      display.timestamped_puts 'Waiting for the current instance to complete...'.yellow
-      display.timestamped_puts ''
+      $stdout.puts ''
+      puts 'Waiting for the current instance to complete...'.yellow
+      $stdout.puts ''
     end
     
     lock_path = InstanceLock.acquire_lock
     
     unless lock_path
-      display.timestamped_puts 'Failed to acquire instance lock. Exiting.'.red
+      puts 'Failed to acquire instance lock. Exiting.'.red
       exit 1
     end
     
