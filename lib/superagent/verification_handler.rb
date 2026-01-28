@@ -56,14 +56,55 @@ class VerificationHandler
 
   def parse_no_res(n)
     m = n.match(/\bNO\b\s*:?\s*(.*)/i)
-    description = m ? m[1].strip : ''
-    [false, description.empty? ? 'Failed' : description]
+    return [false, 'Failed'] unless m
+
+    description = m[1].strip
+    return [false, 'Failed'] if description.empty?
+
+    parts = description.split(/\b(?:YES|NO)\s*:?\s*/i)
+    cleaned = parts.first.strip
+    cleaned = remove_duplicates(cleaned)
+
+    [false, cleaned.empty? ? 'Failed' : cleaned]
   end
 
   def parse_yes_res(n)
     m = n.match(/\bYES\b\s*:?\s*(.*)/i)
-    description = m ? m[1].strip : ''
-    [true, description.empty? ? 'Passed' : description]
+    return [true, 'Passed'] unless m
+
+    description = m[1].strip
+    return [true, 'Passed'] if description.empty?
+
+    parts = description.split(/\b(?:YES|NO)\s*:?\s*/i)
+    cleaned = parts.first.strip
+    cleaned = remove_duplicates(cleaned)
+
+    [true, cleaned.empty? ? 'Passed' : cleaned]
+  end
+
+  def remove_duplicates(text)
+    return text if text.length < 20
+
+    normalized = text.gsub(/\s+/, ' ').strip
+    text_length = normalized.length
+    half_length = text_length / 2
+    return text if half_length < 10
+
+    first_half = normalized[0, half_length]
+    second_half = normalized[half_length..-1] || ''
+    
+    return text if second_half.length < 10
+    
+    normalized_second = second_half.gsub(/\s+/, ' ').strip
+    
+    if first_half == normalized_second[0, first_half.length] ||
+       (normalized_second.length >= first_half.length * 0.8 && 
+        normalized_second.start_with?(first_half[0, (first_half.length * 0.8).to_i]))
+      original_half = text.length / 2
+      return text[0, original_half].strip
+    end
+    
+    text
   end
 
   def git_repo?
