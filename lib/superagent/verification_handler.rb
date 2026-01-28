@@ -13,9 +13,8 @@ class VerificationHandler
   end
 
   def build_fix_prompt(req)
-    previous_requests_text = format_previous_requests
     <<~HEREDOC
-      Original request: #{req}#{previous_requests_text}
+      Original request: #{to_utf8(req)}#{to_utf8(format_previous_requests)}
 
       The previous attempt failed. Please fix the implementation.
 
@@ -129,13 +128,13 @@ class VerificationHandler
   end
 
   def build_verification_user_content(user_request, previous_agent_response)
+    req_utf8 = to_utf8(user_request)
+    prev_utf8 = to_utf8(previous_agent_response)
     content_parts = []
-    content_parts << "Current user request: #{user_request}#{format_previous_requests}\n\n"
-
-    if previous_agent_response && !previous_agent_response.strip.empty?
-      content_parts << "Final response from previous agent run:\n#{previous_agent_response.strip}\n"
+    content_parts << "Current user request: #{req_utf8}#{to_utf8(format_previous_requests)}\n\n"
+    if prev_utf8 && !prev_utf8.strip.empty?
+      content_parts << "Final response from previous agent run:\n#{prev_utf8.strip}\n"
     end
-
     content_parts.join("\n")
   end
 
@@ -166,5 +165,13 @@ class VerificationHandler
     verified, desc, review_time = run_verification(model, req, fix_output)
     [verified, desc, review_time, fix_output]
   end
+
+  def to_utf8(str)
+    return '' if str.nil?
+    s = str.to_s.dup
+    s.force_encoding(Encoding::UTF_8)
+    s.valid_encoding? ? s : s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
+  end
+  private :to_utf8
 
 end
