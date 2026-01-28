@@ -4,9 +4,11 @@ require 'open3'
 require 'json'
 require 'rbconfig'
 require 'timeout'
+require_relative '../agents_file_handler'
 
 # Handles agent command execution with retry logic
 class AgentExecutor
+  include AgentsFileHandler
   EXECUTION_TIMEOUT = 60
   MAX_EXECUTION_TIMEOUT = 600
   TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
@@ -87,6 +89,11 @@ class AgentExecutor
     
     parts = []
     
+    agents_content = load_agents_content
+    if agents_content && !agents_content.strip.empty?
+      parts << "\n\nProject guidelines (from AGENTS.md or AGENTS.rb):\n#{agents_content.strip}"
+    end
+    
     if last_summary && !last_summary.strip.empty?
       parts << "\n\nFinal summary from previous agent run:\n#{last_summary.strip}"
     end
@@ -102,6 +109,20 @@ class AgentExecutor
              "Proceed with implementation based on the available context and your best judgment."
     
     p + parts.join
+  end
+
+  def load_agents_content
+    project_root = Dir.pwd
+    agents_rb = File.join(project_root, 'AGENTS.rb')
+    agents_md = File.join(project_root, 'AGENTS.md')
+    
+    if File.exist?(agents_rb)
+      File.read(agents_rb)
+    elsif File.exist?(agents_md)
+      File.read(agents_md)
+    else
+      ''
+    end
   end
 
   def parse_json_stream_line(line)
