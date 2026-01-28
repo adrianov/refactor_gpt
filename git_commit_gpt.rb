@@ -745,7 +745,8 @@ end
 
 def fix_warning_with_agent(warning)
   prompt = build_warning_prompt(warning)
-  cmd = ["agent", "--print", "--stream-partial-output", "--output-format", "stream-json", prompt].map { |arg| Shellwords.escape(arg) }.join(" ")
+  cmd = ["agent", "--print", "--stream-partial-output", "--output-format", "stream-json", prompt].map { |arg|
+ Shellwords.escape(arg) }.join(" ")
   puts "Running: #{cmd}".green
   system(cmd)
 end
@@ -761,7 +762,8 @@ end
 def fix_all_warnings_with_agent(selected_warnings)
   prompt = build_all_warnings_prompt(selected_warnings)
   display_warnings_summary(selected_warnings)
-  cmd = ["agent", "--print", "--stream-partial-output", "--output-format", "stream-json", prompt].map { |arg| Shellwords.escape(arg) }.join(" ")
+  cmd = ["agent", "--print", "--stream-partial-output", "--output-format", "stream-json", prompt].map { |arg|
+ Shellwords.escape(arg) }.join(" ")
   puts "Running: agent --print [prompt]".green
   system(cmd)
 end
