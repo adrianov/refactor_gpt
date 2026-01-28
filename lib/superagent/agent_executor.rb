@@ -14,6 +14,7 @@ class AgentExecutor
 
   def initialize(display)
     @display = display
+    @tools_used = []
   end
 
   def test_runner_running?(pid = nil)
@@ -105,23 +106,25 @@ class AgentExecutor
   end
 
   def parse_json_stream_line(line)
-    return [nil, nil, nil, nil] if line.nil? || line.strip.empty? || line.include?('=>')
-    return [nil, nil, nil, nil] if (line.include?('"role"') || line.include?("'role'") || line.include?(':role')) &&
-                        (line.include?('"user"') || line.include?("'user'") || line.include?(':user'))
+    return [nil, nil, nil, nil, nil] if line.nil? || line.strip.empty? || line.include?('=>')
+    role_check = line.include?('"role"') || line.include?("'role'") || line.include?(':role')
+    user_check = line.include?('"user"') || line.include?("'user'") || line.include?(':user')
+    return [nil, nil, nil, nil, nil] if role_check && user_check
 
     json_obj = JSON.parse(line.strip)
     type = json_obj['type']
     text = extract_text_from_json(json_obj)
     command = extract_command_from_json(json_obj)
+    tool_call_info = extract_tool_call_info(json_obj) if type == 'tool_call' || type == 'tool_result'
 
     text = text.to_s unless text.nil?
     text = nil if text&.empty?
     
     # Generate stream ID from type and request_id if available
     stream_id = json_obj['request_id'] || json_obj['stream_id'] || type
-    [type, text, stream_id, command]
+    [type, text, stream_id, command, tool_call_info]
   rescue JSON::ParserError
-    [nil, nil, nil, nil]
+    [nil, nil, nil, nil, nil]
   end
 
   def extract_text_from_json(json_obj)
@@ -209,6 +212,41 @@ class AgentExecutor
     nil
   end
 
+  def extract_tool_call_info(json_obj)
+    # Check for tool_call type
+    return nil unless json_obj['type'] == 'tool_call' || json_obj['type'] == 'tool_result'
+
+    tool_call = json_obj['tool_call'] || json_obj
+    func_name = tool_call.dig('function', 'name')
+    
+    # Also check for direct function name in the object
+    func_name ||= json_obj['function_name'] || json_obj['name']
+    return nil unless func_name
+
+    func_args = tool_call.dig('function', 'arguments')
+    func_args ||= json_obj['arguments'] || json_obj['args']
+    
+    args_str = if func_args.is_a?(String)
+                 begin
+                   parsed = JSON.parse(func_args)
+                   parsed.is_a?(Hash) ? parsed : func_args
+                 rescue JSON::ParserError
+                   func_args
+                 end
+               else
+                 func_args
+               end
+
+    tool_info = { name: func_name, arguments: args_str }
+    
+    # Track unique tools (by name only, to avoid duplicates)
+    unless @tools_used.any? { |t| t[:name] == func_name }
+      @tools_used << tool_info.dup
+    end
+    
+    tool_info
+  end
+
   def looks_like_command?(cmd)
     return false if cmd.length < 2 || cmd.length > 500
     return false unless cmd.match?(/^[a-zA-Z0-9_\-\.\/\s\:\;\,\|\&\<\>\(\)\"\']+$/)
@@ -249,6 +287,8 @@ class AgentExecutor
   end
 
   def run_with_timeout_monitoring(model, wrapped, verification_mode: false)
+    @tools_used = []
+    
     # Check if a test runner is already running in the system before starting the agent
     if test_runner_running?
       @display.puts '⚠️  Test runner already running in system, no timeout applied'.yellow
@@ -336,14 +376,17 @@ class AgentExecutor
                 line = line_buffer[0..newline_idx]
                 line_buffer = line_buffer[(newline_idx + 1)..-1] || ''
 
-                type, text, stream_id, command = parse_json_stream_line(line.strip)
+                type, text, stream_id, command, tool_call_info = parse_json_stream_line(line.strip)
+                if tool_call_info
+                  @display.display_tool_call(tool_call_info)
+                end
                 if command && !command.empty?
                   @display.puts "Running: #{command}".green
                 end
                 if text && !text.empty?
                   if type == 'result'
                     final_result = text
-                  else
+                  elsif !verification_mode
                     @display.print_word(text, stream_id: stream_id)
                   end
                 end
@@ -366,14 +409,17 @@ class AgentExecutor
                   line = line_buffer[0..newline_idx]
                   line_buffer = line_buffer[(newline_idx + 1)..-1] || ''
 
-                  type, text, stream_id, command = parse_json_stream_line(line.strip)
+                  type, text, stream_id, command, tool_call_info = parse_json_stream_line(line.strip)
+                  if tool_call_info
+                    @display.display_tool_call(tool_call_info)
+                  end
                   if command && !command.empty?
                     @display.puts "Running: #{command}".green
                   end
                   if text && !text.empty?
                     if type == 'result'
                       final_result = text
-                    else
+                    elsif !verification_mode
                       @display.print_word(text, stream_id: stream_id)
                     end
                   end
@@ -396,14 +442,17 @@ class AgentExecutor
 
         # Process any remaining incomplete line in line_buffer
         unless line_buffer.empty?
-          type, text, stream_id, command = parse_json_stream_line(line_buffer.strip)
+          type, text, stream_id, command, tool_call_info = parse_json_stream_line(line_buffer.strip)
+          if tool_call_info
+            @display.display_tool_call(tool_call_info)
+          end
           if command && !command.empty?
             @display.puts "Running: #{command}".green
           end
           if text && !text.empty?
             if type == 'result'
               final_result = text
-            else
+            elsif !verification_mode
               @display.print_word(text, stream_id: stream_id)
             end
           end
@@ -413,6 +462,9 @@ class AgentExecutor
 
         # Flush any remaining buffered text
         @display.flush_word_buffer
+
+        # Display tools summary
+        display_tools_summary
 
         begin
           status = wait_thr.value
@@ -438,6 +490,7 @@ class AgentExecutor
   end
 
   def run_without_timeout(model, wrapped, verification_mode: false)
+    @tools_used = []
     @display.reset_stream_tracking
     cmd = build_and_display_command('--model', model, wrapped, verification_mode: verification_mode)
     stdout, stderr, status = Open3.capture3(*cmd)
@@ -445,14 +498,17 @@ class AgentExecutor
     final_result = ''
 
     raw_output.each_line do |line|
-      type, text, stream_id, command = parse_json_stream_line(line.strip)
+      type, text, stream_id, command, tool_call_info = parse_json_stream_line(line.strip)
+      if tool_call_info
+        @display.display_tool_call(tool_call_info)
+      end
       if command && !command.empty?
         @display.puts "Running: #{command}".green
       end
       if text && !text.empty?
         if type == 'result'
           final_result = text
-        else
+        elsif !verification_mode
           @display.print_word(text, stream_id: stream_id)
         end
       end
@@ -460,6 +516,9 @@ class AgentExecutor
 
     # Flush any remaining buffered text
     @display.flush_word_buffer
+
+    # Display tools summary
+    display_tools_summary
 
     output = final_result.empty? ? raw_output : final_result
     [output, '', status]
@@ -498,6 +557,7 @@ class AgentExecutor
   end
 
   def run_plan_mode(model, p)
+    @tools_used = []
     @display.reset_stream_tracking
     wrapped = wrap_prompt(p)
     cmd = build_and_display_command('--plan', '--model', model, wrapped)
@@ -507,7 +567,10 @@ class AgentExecutor
     final_result = ''
     
     raw_output.each_line do |line|
-      type, text, stream_id, command = parse_json_stream_line(line.strip)
+      type, text, stream_id, command, tool_call_info = parse_json_stream_line(line.strip)
+      if tool_call_info
+        @display.display_tool_call(tool_call_info)
+      end
       if command && !command.empty?
         @display.puts "Running: #{command}".green
       end
@@ -523,10 +586,37 @@ class AgentExecutor
     # Flush any remaining buffered text
     @display.flush_word_buffer
     
+    # Display tools summary
+    display_tools_summary
+    
     output = final_result.empty? ? raw_output : final_result
     [status.success?, output]
   rescue StandardError => e
     @display.puts "❌ Agent execution error: #{e.message}".red
     [false, "Execution error: #{e.message}"]
+  end
+
+  def display_tools_summary
+    return if @tools_used.empty?
+
+    $stdout.puts ''
+    @display.puts "Tools applied (#{@tools_used.size}):".cyan
+    @tools_used.each do |tool|
+      args_str = format_tool_args_for_display(tool[:arguments])
+      display_text = args_str ? "  • #{tool[:name]}(#{args_str})" : "  • #{tool[:name]}"
+      $stdout.puts display_text.colorize(:light_blue)
+    end
+    $stdout.puts ''
+  end
+
+  def format_tool_args_for_display(args)
+    return nil unless args
+
+    if args.is_a?(Hash)
+      args_str = args.map { |k, v| "#{k}: #{v.inspect}" }.join(', ')
+      args_str.length > 100 ? args_str[0..100] + '...' : args_str
+    elsif args.is_a?(String) && !args.empty?
+      args.length > 100 ? args[0..100] + '...' : args
+    end
   end
 end
