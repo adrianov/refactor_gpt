@@ -11,6 +11,7 @@ class AgentExecutor
   include AgentsFileHandler
   EXECUTION_TIMEOUT = 60
   MAX_EXECUTION_TIMEOUT = 600
+  CONTEXT_MAX_LINES = 500
   TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
   TEST_RUNNER_CHECK_INTERVAL = 2
 
@@ -89,13 +90,37 @@ class AgentExecutor
     cmdline.include?(runner)
   end
 
-  def wrap_prompt(p)
+  def wrap_prompt(p, new_session: false)
     parts = []
     parts << guidelines_section
+    parts << git_diff_section(new_session)
+    parts << working_tree_section(new_session)
     parts << summary_section
     parts << history_section
     parts << non_interactive_notice
     p + parts.compact.join
+  end
+
+  def git_diff_section(new_session)
+    return nil unless new_session
+    out = `git diff 2>#{File::NULL}`.strip
+    return nil if out.empty?
+    lines = out.split("\n", -1)
+    truncated = lines.size > CONTEXT_MAX_LINES
+    text = lines.first(CONTEXT_MAX_LINES).join("\n")
+    text += "\n\n(truncated to #{CONTEXT_MAX_LINES} lines)" if truncated
+    "\n\nGit diff (max #{CONTEXT_MAX_LINES} lines):\n#{text}"
+  end
+
+  def working_tree_section(new_session)
+    return nil unless new_session
+    out = `bfs --nohidden 2>#{File::NULL}`.strip
+    return nil if out.empty?
+    lines = out.split("\n", -1)
+    truncated = lines.size > CONTEXT_MAX_LINES
+    text = lines.first(CONTEXT_MAX_LINES).join("\n")
+    text += "\n\n(truncated to #{CONTEXT_MAX_LINES} lines)" if truncated
+    "\n\nWorking tree (bfs --nohidden, max #{CONTEXT_MAX_LINES} lines):\n#{text}"
   end
 
   def guidelines_section
@@ -362,10 +387,10 @@ start: nil }
     end
   end
 
-  def run_plan_mode(model, p)
+  def run_plan_mode(model, p, new_session: false)
     @tools_used = []
     @display.reset_stream_tracking
-    wrapped = wrap_prompt(p)
+    wrapped = wrap_prompt(p, new_session: new_session)
     cmd = build_command(model: model, plan_mode: true)
     display_command(cmd, wrapped)
     
@@ -389,8 +414,8 @@ start: nil }
     end
   end
 
-  def run(model, p, base_delay: 1, verification_mode: false)
-    wrapped = wrap_prompt(p)
+  def run(model, p, base_delay: 1, verification_mode: false, new_session: false)
+    wrapped = wrap_prompt(p, new_session: new_session)
     retries = 0
     loop do
       stdout, _, status = run_with_timeout_monitoring(model, wrapped, verification_mode: verification_mode)

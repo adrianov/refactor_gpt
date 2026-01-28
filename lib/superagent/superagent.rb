@@ -96,7 +96,7 @@ class Superagent
       update_terminal_title("Planning: #{model}")
       @display.display_attempt_header(model, idx, MODELS.size)
 
-      success, output = @agent_executor.run_plan_mode(model, req)
+      success, output = @agent_executor.run_plan_mode(model, req, new_session: !@session_continuation)
       return handle_plan_success if success
 
       @display.display_agent_failure(output)
@@ -148,7 +148,7 @@ class Superagent
     @display.display_attempt_header(model, idx, MODELS.size)
     
     start = Time.now
-    success, output, = @agent_executor.run(model, req)
+    success, output, = @agent_executor.run(model, req, new_session: !@session_continuation)
     elapsed = Time.now - start
 
     unless success
