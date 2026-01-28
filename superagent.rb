@@ -489,7 +489,7 @@ class AgentExecutor
   end
 
   def build_and_display_command(*args)
-    cmd = ['agent', '--print', '--stream-partial-output', '--output-format', 'stream-json']
+    cmd = ['agent', '--print', '--force', '--stream-partial-output', '--output-format', 'stream-json']
     cmd.concat(args)
     display_cmd = cmd.map do |arg|
       if arg.length > 50 || arg.include?("\n")
