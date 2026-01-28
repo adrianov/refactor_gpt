@@ -143,6 +143,40 @@ class Display
     timestamped_puts ''
     exit 0
   end
+
+  def suggest_git_init
+    return if git_repo?
+
+    timestamped_puts ''
+    timestamped_puts '💡 Suggestion: Initialize a git repository for better tracking and verification.'.yellow
+    timestamped_puts ''
+    timestamped_puts 'Advantages:'.cyan
+    timestamped_puts '  • Automatic change tracking - see exactly what was modified'
+    timestamped_puts '  • Faster verification - uses git diff instead of reading all files'
+    timestamped_puts '  • Better context for AI - only changed code is analyzed'
+    timestamped_puts '  • Easy rollback - revert changes if needed'
+    timestamped_puts '  • Version history - track your code evolution'
+    timestamped_puts ''
+
+    return unless $stdin.tty?
+
+    timestamped_puts 'Initialize git repository? (y/N)'.white
+    answer = $stdin.gets.to_s.chomp.downcase
+
+    if answer == 'y'
+      timestamped_puts 'Running: git init'.green
+      success = system('git init')
+      if success
+        timestamped_puts 'Git repository initialized successfully.'.green
+      else
+        timestamped_puts 'Failed to initialize git repository.'.yellow
+      end
+      timestamped_puts ''
+    else
+      timestamped_puts 'Skipping git initialization.'.yellow
+      timestamped_puts ''
+    end
+  end
 end
 
 # Handles reading user requests from various sources
@@ -172,7 +206,7 @@ class RequestReader
 
   def read_interactive
     @display.timestamped_puts 'Enter request:'.cyan
-    @display.timestamped_puts '(Press Enter twice or Ctrl+D to submit)'
+    @display.timestamped_puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
     @display.timestamped_puts ''
 
     lines = []
@@ -196,6 +230,10 @@ class RequestReader
     return :continue if line.empty?
 
     line
+  rescue Interrupt
+    @display.timestamped_puts ''
+    @display.timestamped_puts 'Interrupted. Exiting.'.yellow
+    exit 0
   end
 
   def read
@@ -326,11 +364,23 @@ class AgentExecutor
       if content.is_a?(Array)
         text_content = content.find { |c| c['type'] == 'text' }
         text = text_content['text'] if text_content
+      elsif content.is_a?(String)
+        text = content
       end
+      text ||= json_obj.dig('message', 'text')
+      text ||= json_obj['text']
     when 'result'
       text = json_obj['result']
+    when 'step'
+      text = json_obj['step'] || json_obj['text'] || json_obj['content']
+    when 'tool_call', 'tool_result'
+      text = json_obj['text'] || json_obj['content'] || json_obj['result']
+    else
+      text = json_obj['text'] || json_obj['content'] || json_obj['result'] || json_obj['message']
     end
 
+    text = text.to_s.strip unless text.nil?
+    text = nil if text&.empty?
     [type, text]
   rescue JSON::ParserError
     [nil, nil]
@@ -555,7 +605,16 @@ class AgentExecutor
       end
 
       output = (stdout || '') + (stderr || '')
-      output.each_line { |line| @display.timestamped_puts line.chomp }
+      output.each_line do |line|
+        stripped = line.strip
+        next if stripped.empty?
+        begin
+          JSON.parse(stripped)
+          next
+        rescue JSON::ParserError
+          @display.timestamped_puts line.chomp
+        end
+      end
 
       return [status.success?, output] if status.success?
 
@@ -1023,6 +1082,7 @@ class Superagent
     gemini-3-flash
     gpt-5.2-codex-low-fast
     gpt-5.2-codex-high-fast
+    gemini-3-pro
     composer-1
     claude-4.5-sonnet
     claude-4.5-opus
@@ -1041,6 +1101,7 @@ class Superagent
   def run
     @display.check_late_night_reminder
     @start_time = Time.now
+    @display.suggest_git_init
     @display.update_git_status
     req = @request_reader.read
     @request_reader.validate(req)
