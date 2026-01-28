@@ -45,32 +45,22 @@ class GitExplainer
   end
 
   def system_instruction
-    agents_content = load_agents_file
-    has_agents = !agents_content.empty?
+    <<~HEREDOC
+      You are a tool that analyzes git changes and creates comprehensive explanations in Markdown format.
 
-    instruction_parts = [
-      <<~HEREDOC
-        You are a tool that analyzes git changes and creates comprehensive explanations in Markdown format.
+      Input:
+      - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
+      - unified git diff for all changes (including new files)
+      - last 15 git commit one-line messages to understand project context
+      - last 5 shell commands from the user's terminal history for additional context
 
-        Input:
-        - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
-        - unified git diff for all changes (including new files)
-        - last 15 git commit one-line messages to understand project context
-        - last 5 shell commands from the user's terminal history for additional context
-
-        Porcelain v1 format guide:
-        - `## branch...upstream` - branch info line
-        - ` M file.rb` - modified, not staged
-        - `M  file.rb` - staged for commit
-        - `MM file.rb` - modified and staged
-        - `?? file.rb` - untracked
-        - `R100 old.rb -> new.rb` - renamed (extract new.rb)
-      HEREDOC
-    ]
-
-    instruction_parts << "- Ruby development guidelines from AGENTS.md\n" if has_agents
-
-    instruction_parts << <<~HEREDOC
+      Porcelain v1 format guide:
+      - `## branch...upstream` - branch info line
+      - ` M file.rb` - modified, not staged
+      - `M  file.rb` - staged for commit
+      - `MM file.rb` - modified and staged
+      - `?? file.rb` - untracked
+      - `R100 old.rb -> new.rb` - renamed (extract new.rb)
 
       Task:
       Analyze the changes and create a technical developer-focused Markdown explanation with these sections:
@@ -140,16 +130,6 @@ class GitExplainer
       - Include practical examples and usage patterns
       - **IMPORTANT**: Only include sections that have meaningful content. Skip sections with "None", "No changes", "Not applicable", or similar empty responses. Keep the report focused and easy to read.
     HEREDOC
-
-    if has_agents
-      instruction_parts << <<~HEREDOC
-
-        AGENTS.md content (development guidelines to consider):
-        #{agents_content}
-      HEREDOC
-    end
-
-    instruction_parts.join
   end
 end
 

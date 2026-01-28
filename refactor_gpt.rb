@@ -47,7 +47,8 @@ class OpenAi
       assessment = perform_assessment(file_codes, current_file_codes, user_instruction, client: client)
 
       if assessment["warnings"]&.any? && refactored_files.any?
-        current_file_codes = fix_warnings_if_needed(client, file_codes, current_file_codes, assessment, user_instruction)
+        current_file_codes = fix_warnings_if_needed(client, file_codes, current_file_codes, assessment, 
+user_instruction)
         assessment = perform_assessment(file_codes, current_file_codes, user_instruction, client: client)
       end
 
@@ -63,7 +64,7 @@ class OpenAi
 
   private
 
-  def fix_warnings_if_needed(client, original_file_codes, current_file_codes, assessment, user_instruction)
+  def fix_warnings_if_needed(client, _original_file_codes, current_file_codes, assessment, user_instruction)
     fixed_files = attempt_to_fix_warnings(client, current_file_codes, assessment["warnings"], user_instruction)
     return current_file_codes if fixed_files.empty?
 
@@ -255,13 +256,7 @@ class OpenAi
   end
 
   def build_system_instruction
-    agents_content = load_agents_file
-    parts = [base_system_instruction]
-    return parts.join if agents_content.empty?
-
-    parts << "Follow Ruby development guidelines from AGENTS.md."
-    parts << agents_guideline_section(agents_content)
-    parts.join
+    base_system_instruction
   end
 
   def base_system_instruction
@@ -297,15 +292,6 @@ class OpenAi
       changes, keep the diff as small as possible (minimal changed lines).
       Never suggest purely stylistic changes (quote style, alternative method
       names). Only make necessary structural improvements.
-    HEREDOC
-  end
-
-  def agents_guideline_section(agents_content)
-    <<~HEREDOC
-
-      AGENTS.md content (development guidelines to follow):
-      #{agents_content}
-
     HEREDOC
   end
 

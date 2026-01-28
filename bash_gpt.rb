@@ -165,7 +165,6 @@ class OpenAi
 
   def build_system_instruction(context_output = "")
     parts = [base_instruction]
-    parts << agents_instruction if has_agents?
     parts << context_section(context_output) unless context_output.empty?
     parts << system_context
     parts.join
@@ -185,23 +184,6 @@ class OpenAi
       "Return the command only."
   end
 
-  def agents_instruction
-    <<~HEREDOC
-
-      When generating commands, carefully review the AGENTS.md content below for:
-      - Specific command examples and patterns
-      - Testing commands (e.g., npm test, pytest, rspec, etc.)
-      - Build commands (e.g., npm run build, make, cargo build, etc.)
-      - Linting commands (e.g., npm run lint, ruff, rubocop, etc.)
-      - Any project-specific bash command guidelines
-      Pay special attention to testing and build commands when the user request involves running tests or building the project.
-
-      AGENTS.md content (development guidelines to follow):
-      #{load_agents_file}
-
-    HEREDOC
-  end
-
   def system_context
     <<~HEREDOC
 
@@ -214,10 +196,6 @@ class OpenAi
       Directory listing:
       #{directory_listing}
     HEREDOC
-  end
-
-  def has_agents?
-    !load_agents_file.empty?
   end
 
   def directory_listing

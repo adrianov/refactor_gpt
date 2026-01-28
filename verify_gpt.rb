@@ -27,7 +27,6 @@ class Verify
     handle_gemini_fallback(prompts, e)
   end
 
-  public
 
   def assess_feature(user_request, status_output, diff_output)
     ask([
@@ -46,7 +45,7 @@ class Verify
     gemini_client.ask(prompts)
   end
 
-  def handle_final_error(error)
+  def handle_final_error(_error)
     warn "❌ Server error persisted after 3 retries and Gemini is not available"
     exit 1
   end
@@ -70,18 +69,8 @@ class Verify
   end
 
   def system_instruction
-    agents_content = load_agents_file(@project_root)
-    has_agents = !agents_content.empty?
-
-    instruction_parts = [
-      <<~HEREDOC
-        You are a tool that verifies whether code changes fully implement a requested feature.
-      HEREDOC
-    ]
-
-    instruction_parts << "- Ruby development guidelines from AGENTS.md\n" if has_agents
-
-    instruction_parts << <<~HEREDOC
+    <<~HEREDOC
+      You are a tool that verifies whether code changes fully implement a requested feature.
 
       Task:
       Verify that the changes fully solve the user's request and introduce no new bugs or regressions.
@@ -99,16 +88,6 @@ class Verify
       CRITICAL: Your response MUST start with either "YES" or "NO" as the first word. This is required for automated parsing.
       Always include a brief description after the YES/NO. Keep it specific and concise.
     HEREDOC
-
-    if has_agents
-      instruction_parts << <<~HEREDOC
-
-        AGENTS.md content (development guidelines to consider):
-        #{agents_content}
-      HEREDOC
-    end
-
-    instruction_parts.join
   end
 end
 
