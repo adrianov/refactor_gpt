@@ -15,9 +15,10 @@ require_relative "../../ask_gpt"
 class Superagent
   NON_INTERACTIVE_NOTICE = /
     (?:^|\n)
-    IMPORTANT:\s+This\s+agent\s+is\s+running\s+in\s+non-interactive\s+mode\.
+    IMPORTANT:\s+This\s+agent\s+runs\s+in\s+non-interactive\s+mode\.
     .*?
-    Execute\s+tasks\s+directly\s+without\s+seeking\s+clarification\.
+    (?:make\s+all\s+decisions\s+autonomously|execute\s+tasks\s+directly|without\s+requesting\s+user\s+input)
+    .*?
     \s*
   /mix
   MODELS = %w[
@@ -33,10 +34,11 @@ class Superagent
   def initialize(display: Display.new, request_reader: nil, agent_executor: nil, verification_handler: nil, 
 session_tracker: nil)
     @display = display
-    @request_reader = request_reader || RequestReader.new(@display)
-    @agent_executor = agent_executor || AgentExecutor.new(@display)
-    @verification_handler = verification_handler || VerificationHandler.new(@display, @agent_executor)
     @session_tracker = session_tracker || SessionTracker.new(@display)
+    @request_reader = request_reader || RequestReader.new(@display)
+    @agent_executor = agent_executor || AgentExecutor.new(@display, session_tracker: @session_tracker)
+    @verification_handler = verification_handler || VerificationHandler.new(@display, @agent_executor, 
+session_tracker: @session_tracker)
     @start_time = nil
     @current_pass = nil
     @current_model = nil
@@ -54,12 +56,28 @@ session_tracker: nil)
     initialize_run(request)
     raw_req = request || @request_reader.read
     model_index_from_request = extract_model_index(raw_req)
-    start_model_index = model_index_from_request if model_index_from_request
     req = sanitize_request(raw_req)
     @request_reader.validate(req)
     @current_request = req
     
     analyze_session_continuation(req)
+    
+    # Save session at start (will reset summary if new session, preserve if continuation)
+    save_current_session(req)
+    
+    # In continued session: never reset to previous model, always move forward
+    if @session_continuation
+      start_model_index = if model_index_from_request
+                            [model_index_from_request, @current_model_index].max
+                          else
+                            @current_model_index
+                          end
+    else
+      # New session: start from first model in queue
+      @current_model_index = 0
+      start_model_index = model_index_from_request || 0
+    end
+    
     @display.display_start_message(req, @session_continuation, @session_tags)
 
     return run_plan_mode(req, start_model_index) if @request_reader.plan_mode
@@ -140,8 +158,11 @@ session_tracker: nil)
         next
       end
 
-      # Store implementation time for this pass
+      # Store implementation time and output for this pass
       @current_implementation_time = implementation_time
+      @current_agent_output = output
+      # Save implementation summary for next run
+      save_agent_summary(output) if output && !output.strip.empty?
       result = process_model_attempt(model, req)
       break if result == :success
     end
@@ -161,9 +182,13 @@ session_tracker: nil)
     }
 
     update_terminal_title("Verifying: #{model}")
-    verified, desc, review_time = @verification_handler.run_verification(model, req)
+    verified, desc, review_time = @verification_handler.run_verification(model, req, @current_agent_output)
     pass_timing[:review_time] = review_time
     $stdout.puts ''
+
+    # Save verification summary
+    verification_summary = verified ? "YES: #{desc}" : "NO: #{desc}"
+    save_agent_summary(verification_summary)
 
     if verified
       pass_timing[:total_time] = Time.now - pass_start_time + @current_implementation_time
@@ -184,6 +209,10 @@ session_tracker: nil)
     pass_timing[:fix_time] = Time.now - fix_start - (fix_review_time || 0)
     pass_timing[:review_time] += (fix_review_time || 0)
     $stdout.puts ''
+
+    # Save fix attempt verification summary
+    fix_summary = verified ? "YES: #{fix_desc}" : "NO: #{fix_desc}"
+    save_agent_summary(fix_summary)
 
     if verified
       pass_timing[:total_time] = Time.now - pass_start_time + @current_implementation_time
@@ -251,6 +280,15 @@ session_tracker: nil)
     analysis = @session_tracker.analyze_continuation(new_req, previous_req ? {request: previous_req} : nil)
     is_continuation = analysis[:continuation]
     tags = analysis[:tags]
+    
+    # If user disagrees that feature is complete (continuation indicates fixing/completing),
+    # treat it as a bug for the model that just passed verification
+    if is_continuation && user_disagrees_with_verification?(new_req, tags)
+      if @current_model
+        @bug_count_per_model[@current_model] = (@bug_count_per_model[@current_model] || 0) + 1
+      end
+    end
+    
     if is_continuation
       # In continued session: never reset to previous model, always move forward
       start_index = if model_index_from_request
@@ -260,6 +298,7 @@ session_tracker: nil)
                     end
     else
       # New session: start from first model in queue
+      @current_model_index = 0
       start_index = model_index_from_request || 0
     end
     start_index = [[start_index, 0].max, MODELS.size - 1].min
@@ -359,8 +398,16 @@ session_tracker: nil)
     @session_description = @session_tracker.generate_session_description(req, @session_tags)
   end
 
-  def save_current_session(req)
-    @session_tracker.save_session(req, @session_description, @session_tags, @session_continuation)
+  def save_current_session(req, summary = :not_provided)
+    @session_tracker.save_session(req, @session_description, @session_tags, @session_continuation, summary)
+  end
+
+  def save_agent_summary(summary)
+    return unless summary && !summary.strip.empty?
+    return unless @current_request
+
+    # Update session with new summary
+    save_current_session(@current_request, summary)
   end
 
   def sanitize_request(req)
@@ -388,5 +435,24 @@ session_tracker: nil)
       MODELS.include?($1) ? '' : match
     end
     cleaned.gsub(/\s+/, ' ').strip
+  end
+
+  def user_disagrees_with_verification?(new_req, tags)
+    return false if new_req.nil? || new_req.strip.empty?
+
+    # Check if tags indicate bug/fix/regression
+    bug_indicating_tags = %w[#bug #regression #hotfix]
+    return true if tags.any? { |tag| bug_indicating_tags.include?(tag) }
+
+    # Check if request text indicates disagreement/incompleteness
+    normalized_req = new_req.downcase
+    disagreement_patterns = [
+      /\b(not|missing|incomplete|doesn't|does not|didn't|did not)\s+(work|implement|complete|done|finished)/,
+      /\b(fix|fixing|broken|wrong|incorrect|error|bug|issue|problem)\b/,
+      /\b(still|yet|also|additionally)\s+(need|missing|not|incomplete)/,
+      /\b(add|adding|implement|implementing|complete|completing)\s+(the|this|that|missing)/
+    ]
+
+    disagreement_patterns.any? { |pattern| normalized_req.match?(pattern) }
   end
 end
