@@ -463,10 +463,26 @@ def main
   args = Utility.parse_args(Dir.pwd)
 
   show_interactive_prompt(args)
+  
+  # Allow user to enter the request
+  question = get_question(args) if args[:question_parts].empty?
+
   client = create_client(args)
   messages = initialize_conversation(client, args)
 
-  run_conversation_loop(client, messages, args)
+  if question
+    # Process the pre-fetched question
+    handle_mode_switch(client, question) if args[:question_parts].empty?
+    process_question(client, messages, question, use_streaming?(client), args) unless question == "--no-search"
+    
+    # If interactive, continue loop
+    if $stdin.tty?
+      clear_args_for_next_iteration(args)
+      run_interactive_loop(client, messages, args, use_streaming?(client))
+    end
+  else
+    run_conversation_loop(client, messages, args)
+  end
 end
 
 def show_interactive_prompt(args)
@@ -763,7 +779,6 @@ def clear_args_for_next_iteration(args)
 end
 
 if __FILE__ == $PROGRAM_NAME
-  CompletionNotifier.wrap_main do
-    main
-  end
+  CompletionNotifier.setup_exit_hook
+  main
 end
