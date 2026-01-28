@@ -261,11 +261,13 @@ file_contents)
     @display.puts 'Verifying...'.blue
 
     verification_prompt = build_verification_prompt(req)
+    start_time = Time.now
     success, output = @agent_executor.run(model, verification_prompt, verification_mode: true)
-    return [false, 'Verification failed'] unless success
+    duration = Time.now - start_time
+    return [false, 'Verification failed', duration] unless success
 
     verified, desc = parse_res(output.strip)
-    [verified, desc || 'Failed']
+    [verified, desc || 'Failed', duration]
   end
 
   def retry_with_fix(model, req)
@@ -274,7 +276,7 @@ file_contents)
     $stdout.puts ''
 
     success, _output = @agent_executor.run(model, fix_prompt)
-    return [false, nil] unless success
+    return [false, nil, 0] unless success
 
     run_verification(model, req)
   end

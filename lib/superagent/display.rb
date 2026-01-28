@@ -67,7 +67,7 @@ class Display
       end
 
       @text_buffer += text
-      process_complete_lines(stream_id: stream_id, is_new_stream: is_new_stream)
+      process_complete_lines(is_new_stream: is_new_stream)
 
       if @text_buffer.length > 200 && !@text_buffer.include?("\n")
         ensure_timestamp(is_new_stream: is_new_stream) if @at_start_of_line
@@ -172,6 +172,26 @@ class Display
       puts 'All attempts failed.'.red
     end
 
+    def display_tool_call(tool_call_info)
+      return unless tool_call_info && tool_call_info[:name]
+
+      func_name = tool_call_info[:name]
+      args_str = format_tool_call_args(tool_call_info[:arguments])
+      display_text = args_str ? "🔧 Tool: #{func_name}(#{args_str})" : "🔧 Tool: #{func_name}"
+      puts display_text.cyan
+    end
+
+    def format_tool_call_args(args)
+      return nil unless args
+
+      if args.is_a?(Hash)
+        args_str = args.map { |k, v| "#{k}: #{v.inspect}" }.join(', ')
+        args_str.length > 100 ? args_str[0..100] + '...' : args_str
+      elsif args.is_a?(String) && !args.empty?
+        args.length > 100 ? args[0..100] + '...' : args
+      end
+    end
+
     def git_repo?
       system("git rev-parse --is-inside-work-tree > #{File::NULL} 2>&1")
     end
@@ -224,6 +244,49 @@ class Display
       end
     end
 
+    def display_pass_timing(pass_timing)
+      return unless pass_timing
+
+      $stdout.puts ''
+      puts "Pass #{pass_timing[:pass]} timing:".cyan
+      
+      if pass_timing[:implementation_time]
+        puts "  Implementation: #{format_duration(pass_timing[:implementation_time])}".light_blue
+      end
+      
+      if pass_timing[:review_time]
+        puts "  Review: #{format_duration(pass_timing[:review_time])}".light_blue
+      end
+      
+      if pass_timing[:fix_time]
+        puts "  Fix: #{format_duration(pass_timing[:fix_time])}".light_blue
+      end
+      
+      if pass_timing[:total_time]
+        puts "  Total: #{format_duration(pass_timing[:total_time])}".cyan
+      end
+      
+      $stdout.puts ''
+    end
+
+    def display_feature_timing(pass_timings, feature_start_time)
+      return unless feature_start_time && pass_timings && !pass_timings.empty?
+
+      total_feature_time = Time.now - feature_start_time
+      
+      total_implementation = pass_timings.sum { |p| p[:implementation_time] || 0 }
+      total_review = pass_timings.sum { |p| p[:review_time] || 0 }
+      total_fix = pass_timings.sum { |p| p[:fix_time] || 0 }
+      
+      $stdout.puts ''
+      puts "Feature/Bugfix/Chore timing:".cyan
+      puts "  Implementation: #{format_duration(total_implementation)}".light_blue
+      puts "  Review: #{format_duration(total_review)}".light_blue
+      puts "  Fix: #{format_duration(total_fix)}".light_blue
+      puts "  Total: #{format_duration(total_feature_time)}".cyan
+      $stdout.puts ''
+    end
+
     private
 
     def timestamp_str
@@ -242,7 +305,7 @@ class Display
       "#{ts}#{text}"
     end
 
-    def process_complete_lines(stream_id: nil, is_new_stream: false)
+    def process_complete_lines(is_new_stream: false)
       return if @text_buffer.empty?
 
       while (newline_idx = @text_buffer.index("\n"))
@@ -273,6 +336,7 @@ class Display
     end
 
     def format_duration(sec)
+      return "0s" if sec.nil? || sec < 1
       "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
     end
   end

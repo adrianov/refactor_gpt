@@ -8,6 +8,7 @@ require_relative "agent_executor"
 require_relative "verification_handler"
 require_relative "../completion_notifier"
 require_relative "../instance_lock"
+require_relative "../../ask_gpt"
 
 # Main orchestrator class for superagent execution
 class Superagent
@@ -37,6 +38,8 @@ class Superagent
     @current_pass = nil
     @current_model = nil
     @current_model_index = 0
+    @pass_timings = []
+    @feature_start_time = nil
   end
 
   def run(start_model_index: 0, request: nil)
@@ -47,6 +50,8 @@ class Superagent
 
     return run_plan_mode(req) if @request_reader.plan_mode
 
+    @feature_start_time = Time.now
+    @pass_timings = []
     execute_attempts(start_model_index, req)
     handle_final_failure unless @last_attempt_success
   end
@@ -90,22 +95,51 @@ class Superagent
       update_terminal_title("Attempting: #{model}")
       @display.display_attempt_header(model, idx, MODELS.size)
 
+      implementation_start = Time.now
       success, output = @agent_executor.run(model, req)
+      implementation_time = Time.now - implementation_start
+      
       unless success
         @display.display_agent_failure(output)
+        pass_timing = {
+          pass: @current_pass,
+          model: model,
+          implementation_time: implementation_time,
+          review_time: 0,
+          fix_time: 0,
+          total_time: implementation_time
+        }
+        @pass_timings << pass_timing
+        @display.display_pass_timing(pass_timing)
         next
       end
 
+      # Store implementation time for this pass
+      @current_implementation_time = implementation_time
       break if process_model_attempt(model, req) == :success
     end
   end
 
   def process_model_attempt(model, req)
+    pass_start_time = Time.now
+    pass_timing = {
+      pass: @current_pass,
+      model: model,
+      implementation_time: @current_implementation_time,
+      review_time: 0,
+      fix_time: 0,
+      total_time: 0
+    }
+
     update_terminal_title("Verifying: #{model}")
-    verified, desc = @verification_handler.run_verification(model, req)
+    verified, desc, review_time = @verification_handler.run_verification(model, req)
+    pass_timing[:review_time] = review_time
     $stdout.puts ''
 
     if verified
+      pass_timing[:total_time] = Time.now - pass_start_time + @current_implementation_time
+      @pass_timings << pass_timing
+      @display.display_pass_timing(pass_timing)
       handle_success(desc)
       handle_final_success(req)
       @last_attempt_success = true
@@ -116,10 +150,16 @@ class Superagent
     $stdout.puts ''
 
     update_terminal_title("Retrying: #{model}")
-    verified, fix_desc = @verification_handler.retry_with_fix(model, req)
+    fix_start = Time.now
+    verified, fix_desc, fix_review_time = @verification_handler.retry_with_fix(model, req)
+    pass_timing[:fix_time] = Time.now - fix_start - (fix_review_time || 0)
+    pass_timing[:review_time] += (fix_review_time || 0)
     $stdout.puts ''
 
     if verified
+      pass_timing[:total_time] = Time.now - pass_start_time + @current_implementation_time
+      @pass_timings << pass_timing
+      @display.display_pass_timing(pass_timing)
       handle_success(fix_desc, 'after retry')
       handle_final_success(req)
       @last_attempt_success = true
@@ -130,6 +170,9 @@ class Superagent
 
     @display.display_verification_result(false, fix_desc, 'after retry')
     $stdout.puts ''
+    pass_timing[:total_time] = Time.now - pass_start_time + @current_implementation_time
+    @pass_timings << pass_timing
+    @display.display_pass_timing(pass_timing)
     :continue
   end
 
@@ -137,6 +180,7 @@ class Superagent
   def handle_success(desc, context = '')
     @display.display_verification_result(true, desc, context)
     @display.display_total_runtime(@start_time)
+    @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_git_status
   end
 
@@ -164,12 +208,17 @@ class Superagent
       exit 1
     end
 
-    is_fix_or_improvement = detect_fix_or_improvement(new_req, previous_req)
-    start_index = is_fix_or_improvement ? @current_model_index : 0
+    analysis = analyze_request_continuation(new_req, previous_req)
+    is_continuation = analysis[:continuation]
+    tags = analysis[:tags]
+    start_index = is_continuation ? @current_model_index : 0
     start_index = [[start_index, 0].max, MODELS.size - 1].min
 
     $stdout.puts ''
-    @display.puts "Starting #{is_fix_or_improvement ? 'continuation' : 'new request'} from #{MODELS[start_index]}...".yellow
+    tag_display = tags.empty? ? '' : " [#{tags.join(', ')}]"
+    request_type = is_continuation ? 'continuation' : 'new request'
+    model_name = MODELS[start_index]
+    @display.puts "Starting #{request_type}#{tag_display} from #{model_name}...".yellow
     $stdout.puts ''
 
     @request_reader = RequestReader.new(@display)
@@ -188,6 +237,7 @@ class Superagent
   def handle_final_failure
     @display.display_all_attempts_failed
     @display.display_total_runtime(@start_time)
+    @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_git_status
     CompletionNotifier.notify_completion(success: false)
     update_terminal_title(false)
@@ -241,112 +291,83 @@ class Superagent
     return nil
   end
 
-  def detect_fix_or_improvement(new_req, previous_req)
-    return false if previous_req.nil? || new_req.nil?
+  def analyze_request_continuation(new_req, previous_req)
+    return {continuation: false, tags: []} if previous_req.nil? || new_req.nil?
 
-    new_lower = new_req.downcase.strip
-    prev_lower = previous_req.downcase.strip
+    client = create_ask_client
+    return {continuation: false, tags: []} unless client
 
-    return true if check_keywords(new_lower)
-
-    trigram_intersection = count_trigram_intersection(new_lower, prev_lower)
-    return true if trigram_intersection >= 5
-
-    word_similarity = calculate_word_similarity(new_lower, prev_lower)
-    return true if word_similarity > 0.35
-
-    combined_score = (trigram_intersection * 0.15) + (word_similarity * 0.85)
-    combined_score > 0.25
+    prompt = build_continuation_analysis_prompt(new_req, previous_req)
+    response = query_ask_client(client, prompt)
+    parse_continuation_response(response)
+  rescue StandardError => e
+    @display.puts "Warning: Failed to analyze request continuation: #{e.message}".yellow
+    {continuation: false, tags: []}
   end
 
-  def extract_trigrams(text)
-    return [] if text.length < 3
+  def create_ask_client
+    return AskGeminiClient.new(progress: false) if Utility.gemini_configured?
+    return AskGptClient.new if Utility.openai_configured?
 
-    (0..text.length - 3).map { |i| text[i, 3] }.to_set
+    nil
   end
 
-  def count_trigram_intersection(text1, text2)
-    trigrams1 = extract_trigrams(text1)
-    trigrams2 = extract_trigrams(text2)
-    (trigrams1 & trigrams2).size
+  def build_continuation_analysis_prompt(new_req, previous_req)
+    <<~HEREDOC
+      Analyze the relationship between two requests and classify the new request.
+
+      Previous request:
+      #{previous_req}
+
+      New request:
+      #{new_req}
+
+      Tasks:
+      1. Determine if the new request continues the previous work (YES) or starts a new session (NO)
+      2. Identify applicable tags from: #bug, #regression, #improvement, #feature, #refactoring, #chore, #documentation, #test, #performance, #security
+
+      Response format (required):
+      CONTINUATION: YES or NO
+      TAGS: comma-separated tags (e.g., #bug, #improvement) or NONE
+
+      Examples:
+      - "fix login error" → CONTINUATION: NO, TAGS: #bug
+      - "also add email validation" → CONTINUATION: YES, TAGS: #feature
+      - "optimize database queries" → CONTINUATION: NO, TAGS: #improvement, #performance
+      - "refactor user service" → CONTINUATION: NO, TAGS: #refactoring
+    HEREDOC
   end
 
-  def calculate_word_similarity(text1, text2)
-    words1 = normalize_words(text1)
-    words2 = normalize_words(text2)
-    return 0.0 if words1.empty? || words2.empty?
-
-    common_words = words1 & words2
-    union_words = (words1 | words2).size
-    return 0.0 if union_words.zero?
-
-    jaccard = common_words.size.to_f / union_words
-
-    word_order_similarity = calculate_word_order_similarity(words1, words2)
-    (jaccard * 0.7) + (word_order_similarity * 0.3)
-  end
-
-  def normalize_words(text)
-    text.split(/\s+/).reject { |w| w.length < 2 }.map(&:downcase).to_set
-  end
-
-  def calculate_word_order_similarity(words1, words2)
-    words1_arr = words1.to_a
-    words2_arr = words2.to_a
-    common = words1 & words2
-    return 0.0 if common.empty?
-
-    positions1 = build_word_positions(words1_arr, common)
-    positions2 = build_word_positions(words2_arr, common)
-    return 0.0 if positions1.empty? || positions2.empty?
-
-    max_len = [words1_arr.size, words2_arr.size].max
-    calculate_average_order_similarity(common, positions1, positions2, max_len)
-  end
-
-  def calculate_average_order_similarity(common, positions1, positions2, max_len)
-    total_similarity = 0.0
-    count = 0
-
-    common.each do |word|
-      pos1 = positions1[word] || []
-      pos2 = positions2[word] || []
-      next if pos1.empty? || pos2.empty?
-
-      min_diff = calculate_min_position_diff(pos1, pos2)
-      total_similarity += 1.0 - (min_diff.to_f / max_len)
-      count += 1
+  def query_ask_client(client, prompt)
+    if client.is_a?(AskGeminiClient)
+      client.ask([{role: "user", content: prompt}], title: nil)
+    else
+      system_msg = "You are a request analyzer. Provide concise, structured responses."
+      messages = [
+        {role: "system", content: system_msg},
+        {role: "user", content: prompt}
+      ]
+      client.ask(messages, title: nil)
     end
-
-    count.zero? ? 0.0 : total_similarity / count
   end
 
-  def calculate_min_position_diff(pos1, pos2)
-    pos1.map { |p1| pos2.map { |p2| (p1 - p2).abs }.min }.min
+  def parse_continuation_response(response)
+    return {continuation: false, tags: []} unless response
+
+    continuation_match = response.match(/CONTINUATION:\s*(YES|NO)/i)
+    tags_match = response.match(/TAGS:\s*(.+?)(?:\n|$)/i)
+
+    continuation = continuation_match && continuation_match[1].upcase == "YES"
+    tags_text = tags_match ? tags_match[1].strip : ""
+    tags = extract_tags(tags_text)
+
+    {continuation: continuation, tags: tags}
   end
 
-  def build_word_positions(words, common_words)
-    positions = {}
-    words.each_with_index do |word, idx|
-      next unless common_words.include?(word)
+  def extract_tags(tags_text)
+    return [] if tags_text.empty? || tags_text.upcase == "NONE"
 
-      positions[word] ||= []
-      positions[word] << idx
-    end
-    positions
-  end
-
-  def check_keywords(new_lower)
-    fix_keywords = %w[fix bug error issue problem broken wrong incorrect failed failure]
-    improvement_keywords = %w[improve enhance better optimize refine adjust modify update change]
-    continuation_keywords = %w[also and continue add more]
-
-    is_fix = fix_keywords.any? { |keyword| new_lower.include?(keyword) }
-    is_improvement = improvement_keywords.any? { |keyword| new_lower.include?(keyword) }
-    is_continuation = continuation_keywords.any? { |keyword|
-      new_lower.start_with?(keyword) || new_lower.match?(/\b#{keyword}\s/) }
-
-    is_fix || is_improvement || is_continuation
+    tags_text.split(",").map(&:strip).reject(&:empty?).select { |tag| tag.start_with?("#") }
   end
 
   def sanitize_request(req)
