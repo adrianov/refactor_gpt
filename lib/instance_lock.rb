@@ -8,6 +8,9 @@ require "tmpdir"
 module InstanceLock
   LOCK_DIR = File.join(Dir.tmpdir, "refactor_gpt_instance_locks")
   LOCK_CHECK_INTERVAL = 0.5
+  STALE_LOCK_TIMEOUT = 3600 # 1 hour - consider lock stale if older than this
+
+  @current_lock_path = nil
 
   def self.lock_file_path
     cwd = Dir.pwd
@@ -41,7 +44,7 @@ module InstanceLock
     # Wait for lock to be released if another instance is running
     waiting_message_shown = false
     while File.exist?(lock_path)
-      # Check if the lock is stale (process no longer running)
+      # Check if the lock is stale (process no longer running or too old)
       if stale_lock?(lock_path)
         File.delete(lock_path) rescue nil
         break
@@ -59,8 +62,9 @@ module InstanceLock
       sleep LOCK_CHECK_INTERVAL
     end
 
-    # Create lock file with current PID
+    # Create lock file with current PID and setup cleanup handlers
     File.write(lock_path, Process.pid.to_s)
+    setup_cleanup_handlers(lock_path)
     lock_path
   rescue StandardError => e
     warn "Warning: Failed to acquire lock: #{e.message}"
@@ -69,6 +73,14 @@ module InstanceLock
 
   def self.stale_lock?(lock_path)
     return true unless File.exist?(lock_path)
+
+    # Check if lock file is too old (indicates abnormal termination)
+    begin
+      lock_age = Time.now - File.mtime(lock_path)
+      return true if lock_age > STALE_LOCK_TIMEOUT
+    rescue StandardError
+      # If we can't check mtime, continue with PID check
+    end
 
     begin
       lock_pid = File.read(lock_path).to_i
@@ -109,5 +121,24 @@ module InstanceLock
     ensure
       release_lock(lock_path)
     end
+  end
+
+  def self.setup_cleanup_handlers(lock_path)
+    return unless lock_path
+
+    # Store lock path for cleanup
+    @current_lock_path = lock_path
+
+    # At exit, ensure lock is released (handles normal termination and most signals)
+    # Note: SIGKILL cannot be caught, but stale lock detection handles that case
+    at_exit do
+      release_lock(@current_lock_path) if @current_lock_path
+    end
+  rescue StandardError => e
+    warn "Warning: Failed to setup cleanup handlers: #{e.message}"
+  end
+
+  def self.current_lock_path
+    @current_lock_path
   end
 end
