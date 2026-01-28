@@ -37,28 +37,35 @@ class Display
     $stdout.flush
   end
 
-  private
-
-  def format_with_timestamp(text, timestamp)
-    # Handle colorized strings which might have escape codes at the beginning
-    if text.start_with?("\e[")
-      # Find the first 'm' which ends the escape sequence
-      m_index = text.index('m')
-      if m_index
-        # Insert timestamp after the first color escape sequence
-        return text[0..m_index] + timestamp + text[m_index + 1..-1]
-      end
-    end
-    "#{timestamp}#{text}"
-  end
-
-  def timestamped_puts(message)
-    puts message
-  end
-
   def initialize
     @text_buffer = ''
     @at_start_of_line = true
+  end
+
+  def check_late_night_reminder
+    now = Time.now
+    hour = now.hour
+    minute = now.min
+
+    # Check if time is between 23:30 and 6:00
+    is_late_night = (hour == 23 && minute >= 30) || (hour >= 0 && hour < 6)
+    return unless is_late_night
+
+    messages = [
+      "🌙 It's getting late! Your code will still be here tomorrow, and you'll tackle it with fresh eyes.",
+      "⏰ Late night coding session! Remember, a well-rested mind writes better code. Tomorrow will be productive!",
+      "🌆 The clock says it's time to wind down. Your future self will thank you for getting some rest.",
+      "💤 It's past bedtime! Your code isn't going anywhere, but your energy is. Rest up for an amazing day!",
+      "🌃 Late night warrior! Dedication is admirable, but remember that tomorrow you'll be even more productive.",
+      "⭐ Burning the midnight oil? That's dedication! But even the best developers need sleep. Rest up!",
+      "🌙 Late night coding is impressive, but so is a good night's sleep. Your code will be waiting for you."
+    ]
+
+    message = messages.sample
+    $stdout.puts ''
+    puts message.yellow
+    $stdout.puts ''
+    exit 0
   end
 
   def print_word(text)
@@ -110,32 +117,6 @@ class Display
       @has_printed_content = true
       $stdout.flush
     end
-  end
-
-  def check_late_night_reminder
-    now = Time.now
-    hour = now.hour
-    minute = now.min
-
-    # Check if time is between 23:30 and 6:00
-    is_late_night = (hour == 23 && minute >= 30) || (hour >= 0 && hour < 6)
-    return unless is_late_night
-
-    messages = [
-      "🌙 It's getting late! Your code will still be here tomorrow, and you'll tackle it with fresh eyes.",
-      "⏰ Late night coding session! Remember, a well-rested mind writes better code. Tomorrow will be productive!",
-      "🌆 The clock says it's time to wind down. Your future self will thank you for getting some rest.",
-      "💤 It's past bedtime! Your code isn't going anywhere, but your energy is. Rest up for an amazing day!",
-      "🌃 Late night warrior! Dedication is admirable, but remember that tomorrow you'll be even more productive.",
-      "⭐ Burning the midnight oil? That's dedication! But even the best developers need sleep. Rest up!",
-      "🌙 Late night coding is impressive, but so is a good night's sleep. Your code will be waiting for you."
-    ]
-
-    message = messages.sample
-    $stdout.puts ''
-    puts message.yellow
-    $stdout.puts ''
-    exit 0
   end
 
   def display_git_status
@@ -256,6 +237,20 @@ class Display
     end
   end
 
+  private
+
+  def format_with_timestamp(text, timestamp)
+    # Handle colorized strings which might have escape codes at the beginning
+    if text.start_with?("\e[")
+      # Find the first 'm' which ends the escape sequence
+      m_index = text.index('m')
+      if m_index
+        # Insert timestamp after the first color escape sequence
+        return text[0..m_index] + timestamp + text[m_index + 1..-1]
+      end
+    end
+    "#{timestamp}#{text}"
+  end
 
   def process_complete_lines
     return if @text_buffer.empty?
