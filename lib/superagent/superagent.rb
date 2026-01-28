@@ -47,6 +47,7 @@ session_tracker: nil)
     @session_tags = []
     @session_continuation = false
     @current_request = nil
+    @bug_count_per_model = {}
   end
 
   def run(start_model_index: 0, request: nil)
@@ -102,10 +103,21 @@ session_tracker: nil)
 
   def execute_attempts(start_index, req)
     @current_model_index = start_index
+    # Only reset bug count for new sessions, not continuations
+    @bug_count_per_model = {} unless @session_continuation
+    highest_index_reached = start_index
     MODELS[@current_model_index..-1].each_with_index do |model, relative_idx|
       idx = @current_model_index + relative_idx
       @current_pass = idx + 1
       @current_model = model
+      # Track the highest model index we've reached in this session (even if skipped)
+      highest_index_reached = idx if idx > highest_index_reached
+      
+      # Skip model if it already has 2 bugs in this session
+      if @bug_count_per_model[model] && @bug_count_per_model[model] >= 2
+        next
+      end
+      
       update_terminal_title("Attempting: #{model}")
       @display.display_attempt_header(model, idx, MODELS.size)
 
@@ -130,8 +142,11 @@ session_tracker: nil)
 
       # Store implementation time for this pass
       @current_implementation_time = implementation_time
-      break if process_model_attempt(model, req) == :success
+      result = process_model_attempt(model, req)
+      break if result == :success
     end
+    # Update current model index to the highest we've reached
+    @current_model_index = highest_index_reached
   end
 
   def process_model_attempt(model, req)
@@ -159,6 +174,7 @@ session_tracker: nil)
       return :success
     end
 
+    @bug_count_per_model[model] = (@bug_count_per_model[model] || 0) + 1
     @display.display_verification_result(false, desc)
     $stdout.puts ''
 
@@ -178,6 +194,7 @@ session_tracker: nil)
       return :success
     end
 
+    @bug_count_per_model[model] = (@bug_count_per_model[model] || 0) + 1
     @last_attempt_success = false
 
     @display.display_verification_result(false, fix_desc, 'after retry')
@@ -234,7 +251,17 @@ session_tracker: nil)
     analysis = @session_tracker.analyze_continuation(new_req, previous_req ? {request: previous_req} : nil)
     is_continuation = analysis[:continuation]
     tags = analysis[:tags]
-    start_index = model_index_from_request || (is_continuation ? @current_model_index : 0)
+    if is_continuation
+      # In continued session: never reset to previous model, always move forward
+      start_index = if model_index_from_request
+                      [model_index_from_request, @current_model_index].max
+                    else
+                      @current_model_index
+                    end
+    else
+      # New session: start from first model in queue
+      start_index = model_index_from_request || 0
+    end
     start_index = [[start_index, 0].max, MODELS.size - 1].min
 
     $stdout.puts ''
