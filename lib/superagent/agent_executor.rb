@@ -21,13 +21,8 @@ class AgentExecutor
   def test_runner_running?(pid = nil)
     return false unless RbConfig::CONFIG['host_os'] =~ /linux|darwin|bsd/
 
-    # If pid is provided, we check for descendants of that pid
-    # Otherwise we check for any test runner process in the system
     TEST_RUNNERS.any? do |runner|
       if pid
-        # Find all descendants of the given PID and check if any match the runner name
-        # We use 'ps -eo ppid,comm' to get parent-child relationships
-        # and search for the runner in the descendants
         descendants = get_all_descendants(pid)
         descendants.any? { |d_pid| process_matches_runner?(d_pid, runner) }
       else
@@ -37,36 +32,20 @@ class AgentExecutor
   end
 
   def system_runner_running?(runner)
-    # Check for exact process name match (avoids false positives from pgrep -f)
     return true if system("pgrep -x #{runner} > #{File::NULL} 2>&1")
 
-    # Check for runners invoked via interpreters, but only if runner appears as executable argument
-    # This avoids matching processes that just mention the runner in file paths or grep patterns
     output = `ps ax -o comm,args 2>/dev/null`
     return false if output.empty?
 
-    output.each_line do |line|
+    output.each_line.any? do |line|
       next if line.strip.empty?
 
-      parts = line.split(nil, 2)
-      next if parts.length < 2
-
-      comm = parts[0]
-      args = parts[1] || ''
-
-      # Only check interpreter processes
-      next unless %w[ruby node python].include?(comm)
-
-      # Runner must appear as an executable argument (after bundle exec, or as direct arg)
-      # Pattern ensures runner is a command, not part of a file path
+      comm, args = line.split(nil, 2)
+      next if args.nil? || !%w[ruby node python].include?(comm)
       next unless args.match?(/\b(?:bundle\s+exec\s+)?#{runner}(?:\s|$)/)
 
-      # Exclude processes that are searching/editing (grep, editors, etc.)
-      next if args.match?(/\b(?:grep|find|vim|nano|emacs|less|more|cat|head|tail|ag|rg)\s/)
-
-      return true
+      !args.match?(/\b(?:grep|find|vim|nano|emacs|less|more|cat|head|tail|ag|rg)\s/)
     end
-    false
   end
 
   def get_all_descendants(parent_pid)
@@ -127,22 +106,19 @@ class AgentExecutor
 
   def parse_json_stream_line(line)
     return [nil, nil, nil, nil, nil] if line.nil? || line.strip.empty? || line.include?('=>')
-    role_check = line.include?('"role"') || line.include?("'role'") || line.include?(':role')
-    user_check = line.include?('"user"') || line.include?("'user'") || line.include?(':user')
-    return [nil, nil, nil, nil, nil] if role_check && user_check
+    return [nil, nil, nil, nil, nil] if line.match?(/[:"']role["']/) && line.match?(/[:"']user["']/)
 
     json_obj = JSON.parse(line.strip)
     type = json_obj['type']
-    text = extract_text_from_json(json_obj)
-    command = extract_command_from_json(json_obj)
-    tool_call_info = extract_tool_call_info(json_obj) if type == 'tool_call' || type == 'tool_result'
-
-    text = text.to_s unless text.nil?
+    
+    return [nil, nil, nil, nil, nil] if type == 'thinking' && (json_obj['text'].nil? || json_obj['text'].empty?)
+    
+    text = extract_text_from_json(json_obj)&.to_s
     text = nil if text&.empty?
     
-    # Generate stream ID from type and request_id if available
-    stream_id = json_obj['request_id'] || json_obj['stream_id'] || type
-    [type, text, stream_id, command, tool_call_info]
+    [type, text, json_obj['request_id'] || json_obj['stream_id'] || type, 
+     extract_command_from_json(json_obj), 
+     (extract_tool_call_info(json_obj) if %w[tool_call tool_result].include?(type))]
   rescue JSON::ParserError
     [nil, nil, nil, nil, nil]
   end
@@ -153,14 +129,18 @@ class AgentExecutor
       content = json_obj.dig('message', 'content')
       if content.is_a?(Array)
         text_content = content.find { |c| c['type'] == 'text' }
-        text_content ? text_content['text'] : nil
-      elsif content.is_a?(String)
-        content
-      else
-        json_obj.dig('message', 'text') || json_obj['text']
+        text = text_content ? text_content['text'] : nil
+        return text if text && !text.strip.empty?
+      elsif content.is_a?(String) && !content.strip.empty?
+        return content
       end
+      json_obj.dig('message', 'text') || json_obj['text']
     when 'result'
       json_obj['result']
+    when 'thinking'
+      text = json_obj['text']
+      return nil if text.nil? || text.strip.empty?
+      text
     when 'step', 'tool_call', 'tool_result'
       json_obj['step'] || json_obj['text'] || json_obj['content'] || json_obj['result']
     else
@@ -169,43 +149,29 @@ class AgentExecutor
   end
 
   def extract_command_from_json(json_obj)
-    # Check for explicit command field
     return json_obj['command'] if json_obj['command']
 
-    # Check tool_call for command information
-    if json_obj['type'] == 'tool_call' || json_obj['type'] == 'tool_result'
+    if %w[tool_call tool_result].include?(json_obj['type'])
       tool_call = json_obj['tool_call'] || json_obj
+      func_name = tool_call.dig('function', 'name')
+      func_args = tool_call.dig('function', 'arguments')
       
-      # Check function name and arguments
-      if tool_call.dig('function', 'name')
-        func_name = tool_call.dig('function', 'name')
-        func_args = tool_call.dig('function', 'arguments')
-        
-        # If it's a run/execute function, extract the command from arguments
-        if func_name.match?(/^(run|execute|command)/i) && func_args
-          begin
-            args = func_args.is_a?(String) ? JSON.parse(func_args) : func_args
-            return args['command'] || args['cmd'] || args['input'] if args.is_a?(Hash)
-            return func_args if func_args.is_a?(String) && func_args.match?(/^[a-zA-Z0-9_\-\.\/\s]+$/)
-          rescue JSON::ParserError
-            return func_args if func_args.is_a?(String) && func_args.length < 200
-          end
+      if func_name&.match?(/^(run|execute|command)/i) && func_args
+        begin
+          args = func_args.is_a?(String) ? JSON.parse(func_args) : func_args
+          return args['command'] || args['cmd'] || args['input'] if args.is_a?(Hash)
+          return func_args if func_args.is_a?(String) && func_args.match?(/^[a-zA-Z0-9_\-\.\/\s]+$/)
+        rescue JSON::ParserError
+          return func_args if func_args.is_a?(String) && func_args.length < 200
         end
       end
       
-      # Check for direct command in tool_call
       input = tool_call['input']
-      if input.is_a?(String) && input.match?(/^[a-zA-Z0-9_\-\.\/\s]+$/) && input.length < 200
-        return input
-      end
+      return input if input.is_a?(String) && input.match?(/^[a-zA-Z0-9_\-\.\/\s]+$/) && input.length < 200
       return tool_call['command'] if tool_call['command']
     end
 
-    # Check for command in text content
-    text = extract_text_from_json(json_obj)
-    return extract_command_from_text(text) if text
-
-    nil
+    extract_command_from_text(extract_text_from_json(json_obj))
   end
 
   def extract_command_from_text(text)
@@ -233,346 +199,121 @@ class AgentExecutor
   end
 
   def extract_tool_call_info(json_obj)
-    # Check for tool_call type
-    return nil unless json_obj['type'] == 'tool_call' || json_obj['type'] == 'tool_result'
+    return nil unless %w[tool_call tool_result].include?(json_obj['type'])
 
     tool_call = json_obj['tool_call'] || json_obj
-    func_name = tool_call.dig('function', 'name')
+    subtype = json_obj['subtype']
     
-    # Also check for direct function name in the object
-    func_name ||= json_obj['function_name'] || json_obj['name']
+    func_name = extract_tool_name(tool_call, json_obj)
     return nil unless func_name
 
-    func_args = tool_call.dig('function', 'arguments')
-    func_args ||= json_obj['arguments'] || json_obj['args']
-    
-    args_str = if func_args.is_a?(String)
-                 begin
-                   parsed = JSON.parse(func_args)
-                   parsed.is_a?(Hash) ? parsed : func_args
-                 rescue JSON::ParserError
-                   func_args
-                 end
-               else
-                 func_args
-               end
+    func_args = extract_tool_args(tool_call, json_obj)
+    args_str = parse_tool_args(func_args)
 
-    tool_info = { name: func_name, arguments: args_str }
-    
-    # Track unique tools (by name only, to avoid duplicates)
-    unless @tools_used.any? { |t| t[:name] == func_name }
-      @tools_used << tool_info.dup
-    end
+    tool_info = { name: func_name, arguments: args_str, subtype: subtype }
+    @tools_used << tool_info.dup unless @tools_used.any? { |t| t[:name] == func_name && t[:subtype] == subtype }
     
     tool_info
+  end
+
+  def extract_tool_name(tool_call, json_obj)
+    func_name = tool_call.dig('function', 'name') || json_obj['function_name'] || json_obj['name']
+    return func_name if func_name
+
+    tool_call.keys.each do |key|
+      next unless key.end_with?('ToolCall') || key.end_with?('Call')
+      tool_key = key.sub(/ToolCall$/, '').sub(/Call$/, '')
+      return format_tool_name(tool_key)
+    end
+
+    nil
+  end
+
+  def format_tool_name(name)
+    name = name.sub(/^[a-z]/, &:upcase) if name.match?(/^[a-z]/)
+    formatted = name.gsub(/([a-z])([A-Z])/, '\1_\2').downcase
+    formatted = formatted.sub(/_tool$/, '')
+    formatted
+  end
+
+  def extract_tool_args(tool_call, json_obj)
+    func_args = tool_call.dig('function', 'arguments') || json_obj['arguments'] || json_obj['args']
+    return func_args if func_args
+
+    tool_call.each do |key, value|
+      next unless key.end_with?('ToolCall') || key.end_with?('Call')
+      return value['args'] if value.is_a?(Hash) && value['args']
+      return value if value.is_a?(Hash)
+    end
+
+    nil
+  end
+
+  def parse_tool_args(func_args)
+    return func_args unless func_args.is_a?(String)
+
+    JSON.parse(func_args)
+  rescue JSON::ParserError
+    func_args
   end
 
   def looks_like_command?(cmd)
     return false if cmd.length < 2 || cmd.length > 500
     return false unless cmd.match?(/^[a-zA-Z0-9_\-\.\/\s\:\;\,\|\&\<\>\(\)\"\']+$/)
 
-    # Must contain at least one of: executable name, path separator, flag, or be a common short command
     cmd.match?(/\b(rspec|rake|make|npm|yarn|bundle|ruby|python|node|go| cargo|test|spec|build|run)\b/i) ||
-      cmd.include?('/') ||
-      cmd.include?('-') ||
-      cmd.include?('--') ||
-      cmd.match?(/^[a-z]+\s+[a-z]/i)  # "cmd arg" pattern
+      cmd.match?(/[\/\-]/) ||
+      cmd.match?(/^[a-z]+\s+[a-z]/i)
   end
 
-  def build_and_display_command(*args, verification_mode: false)
+  def build_command(model:, verification_mode: false, plan_mode: false)
     cmd = ['agent', '--print', '--stream-partial-output', '--output-format', 'stream-json']
-    if verification_mode
-      cmd << '--mode' << 'ask'
-    else
-      cmd << '--force'
-    end
-    cmd.concat(args)
-    display_cmd = cmd.map do |arg|
-      if arg.length > 50 || arg.include?("\n")
-        "'#{arg[0..50].gsub("\n", " ")}...'"
-      else
-        arg
-      end
-    end.join(' ')
-    @display.puts "Running: #{display_cmd}"
+    cmd << '--plan' if plan_mode
+    verification_mode ? cmd.concat(%w[--mode ask]) : cmd << '--force'
+    cmd.concat(['--model', model])
     cmd
   end
 
-  def retryable_network_error?(output)
-    return false if output.nil? || output.empty?
+  def display_command(cmd, prompt)
+    display_prompt = prompt.length > 50 || prompt.include?("\n") ? "'#{prompt[0..50].gsub("\n", " ")}...'" : prompt
+    @display.puts "Running: #{cmd.join(' ')} #{display_prompt}"
+  end
 
-    output.include?('CANCEL') || output.include?('canceled') ||
-      output.include?('stream closed') || output.include?('0x8') ||
-      output.include?('http/2 stream closed') || output.include?('Connection stalled')
+  RECOVERABLE_NETWORK_RETRIES = 2
+
+  def retryable_network_error?(output)
+    return false if output.to_s.empty?
+
+    output.match?(/CANCEL|canceled|stream closed|0x8|http\/2 stream closed|Connection stalled/i)
+  end
+
+  UNRECOVERABLE_PHRASES = %w[503 502 404].freeze
+  UNRECOVERABLE_MODEL_PHRASES = %w[not found not available unavailable invalid].freeze
+
+  def unrecoverable_network_error?(output)
+    return false if output.to_s.empty?
+
+    n = output.downcase
+    UNRECOVERABLE_PHRASES.any? { |p| n.include?(p) } ||
+      (n.include?('rate limit') && n.include?('exceeded')) ||
+      (n.include?('model') && UNRECOVERABLE_MODEL_PHRASES.any? { |p| n.include?(p) })
   end
 
   def run_with_timeout_monitoring(model, wrapped, verification_mode: false)
     @tools_used = []
-    
-    # Check if a test runner is already running in the system before starting the agent
-    if test_runner_running?
-      @display.puts '⚠️  Test runner already running in system, no timeout applied'.yellow
-      return run_without_timeout(model, wrapped, verification_mode: verification_mode)
-    end
+    return run_without_timeout(model, wrapped, verification_mode: verification_mode) if test_runner_running?
 
-    test_runner_detected = false
-    execution_complete = false
-    process_pid = nil
-    timeout_disabled = false
-    timed_out = false
-    last_chunk_time = nil
-    execution_start_time = nil
-
-    monitor_thread = Thread.new do
-      loop do
-        sleep TEST_RUNNER_CHECK_INTERVAL
-        break if execution_complete
-
-        if process_pid && test_runner_running?(process_pid)
-          unless test_runner_detected
-            test_runner_detected = true
-            timeout_disabled = true
-            @display.puts '⚠️  Test runner detected (child of agent), disabling timeout'.yellow
-          end
-        end
-      end
-    end
-
-    timeout_thread = Thread.new do
-      while !execution_complete
-        sleep TEST_RUNNER_CHECK_INTERVAL
-        next if timeout_disabled || (process_pid && test_runner_running?(process_pid))
-
-        if execution_start_time
-          total_execution_time = Time.now - execution_start_time
-          if total_execution_time >= MAX_EXECUTION_TIMEOUT && !execution_complete
-            timed_out = true
-            @display.puts "❌ Agent timed out after #{MAX_EXECUTION_TIMEOUT}s maximum execution time".red
-            Process.kill('TERM', process_pid) if process_pid
-            sleep 2
-            Process.kill('KILL', process_pid) if process_pid && !execution_complete
-            break
-          end
-        end
-
-        next if last_chunk_time.nil?
-
-        time_since_last_chunk = Time.now - last_chunk_time
-        if time_since_last_chunk >= EXECUTION_TIMEOUT && !execution_complete
-          timed_out = true
-          @display.puts "❌ Agent timed out after #{EXECUTION_TIMEOUT}s without receiving data".red
-          Process.kill('TERM', process_pid) if process_pid
-          sleep 2
-          Process.kill('KILL', process_pid) if process_pid && !execution_complete
-          break
-        end
-      end
-    end
+    @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil, 
+start: nil }
+    monitor_thread = start_monitor_thread
+    timeout_thread = start_timeout_thread
 
     begin
-      @display.reset_stream_tracking
-      cmd = build_and_display_command('--model', model, wrapped, verification_mode: verification_mode)
-      Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
-        process_pid = wait_thr.pid
-        execution_start_time = Time.now
-        last_chunk_time = Time.now
-        raw_output = ''
-        final_result = ''
-        stdin.close
-        line_buffer = ''
-
-        loop do
-          break if timed_out
-
-          ready = IO.select([stdout_stderr], nil, nil, 0.5)
-          if ready
-            begin
-              chunk = stdout_stderr.readpartial(4096)
-              last_chunk_time = Time.now
-              raw_output += chunk
-              line_buffer += chunk
-
-              while (newline_idx = line_buffer.index("\n"))
-                line = line_buffer[0..newline_idx]
-                line_buffer = line_buffer[(newline_idx + 1)..-1] || ''
-
-                type, text, stream_id, command, tool_call_info = parse_json_stream_line(line.strip)
-                if tool_call_info
-                  @display.display_tool_call(tool_call_info)
-                end
-                if command && !command.empty?
-                  @display.puts "Running: #{command}".green
-                end
-                if text && !text.empty?
-                  if type == 'result'
-                    final_result = text
-                  elsif !verification_mode
-                    @display.print_word(text, stream_id: stream_id)
-                  end
-                end
-              end
-            rescue EOFError
-              break
-            rescue IO::WaitReadable
-              next
-            end
-          elsif !wait_thr.alive?
-            begin
-              remaining = stdout_stderr.read
-              if remaining
-                last_chunk_time = Time.now
-                raw_output += remaining
-                line_buffer += remaining
-
-                # Process remaining complete lines the same way as in main loop
-                while (newline_idx = line_buffer.index("\n"))
-                  line = line_buffer[0..newline_idx]
-                  line_buffer = line_buffer[(newline_idx + 1)..-1] || ''
-
-                  type, text, stream_id, command, tool_call_info = parse_json_stream_line(line.strip)
-                  if tool_call_info
-                    @display.display_tool_call(tool_call_info)
-                  end
-                  if command && !command.empty?
-                    @display.puts "Running: #{command}".green
-                  end
-                  if text && !text.empty?
-                    if type == 'result'
-                      final_result = text
-                    elsif !verification_mode
-                      @display.print_word(text, stream_id: stream_id)
-                    end
-                  end
-                end
-              end
-            rescue EOFError
-              # Stream closed, no more data
-            rescue IOError => e
-              # Error reading remaining data, log and continue
-              @display.puts "Warning: Error reading remaining output: #{e.message}".yellow
-            end
-            break
-          end
-        end
-
-        if timed_out
-          stdout_stderr.close rescue nil
-          final_result += "\n[Process terminated due to timeout]"
-        end
-
-        # Process any remaining incomplete line in line_buffer
-        unless line_buffer.empty?
-          type, text, stream_id, command, tool_call_info = parse_json_stream_line(line_buffer.strip)
-          if tool_call_info
-            @display.display_tool_call(tool_call_info)
-          end
-          if command && !command.empty?
-            @display.puts "Running: #{command}".green
-          end
-          if text && !text.empty?
-            if type == 'result'
-              final_result = text
-            elsif !verification_mode
-              @display.print_word(text, stream_id: stream_id)
-            end
-          end
-        end
-
-        execution_complete = true
-
-        # Flush any remaining buffered text
-        @display.flush_word_buffer
-
-        # Display tools summary
-        display_tools_summary
-
-        begin
-          status = wait_thr.value
-        rescue StandardError
-          status = Struct.new(:success?).new(false)
-        end
-
-        if timed_out
-          status = Struct.new(:success?).new(false)
-        end
-
-        output = final_result.empty? ? raw_output : final_result
-        [output || '', '', status]
-      end
-    rescue Errno::ESRCH, Errno::ECHILD
-      execution_complete = true
-      [nil, nil, Struct.new(:success?).new(false)]
+      execute_agent_process(model, wrapped, verification_mode)
     ensure
-      execution_complete = true
+      @state[:complete] = true
       monitor_thread&.kill
       timeout_thread&.kill
-    end
-  end
-
-  def run_without_timeout(model, wrapped, verification_mode: false)
-    @tools_used = []
-    @display.reset_stream_tracking
-    cmd = build_and_display_command('--model', model, wrapped, verification_mode: verification_mode)
-    stdout, stderr, status = Open3.capture3(*cmd)
-    raw_output = stdout + stderr
-    final_result = ''
-
-    raw_output.each_line do |line|
-      type, text, stream_id, command, tool_call_info = parse_json_stream_line(line.strip)
-      if tool_call_info
-        @display.display_tool_call(tool_call_info)
-      end
-      if command && !command.empty?
-        @display.puts "Running: #{command}".green
-      end
-      if text && !text.empty?
-        if type == 'result'
-          final_result = text
-        elsif !verification_mode
-          @display.print_word(text, stream_id: stream_id)
-        end
-      end
-    end
-
-    # Flush any remaining buffered text
-    @display.flush_word_buffer
-
-    # Display tools summary
-    display_tools_summary
-
-    output = final_result.empty? ? raw_output : final_result
-    [output, '', status]
-  end
-
-  def run(model, p, max_retries: 3, base_delay: 1, verification_mode: false)
-    wrapped = wrap_prompt(p)
-    retries = 0
-
-    loop do
-      stdout, stderr, status = nil
-      begin
-        stdout, stderr, status = run_with_timeout_monitoring(model, wrapped, verification_mode: verification_mode)
-        if status.nil? || !status.success?
-          return [false, "Timeout after #{EXECUTION_TIMEOUT}s"] if stdout.nil?
-        end
-      rescue StandardError => e
-        @display.puts "❌ Agent execution error: #{e.message}".red
-        return [false, "Execution error: #{e.message}"]
-      end
-
-      output = (stdout || '') + (stderr || '')
-      # Output is already processed and displayed by run_with_timeout_monitoring
-      return [status.success?, output] if status.success?
-
-      if retryable_network_error?(output) && retries < max_retries
-        retries += 1
-        delay = base_delay * (2**(retries - 1))
-        @display.puts "⚠️  Network error, retrying in #{delay}s... (#{retries}/#{max_retries})".yellow
-        sleep(delay)
-        next
-      end
-
-      return [false, output]
     end
   end
 
@@ -580,40 +321,212 @@ class AgentExecutor
     @tools_used = []
     @display.reset_stream_tracking
     wrapped = wrap_prompt(p)
-    cmd = build_and_display_command('--plan', '--model', model, wrapped)
+    cmd = build_command(model: model, plan_mode: true)
+    display_command(cmd, wrapped)
     
-    stdout, stderr, status = Open3.capture3(*cmd)
-    raw_output = (stdout || '') + (stderr || '')
-    final_result = ''
+    raw, final = '', ''
+    begin
+      Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
+        stdin.write(wrapped)
+        stdin.close
+        stdout_stderr.each_line do |line|
+          raw += line
+          type, text, stream_id, command, tool = parse_json_stream_line(line.strip)
+          @display.display_tool_call(tool) if tool
+          @display.puts "Running: #{command}".green if command && !command.empty?
+          if text && !text.empty?
+            if type == 'result'
+              final = text
+            elsif type == 'thinking'
+              @display.print_thinking_indicator
+            elsif type == 'assistant' || type.nil?
+              @display.print_word(text, stream_id: stream_id)
+            end
+          end
+        end
+        status = wait_thr.value
+        @display.flush_word_buffer
+        display_tools_summary
+        [status.success?, final.empty? ? raw : final]
+      end
+    rescue StandardError => e
+      @display.puts "❌ Agent execution error: #{e.message}".red
+      [false, "Execution error: #{e.message}"]
+    end
+  end
+
+  def run(model, p, base_delay: 1, verification_mode: false)
+    wrapped = wrap_prompt(p)
+    retries = 0
+    loop do
+      stdout, _, status = run_with_timeout_monitoring(model, wrapped, verification_mode: verification_mode)
+      output = stdout || ''
+      return [true, output, nil] if status&.success?
+      
+      reason = if (status.nil? || !status.success?) && stdout.nil?
+                 :recoverable
+               elsif unrecoverable_network_error?(output)
+                 :unrecoverable
+               elsif retryable_network_error?(output) || output.include?('Timeout after')
+                 :recoverable
+               end
+
+      if reason == :recoverable && retries < RECOVERABLE_NETWORK_RETRIES
+        retries += 1
+        delay = base_delay * (2**(retries - 1))
+        @display.puts "⚠️  Network error, retrying in #{delay}s... (#{retries}/#{RECOVERABLE_NETWORK_RETRIES})".yellow
+        sleep(delay)
+        next
+      end
+      return [false, output, reason]
+    end
+  rescue StandardError => e
+    @display.puts "❌ Agent execution error: #{e.message}".red
+    [false, "Execution error: #{e.message}", :unrecoverable]
+  end
+
+  def run_without_timeout(model, wrapped, verification_mode: false)
+    @tools_used = []
+    @display.reset_stream_tracking
+    cmd = build_command(model: model, verification_mode: verification_mode)
+    display_command(cmd, wrapped)
     
-    raw_output.each_line do |line|
-      type, text, stream_id, command, tool_call_info = parse_json_stream_line(line.strip)
-      if tool_call_info
-        @display.display_tool_call(tool_call_info)
+    raw, final = '', ''
+    begin
+      Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
+        stdin.write(wrapped)
+        stdin.close
+        stdout_stderr.each_line do |line|
+          raw += line
+          type, text, stream_id, command, tool = parse_json_stream_line(line.strip)
+          @display.display_tool_call(tool) if tool
+          @display.puts "Running: #{command}".green if command && !command.empty?
+          if text && !text.empty?
+            if type == 'result'
+              final = text
+            elsif type == 'thinking'
+              @display.print_thinking_indicator unless verification_mode
+            elsif (type == 'assistant' || type.nil?) && !verification_mode
+              @display.print_word(text, stream_id: stream_id)
+            end
+          end
+        end
+        finalize_execution(raw, final, wait_thr)
       end
-      if command && !command.empty?
-        @display.puts "Running: #{command}".green
+    rescue StandardError => e
+      @display.puts "❌ Agent execution error: #{e.message}".red
+      [nil, nil, Struct.new(:success?).new(false)]
+    end
+  end
+
+  private
+
+  def start_monitor_thread
+    Thread.new do
+      loop do
+        sleep TEST_RUNNER_CHECK_INTERVAL
+        break if @state[:complete]
+        if @state[:pid] && !@state[:detected] && test_runner_running?(@state[:pid])
+          @state[:detected] = @state[:disabled] = true
+          @display.puts '⚠️  Test runner detected (child of agent), disabling timeout'.yellow
+        end
       end
+    end
+  end
+
+  def start_timeout_thread
+    Thread.new do
+      until @state[:complete]
+        sleep TEST_RUNNER_CHECK_INTERVAL
+        next if @state[:disabled] || (@state[:pid] && test_runner_running?(@state[:pid]))
+        check_timeouts
+      end
+    end
+  end
+
+  def check_timeouts
+    now = Time.now
+    if @state[:start] && (now - @state[:start]) >= MAX_EXECUTION_TIMEOUT
+      terminate_agent("maximum execution time (#{MAX_EXECUTION_TIMEOUT}s)")
+    elsif @state[:last_chunk] && (now - @state[:last_chunk]) >= EXECUTION_TIMEOUT
+      terminate_agent("no data received (#{EXECUTION_TIMEOUT}s)")
+    end
+  end
+
+  def terminate_agent(reason)
+    @state[:timed_out] = true
+    @display.puts "❌ Agent timed out after #{reason}".red
+    return unless @state[:pid]
+    Process.kill('TERM', @state[:pid])
+    sleep 2
+    Process.kill('KILL', @state[:pid]) unless @state[:complete]
+  end
+
+  def execute_agent_process(model, wrapped, verification_mode)
+    @display.reset_stream_tracking
+    cmd = build_command(model: model, verification_mode: verification_mode)
+    display_command(cmd, wrapped)
+    Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
+      @state[:pid] = wait_thr.pid
+      @state[:start] = @state[:last_chunk] = Time.now
+      stdin.write(wrapped)
+      stdin.close
+      process_agent_output(stdout_stderr, wait_thr, verification_mode)
+    end
+  end
+
+  def process_agent_output(stdout_stderr, wait_thr, verification_mode)
+    raw, final, buffer = '', '', ''
+    loop do
+      break if @state[:timed_out]
+      if IO.select([stdout_stderr], nil, nil, 0.5)
+        begin
+          chunk = stdout_stderr.readpartial(4096)
+          @state[:last_chunk] = Time.now
+          raw += chunk
+          buffer += chunk
+          buffer, final = process_buffer(buffer, final, verification_mode)
+        rescue EOFError then break
+        end
+      elsif !wait_thr.alive?
+        remaining = stdout_stderr.read rescue nil
+        if remaining
+          raw += remaining
+          buffer += remaining
+          _, final = process_buffer(buffer, final, verification_mode)
+        end
+        break
+      end
+    end
+    finalize_execution(raw, final, wait_thr)
+  end
+
+  def process_buffer(buffer, final, verification_mode)
+      while (idx = buffer.index("\n"))
+      line = buffer[0..idx].strip
+      buffer = buffer[(idx + 1)..-1] || ''
+      type, text, stream_id, command, tool = parse_json_stream_line(line)
+      @display.display_tool_call(tool) if tool
+      @display.puts "Running: #{command}".green if command && !command.empty?
       if text && !text.empty?
         if type == 'result'
-          final_result = text
-        else
+          final = text
+        elsif type == 'thinking'
+          @display.print_thinking_indicator unless verification_mode
+        elsif (type == 'assistant' || type.nil?) && !verification_mode
           @display.print_word(text, stream_id: stream_id)
         end
       end
     end
-    
-    # Flush any remaining buffered text
+    [buffer, final]
+  end
+
+  def finalize_execution(raw, final, wait_thr)
     @display.flush_word_buffer
-    
-    # Display tools summary
     display_tools_summary
-    
-    output = final_result.empty? ? raw_output : final_result
-    [status.success?, output]
-  rescue StandardError => e
-    @display.puts "❌ Agent execution error: #{e.message}".red
-    [false, "Execution error: #{e.message}"]
+    status = wait_thr.value rescue Struct.new(:success?).new(false)
+    status = Struct.new(:success?).new(false) if @state && @state[:timed_out]
+    [final.empty? ? raw : final, '', status]
   end
 
   def display_tools_summary
