@@ -224,11 +224,9 @@ class Display
       func_name = tool_call_info[:name]
       subtype = tool_call_info[:subtype]
       formatted_args = format_tool_call_args(tool_call_info[:arguments])
-      
+
       tool_part = build_tool_part(func_name, subtype, formatted_args)
-      status_badge = build_status_badge(subtype)
-      
-      puts tool_part + status_badge
+      print_tool_line(tool_part, subtype)
     end
 
     def build_tool_part(func_name, subtype, formatted_args)
@@ -258,14 +256,6 @@ class Display
       when 'completed' then :green
       when 'started' then :cyan
       else :yellow
-      end
-    end
-
-    def build_status_badge(subtype)
-      case subtype
-      when 'completed' then " [completed]".colorize(:green)
-      when 'started' then " [starting]".colorize(:cyan)
-      else ''
       end
     end
 
@@ -326,6 +316,23 @@ class Display
     def format_inspect_value(v)
       inspected = v.inspect
       inspected.length > 50 ? "#{inspected[0..47]}..." : inspected
+    end
+    
+    def print_tool_line(tool_part, subtype)
+      line = tool_part.to_s
+      if subtype == 'started'
+        print_tool_line_started(line)
+        @tool_line_in_progress = true
+        return
+      end
+
+      if subtype == 'completed' && @tool_line_in_progress
+        overwrite_line_with_timestamp(line)
+        @tool_line_in_progress = false
+        return
+      end
+
+      puts line
     end
 
     def git_repo?
@@ -492,5 +499,28 @@ class Display
     def format_duration(sec)
       return "0s" if sec.nil? || sec < 1
       "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
+    end
+
+    def print_tool_line_started(text)
+      line = "#{timestamp_str}#{body(text)}"
+      @last_tool_line_length = strip_ansi(line).length
+      $stdout.print line
+      @at_start_of_line = false
+      $stdout.flush
+    end
+
+    def overwrite_line_with_timestamp(text)
+      clear_len = @last_tool_line_length || 0
+      $stdout.print "\r#{' ' * clear_len}\r"
+      line = "#{timestamp_str}#{body(text)}"
+      @last_tool_line_length = strip_ansi(line).length
+      $stdout.print line
+      $stdout.puts ''
+      @at_start_of_line = true
+      $stdout.flush
+    end
+
+    def strip_ansi(text)
+      text.to_s.gsub(/\e\[[\d;]*m/, '')
     end
   end
