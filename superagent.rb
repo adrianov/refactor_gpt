@@ -54,16 +54,98 @@ class Display
     puts message
   end
 
+  def initialize
+    @text_buffer = ''
+    @at_start_of_line = true
+  end
+
   def print_word(text)
+    return if text.nil? || text.empty?
+
+    @text_buffer ||= ''
     @at_start_of_line ||= true
-    if @at_start_of_line && !text.strip.empty?
-      timestamp = Time.now.strftime("[%H:%M:%S] ")
-      print timestamp
-      @at_start_of_line = false
+    @has_printed_content ||= false
+
+    # If we've already printed content and we're starting new text, ensure newline
+    # This separates different messages/chunks
+    if @has_printed_content && @at_start_of_line && @text_buffer.empty?
+      $stdout.puts '' unless @text_buffer.end_with?("\n")
+      @at_start_of_line = true
     end
-    print text
-    @at_start_of_line = true if text.include?("\n")
-    $stdout.flush
+
+    # Add text to buffer
+    @text_buffer += text
+
+    # Process complete lines (ending with newline) - these get timestamps
+    process_complete_lines
+
+    # If buffer is getting large and no newlines, print it
+    # Add timestamp only if at start of line
+    if @text_buffer.length > 200 && !@text_buffer.include?("\n")
+      ensure_timestamp if @at_start_of_line
+      $stdout.print @text_buffer
+      @text_buffer = ''
+      @at_start_of_line = false
+      @has_printed_content = true
+      $stdout.flush
+    end
+  end
+
+  def flush_word_buffer
+    return if @text_buffer.nil? || @text_buffer.empty?
+
+    @text_buffer ||= ''
+    @at_start_of_line ||= true
+
+    # Process any remaining complete lines (these will get timestamps and newlines)
+    process_complete_lines
+
+    # Print any remaining buffered content
+    # Only add timestamp if we're at start of line (after processing newlines above)
+    unless @text_buffer.strip.empty?
+      ensure_timestamp if @at_start_of_line
+      $stdout.print @text_buffer
+      # Ensure newline at end if not already present
+      $stdout.puts '' unless @text_buffer.end_with?("\n")
+      @text_buffer = ''
+      @at_start_of_line = true
+      @has_printed_content = true
+      $stdout.flush
+    end
+  end
+
+  private
+
+  def process_complete_lines
+    return if @text_buffer.empty?
+
+    # Process all complete lines (ending with newline)
+    while (newline_idx = @text_buffer.index("\n"))
+      # Get the complete line including the newline
+      line_with_newline = @text_buffer[0..newline_idx]
+      @text_buffer = @text_buffer[(newline_idx + 1)..-1] || ''
+
+      # Print the line content (without the newline, we'll add it separately)
+      line_content = line_with_newline.chomp
+      unless line_content.empty?
+        ensure_timestamp
+        $stdout.print line_content
+      end
+
+      # Print the newline and reset state for next line
+      $stdout.puts ''
+      @at_start_of_line = true
+      @has_printed_content = true
+      $stdout.flush
+    end
+  end
+
+  def ensure_timestamp
+    return unless @at_start_of_line
+
+    timestamp = Time.now.strftime("[%H:%M:%S] ")
+    $stdout.print timestamp
+    @at_start_of_line = false
   end
 
   def display_git_status
@@ -212,10 +294,9 @@ class RequestReader
   def initialize(display)
     @display = display
     @plan_mode = false
-    @force_mode = false
   end
 
-  attr_reader :plan_mode, :force_mode
+  attr_reader :plan_mode
 
   def read_from_argv
     return nil if ARGV.empty?
@@ -224,10 +305,6 @@ class RequestReader
     if args.include?('--plan')
       @plan_mode = true
       args.delete('--plan')
-    end
-    if args.include?('--force')
-      @force_mode = true
-      args.delete('--force')
     end
     args.delete('--print')
 
@@ -289,9 +366,8 @@ class AgentExecutor
   TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
   TEST_RUNNER_CHECK_INTERVAL = 2
 
-  def initialize(display, force_mode: false)
+  def initialize(display)
     @display = display
-    @force_mode = force_mode
   end
 
   def test_runner_running?(pid = nil)
@@ -384,6 +460,8 @@ class AgentExecutor
 
   def parse_json_stream_line(line)
     return [nil, nil] if line.nil? || line.strip.empty? || line.include?('=>')
+    return [nil, nil] if (line.include?('"role"') || line.include?("'role'") || line.include?(':role')) &&
+                        (line.include?('"user"') || line.include?("'user'") || line.include?(':user'))
 
     json_obj = JSON.parse(line.strip)
     type = json_obj['type']
@@ -419,7 +497,6 @@ class AgentExecutor
 
   def build_and_display_command(*args)
     cmd = ['agent', '--print', '--stream-partial-output', '--output-format', 'stream-json']
-    cmd << '--force' if @force_mode
     cmd.concat(args)
     display_cmd = cmd.map do |arg|
       if arg.length > 50 || arg.include?("\n")
@@ -592,6 +669,9 @@ class AgentExecutor
 
         execution_complete = true
 
+        # Flush any remaining buffered text
+        @display.flush_word_buffer
+
         begin
           status = wait_thr.value
         rescue StandardError
@@ -629,6 +709,9 @@ class AgentExecutor
       end
     end
 
+    # Flush any remaining buffered text
+    @display.flush_word_buffer
+
     output = final_result.empty? ? raw_output : final_result
     [output, '', status]
   end
@@ -659,6 +742,9 @@ class AgentExecutor
         next if stripped.start_with?('{') || stripped.start_with?('[')
         # Skip lines that look like Ruby hash syntax with =>
         next if stripped.include?('=>')
+        # Skip user JSON lines (various formats)
+        next if (stripped.include?('"role"') || stripped.include?("'role'") || stripped.include?(':role')) &&
+                (stripped.include?('"user"') || stripped.include?("'user'") || stripped.include?(':user'))
         # Skip valid JSON lines
         begin
           JSON.parse(stripped)
@@ -698,6 +784,9 @@ class AgentExecutor
         final_result = text if type == 'result'
       end
     end
+    
+    # Flush any remaining buffered text
+    @display.flush_word_buffer
     
     output = final_result.empty? ? raw_output : final_result
     [status.success?, output]
@@ -956,45 +1045,14 @@ class VerificationHandler
     HEREDOC
   end
 
-  def ask_user_verification
-    return [false, 'Not in interactive mode'] unless $stdin.tty?
-
-    $stdout.puts ''
-    $stdout.puts 'Is the feature or fix complete and free of bugs or regressions? (y/N)'.cyan
-    answer = $stdin.gets.to_s.chomp.downcase
-    $stdout.puts ''
-
-    case answer
-    when 'y', 'yes'
-      [true, 'User confirmed implementation is complete']
-    else
-      [false, 'User indicated implementation needs work']
-    end
-  end
-
   def run_verification(model, req)
     puts 'Verifying...'.blue
 
-    result = ask_user_verification
-    return result if result[0] != false || $stdin.tty?
+    verification_prompt = build_verification_prompt(req)
+    success, output = @agent_executor.run(model, verification_prompt)
+    return [false, 'Verification failed'] unless success
 
-    @display.timestamped_puts 'Not in interactive mode, using verify_gpt.rb as fallback...'.yellow
-    run_verification_fallback(req)
-  end
-
-  def run_verification_fallback(req)
-    verify_script = File.join(__dir__, 'verify_gpt.rb')
-    return [false, 'verify_gpt.rb not found'] unless File.exist?(verify_script)
-
-    puts "Running: #{verify_script} '#{req[0..50]}...'"
-
-    stdout, stderr, status = Open3.capture3('ruby', verify_script, req)
-    output = stdout + stderr
-    output.each_line { |line| @display.timestamped_puts line.chomp }
-
-    return [false, 'Verification fallback command failed'] unless status.success?
-
-    verified, desc = parse_res(stdout.strip)
+    verified, desc = parse_res(output.strip)
     [verified, desc || 'Failed']
   end
 
@@ -1080,8 +1138,7 @@ class Superagent
   def initialize(display: Display.new, request_reader: nil, agent_executor: nil, verification_handler: nil)
     @display = display
     @request_reader = request_reader || RequestReader.new(@display)
-    force_mode = @request_reader.force_mode
-    @agent_executor = agent_executor || AgentExecutor.new(@display, force_mode: force_mode)
+    @agent_executor = agent_executor || AgentExecutor.new(@display)
     @verification_handler = verification_handler || VerificationHandler.new(@display, @agent_executor)
     @start_time = nil
     @current_pass = nil
@@ -1187,6 +1244,9 @@ class Superagent
 
     return unless $stdin.tty?
 
+    lock_path = InstanceLock.current_lock_path
+    InstanceLock.release_lock(lock_path) if lock_path
+
     update_terminal_title('Reading request...')
     $stdout.puts ''
     puts 'Enter the new request:'.cyan
@@ -1195,6 +1255,12 @@ class Superagent
 
     new_req = sanitize_request(read_next_request)
     return unless new_req && !new_req.strip.empty?
+
+    new_lock_path = InstanceLock.acquire_lock
+    unless new_lock_path
+      puts 'Failed to acquire instance lock. Exiting.'.red
+      exit 1
+    end
 
     is_fix_or_improvement = detect_fix_or_improvement(new_req, previous_req)
     start_index = is_fix_or_improvement ? @current_model_index : 0
