@@ -128,19 +128,10 @@ class OpenAi
   end
 
   def system_instruction
-    agents_content = load_agents_file
-    has_agents = !agents_content.empty?
-
-    build_instruction_sections(has_agents, agents_content)
-  end
-
-  def build_instruction_sections(has_agents, agents_content)
     sections = []
 
     sections << build_input_section
-    sections << "- Ruby development guidelines from AGENTS.md\n" if has_agents
-    sections << build_task_section(has_agents)
-    sections << build_agents_section(agents_content) if has_agents
+    sections << build_task_section
     sections << build_output_format_section
 
     sections.join
@@ -167,13 +158,11 @@ class OpenAi
     HEREDOC
   end
 
-  def build_task_section(has_agents)
-    error_detection = " following development guidelines from AGENTS.md" if has_agents
-
+  def build_task_section
     <<~HEREDOC
       Task:
       - Analyze the status and diff to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
-      - **Code Assessment**: Thoroughly review all changes for potential issues#{error_detection}:
+      - **Code Assessment**: Thoroughly review all changes for potential issues:
         - Syntax errors or typos
         - Logic errors or incorrect implementations
         - Unused methods, variables, or constants left after refactoring
@@ -231,14 +220,6 @@ class OpenAi
           - A clear description of the potential error
           - A probability (0.0-1.0) indicating confidence this is a real issue
           - Any flaws in intended functionality implementation
-    HEREDOC
-  end
-
-  def build_agents_section(agents_content)
-    <<~HEREDOC
-
-      AGENTS.md content (development guidelines to follow):
-      #{agents_content}
     HEREDOC
   end
 
@@ -605,7 +586,7 @@ end
 
 def display_planned_commits(commits)
   puts
-  puts "Planned commits:".cyan
+  puts "✓ Commits Planned".green
   commits.each_with_index { |commit, idx| display_single_commit(commit, idx) }
 end
 
