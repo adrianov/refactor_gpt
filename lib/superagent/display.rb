@@ -26,6 +26,8 @@ class Display
       @current_stream_id = nil
       @has_printed_in_stream = false
       @last_printed_line = nil
+      @thinking_indicator_count = 0
+      @last_thinking_indicator_time = nil
     end
 
     def check_late_night_reminder
@@ -56,6 +58,8 @@ class Display
     def print_word(text, stream_id: nil)
       return if text.nil? || text.empty?
 
+      clear_thinking_indicator
+
       @text_buffer ||= ''
       @at_start_of_line ||= true
       @has_printed_content ||= false
@@ -64,6 +68,7 @@ class Display
       if is_new_stream
         @current_stream_id = stream_id
         @has_printed_in_stream = false
+        $stdout.puts '' unless @text_buffer.empty?
       end
 
       @text_buffer += text
@@ -81,6 +86,7 @@ class Display
     end
 
     def flush_word_buffer
+      clear_thinking_indicator
       return if @text_buffer.nil? || @text_buffer.empty?
 
       @text_buffer ||= ''
@@ -104,6 +110,31 @@ class Display
       @current_stream_id = nil
       @has_printed_in_stream = false
       @last_printed_line = nil
+      @thinking_indicator_count = 0
+      @last_thinking_indicator_time = nil
+    end
+
+    def print_thinking_indicator
+      now = Time.now
+      if @last_thinking_indicator_time.nil? || (now - @last_thinking_indicator_time) >= 0.5
+        @thinking_indicator_count = (@thinking_indicator_count || 0) + 1
+        indicator = case (@thinking_indicator_count % 4)
+                    when 0 then '⠋'
+                    when 1 then '⠙'
+                    when 2 then '⠹'
+                    else '⠸'
+                    end
+        $stdout.print "\r#{timestamp_str}#{indicator.colorize(:light_black)}"
+        $stdout.flush
+        @last_thinking_indicator_time = now
+      end
+    end
+
+    def clear_thinking_indicator
+      return unless @thinking_indicator_count && @thinking_indicator_count > 0
+      $stdout.print "\r#{' ' * 20}\r"
+      @thinking_indicator_count = 0
+      @last_thinking_indicator_time = nil
     end
 
     def display_git_status
@@ -193,16 +224,49 @@ class Display
       return unless tool_call_info && tool_call_info[:name]
 
       func_name = tool_call_info[:name]
+      subtype = tool_call_info[:subtype]
       args_str = format_tool_call_args(tool_call_info[:arguments])
-      display_text = args_str ? "🔧 Tool: #{func_name}(#{args_str})" : "🔧 Tool: #{func_name}"
-      puts display_text.cyan
+      
+      status_icon = case subtype
+                    when 'started' then '▶'
+                    when 'completed' then '✓'
+                    else '🔧'
+                    end
+      
+      status_text = case subtype
+                    when 'started' then 'starting'
+                    when 'completed' then 'completed'
+                    else ''
+                    end
+      
+      display_text = if args_str
+                       "#{status_icon} Tool: #{func_name}(#{args_str})#{status_text.empty? ? '' : " [#{status_text}]"}"
+                     else
+                       "#{status_icon} Tool: #{func_name}#{status_text.empty? ? '' : " [#{status_text}]"}"
+                     end
+      
+      color = subtype == 'completed' ? :green : :cyan
+      puts display_text.send(color)
     end
 
     def format_tool_call_args(args)
       return nil unless args
 
       if args.is_a?(Hash)
-        args_str = args.map { |k, v| "#{k}: #{v.inspect}" }.join(', ')
+        filtered_args = args.reject { |k, _| %w[explanation toolCallId].include?(k) }
+        return nil if filtered_args.empty?
+        
+        args_str = filtered_args.map do |k, v|
+          value = case v
+                  when String
+                    v.length > 50 ? "#{v[0..50]}..." : v
+                  when Hash, Array
+                    v.inspect.length > 50 ? "#{v.inspect[0..50]}..." : v.inspect
+                  else
+                    v.inspect
+                  end
+          "#{k}: #{value}"
+        end.join(', ')
         args_str.length > 100 ? args_str[0..100] + '...' : args_str
       elsif args.is_a?(String) && !args.empty?
         args.length > 100 ? args[0..100] + '...' : args
