@@ -49,7 +49,7 @@ session_tracker: @session_tracker)
     @session_tags = []
     @session_continuation = false
     @current_request = nil
-    @bug_count_per_model = {}
+    @attempt_count_per_model = {}
   end
 
   def run(start_model_index: 0, request: nil)
@@ -61,32 +61,31 @@ session_tracker: @session_tracker)
     @current_request = req
     
     analyze_session_continuation(req)
-    
-    # Save session at start (will reset summary if new session, preserve if continuation)
     save_current_session(req)
     
-    # In continued session: never reset to previous model, always move forward
-    if @session_continuation
-      start_model_index = if model_index_from_request
-                            [model_index_from_request, @current_model_index].max
-                          else
-                            @current_model_index
-                          end
-    else
-      # New session: start from first model in queue
-      @current_model_index = 0
-      start_model_index = model_index_from_request || 0
-    end
-    
+    start_index = determine_start_index(model_index_from_request, start_model_index)
     @display.display_start_message(req, @session_continuation, @session_tags)
 
-    return run_plan_mode(req, start_model_index) if @request_reader.plan_mode
+    return run_plan_mode(req, start_index) if @request_reader.plan_mode
 
     @feature_start_time = Time.now
     @pass_timings = []
-    execute_attempts(start_model_index, req)
+    execute_attempts(start_index, req)
     handle_final_failure unless @last_attempt_success
   end
+
+  private
+
+  def determine_start_index(model_index_from_request, start_model_index)
+    if @session_continuation
+      model_index_from_request ? [model_index_from_request, @current_model_index].max : @current_model_index
+    else
+      @current_model_index = 0
+      model_index_from_request || 0
+    end
+  end
+
+  public
 
   def run_plan_mode(req, start_index = 0)
     update_terminal_title('Planning...')
@@ -119,119 +118,115 @@ session_tracker: @session_tracker)
     @display.update_git_status unless request
   end
 
+  ATTEMPTS_PER_MODEL = 2
+
   def execute_attempts(start_index, req)
     @current_model_index = start_index
-    # Only reset bug count for new sessions, not continuations
-    @bug_count_per_model = {} unless @session_continuation
+    @attempt_count_per_model = {} unless @session_continuation
     highest_index_reached = start_index
     MODELS[@current_model_index..-1].each_with_index do |model, relative_idx|
       idx = @current_model_index + relative_idx
       @current_pass = idx + 1
       @current_model = model
-      # Track the highest model index we've reached in this session (even if skipped)
       highest_index_reached = idx if idx > highest_index_reached
-      
-      # Skip model if it already has 2 bugs in this session
-      if @bug_count_per_model[model] && @bug_count_per_model[model] >= 2
-        next
-      end
-      
-      update_terminal_title("Attempting: #{model}")
-      @display.display_attempt_header(model, idx, MODELS.size)
+      next if (@attempt_count_per_model[model] || 0) >= ATTEMPTS_PER_MODEL
 
-      implementation_start = Time.now
-      success, output = @agent_executor.run(model, req)
-      implementation_time = Time.now - implementation_start
-      
-      unless success
-        @display.display_agent_failure(output)
-        pass_timing = {
-          pass: @current_pass,
-          model: model,
-          implementation_time: implementation_time,
-          review_time: 0,
-          fix_time: 0,
-          total_time: implementation_time
-        }
-        @pass_timings << pass_timing
-        @display.display_pass_timing(pass_timing)
-        next
-      end
-
-      # Store implementation time and output for this pass
-      @current_implementation_time = implementation_time
-      @current_agent_output = output
-      # Save implementation summary for next run
-      save_agent_summary(output) if output && !output.strip.empty?
-      result = process_model_attempt(model, req)
-      break if result == :success
+      break if run_model_attempt(model, idx, req) == :success
     end
-    # Update current model index to the highest we've reached
     @current_model_index = highest_index_reached
   end
 
-  def process_model_attempt(model, req)
-    pass_start_time = Time.now
+  def run_model_attempt(model, idx, req)
+    attempt_number = (@attempt_count_per_model[model] || 0) + 1
+    update_terminal_title("Attempting: #{model} (attempt #{attempt_number}/#{ATTEMPTS_PER_MODEL})")
+    @display.display_attempt_header(model, idx, MODELS.size)
+    
+    start = Time.now
+    success, output, reason = @agent_executor.run(model, req)
+    elapsed = Time.now - start
+
+    unless success
+      record_network_failure(model, output, elapsed, reason)
+      return :continue
+    end
+
+    @current_implementation_time = elapsed
+    @current_agent_output = output
+    save_agent_summary(output) if output&.strip && !output.strip.empty?
+
+    result = process_verification_and_fix(model, req)
+    record_attempt_failure(model) if result != :success
+    result
+  end
+
+  def record_network_failure(model, output, implementation_time, _failure_reason)
+    @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
+    @display.display_agent_failure(output)
     pass_timing = {
       pass: @current_pass,
       model: model,
-      implementation_time: @current_implementation_time,
+      implementation_time: implementation_time,
       review_time: 0,
       fix_time: 0,
-      total_time: 0
+      total_time: implementation_time
     }
+    @pass_timings << pass_timing
+    @display.display_pass_timing(pass_timing)
+  end
+
+  def process_verification_and_fix(model, req)
+    pass_start = Time.now
+    pass_timing = { pass: @current_pass, model: model, implementation_time: @current_implementation_time, review_time: 0, fix_time: 0, total_time: 0 }
 
     update_terminal_title("Verifying: #{model}")
     verified, desc, review_time = @verification_handler.run_verification(model, req, @current_agent_output)
     pass_timing[:review_time] = review_time
     $stdout.puts ''
-
-    # Save verification summary
-    verification_summary = verified ? "YES: #{desc}" : "NO: #{desc}"
-    save_agent_summary(verification_summary)
+    save_agent_summary(verified ? "YES: #{desc}" : "NO: #{desc}")
 
     if verified
-      pass_timing[:total_time] = Time.now - pass_start_time + @current_implementation_time
-      @pass_timings << pass_timing
-      handle_success(desc)
-      handle_final_success(req)
-      @last_attempt_success = true
+      finalize_success(pass_timing, pass_start, desc, req)
       return :success
     end
 
-    @bug_count_per_model[model] = (@bug_count_per_model[model] || 0) + 1
     @display.display_verification_result(false, desc)
     $stdout.puts ''
+    retry_verification_with_fix(model, req, pass_timing, pass_start)
+  end
 
+  def retry_verification_with_fix(model, req, pass_timing, pass_start)
     update_terminal_title("Retrying: #{model}")
     fix_start = Time.now
-    verified, fix_desc, fix_review_time = @verification_handler.retry_with_fix(model, req)
-    pass_timing[:fix_time] = Time.now - fix_start - (fix_review_time || 0)
-    pass_timing[:review_time] += (fix_review_time || 0)
+    verified, desc, review_time = @verification_handler.retry_with_fix(model, req)
+    pass_timing[:fix_time] = Time.now - fix_start - (review_time || 0)
+    pass_timing[:review_time] += (review_time || 0)
     $stdout.puts ''
-
-    # Save fix attempt verification summary
-    fix_summary = verified ? "YES: #{fix_desc}" : "NO: #{fix_desc}"
-    save_agent_summary(fix_summary)
+    save_agent_summary(verified ? "YES: #{desc}" : "NO: #{desc}")
 
     if verified
-      pass_timing[:total_time] = Time.now - pass_start_time + @current_implementation_time
-      @pass_timings << pass_timing
-      handle_success(fix_desc, 'after retry')
-      handle_final_success(req)
-      @last_attempt_success = true
+      finalize_success(pass_timing, pass_start, desc, req, 'after retry')
       return :success
     end
 
-    @bug_count_per_model[model] = (@bug_count_per_model[model] || 0) + 1
     @last_attempt_success = false
-
-    @display.display_verification_result(false, fix_desc, 'after retry')
+    @display.display_verification_result(false, desc, 'after retry')
     $stdout.puts ''
-    pass_timing[:total_time] = Time.now - pass_start_time + @current_implementation_time
+    pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
     @pass_timings << pass_timing
     @display.display_pass_timing(pass_timing)
     :continue
+  end
+
+  def finalize_success(pass_timing, pass_start, desc, req, context = '')
+    pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
+    @pass_timings << pass_timing
+    handle_success(desc, context)
+    handle_final_success(req)
+    @last_attempt_success = true
+  end
+
+  def record_attempt_failure(model)
+    @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
   end
 
 
@@ -248,68 +243,30 @@ session_tracker: @session_tracker)
   def handle_final_success(previous_req = nil)
     update_terminal_title(true)
     CompletionNotifier.notify_completion(success: true)
-    
-    # Save current session with the request that was just processed
     current_req = previous_req || @current_request
     save_current_session(current_req) if current_req
-
     return unless $stdin.tty?
 
-    lock_path = InstanceLock.current_lock_path
-    InstanceLock.release_lock(lock_path) if lock_path
-
+    InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
     update_terminal_title('✅ Passed')
-    $stdout.puts ''
-    @display.puts 'Enter the new request:'.cyan
-    @display.puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
-    $stdout.puts ''
+    $stdout.puts "\nEnter the new request:\n(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)\n\n"
 
     raw_new_req = read_next_request
-    return unless raw_new_req && !raw_new_req.strip.empty?
+    return if raw_new_req.to_s.strip.empty?
 
-    model_index_from_request = extract_model_index(raw_new_req)
+    model_index = extract_model_index(raw_new_req)
     new_req = sanitize_request(raw_new_req)
-    return unless new_req && !new_req.strip.empty?
+    return if new_req.to_s.strip.empty?
 
-    new_lock_path = InstanceLock.acquire_lock
-    unless new_lock_path
-      @display.puts 'Failed to acquire instance lock. Exiting.'.red
-      exit 1
-    end
+    exit 1 unless InstanceLock.acquire_lock
 
     analysis = @session_tracker.analyze_continuation(new_req, previous_req ? {request: previous_req} : nil)
-    is_continuation = analysis[:continuation]
-    tags = analysis[:tags]
+    record_attempt_failure(@current_model) if analysis[:continuation] && user_disagrees_with_verification?(analysis[:tags])
     
-    # If user disagrees that feature is complete (continuation indicates fixing/completing),
-    # treat it as a bug for the model that just passed verification
-    if is_continuation && user_disagrees_with_verification?(new_req, tags)
-      if @current_model
-        @bug_count_per_model[@current_model] = (@bug_count_per_model[@current_model] || 0) + 1
-      end
-    end
-    
-    if is_continuation
-      # In continued session: never reset to previous model, always move forward
-      start_index = if model_index_from_request
-                      [model_index_from_request, @current_model_index].max
-                    else
-                      @current_model_index
-                    end
-    else
-      # New session: start from first model in queue
-      @current_model_index = 0
-      start_index = model_index_from_request || 0
-    end
+    start_index = analysis[:continuation] ? [model_index || 0, @current_model_index].max : (model_index || 0)
     start_index = [[start_index, 0].max, MODELS.size - 1].min
 
-    $stdout.puts ''
-    tag_display = tags.empty? ? '' : " [#{tags.join(', ')}]"
-    request_type = is_continuation ? 'continuation' : 'new request'
-    model_name = MODELS[start_index]
-    @display.puts "Starting #{request_type}#{tag_display} from #{model_name}...".yellow
-    $stdout.puts ''
-
+    @display.puts "\nStarting #{analysis[:continuation] ? 'continuation' : 'new request'}#{analysis[:tags].empty? ? '' : " [#{analysis[:tags].join(', ')}]" } from #{MODELS[start_index]}...\n\n".yellow
     @request_reader = RequestReader.new(@display)
     @request_reader.instance_variable_set(:@plan_mode, false)
     run(start_model_index: start_index, request: new_req)
@@ -403,19 +360,13 @@ session_tracker: @session_tracker)
   end
 
   def save_agent_summary(summary)
-    return unless summary && !summary.strip.empty?
-    return unless @current_request
-
-    # Update session with new summary
-    save_current_session(@current_request, summary)
+    save_current_session(@current_request, summary) if summary&.strip && !summary.strip.empty? && @current_request
   end
 
   def sanitize_request(req)
     return req if req.nil?
 
-    cleaned = req.gsub(NON_INTERACTIVE_NOTICE, "\n").strip
-    cleaned = remove_model_mentions(cleaned)
-    cleaned.gsub(/\n{3,}/, "\n\n")
+    remove_model_mentions(req.gsub(NON_INTERACTIVE_NOTICE, "\n").strip).gsub(/\n{3,}/, "\n\n")
   end
 
   def extract_model_index(req)
@@ -437,22 +388,7 @@ session_tracker: @session_tracker)
     cleaned.gsub(/\s+/, ' ').strip
   end
 
-  def user_disagrees_with_verification?(new_req, tags)
-    return false if new_req.nil? || new_req.strip.empty?
-
-    # Check if tags indicate bug/fix/regression
-    bug_indicating_tags = %w[#bug #regression #hotfix]
-    return true if tags.any? { |tag| bug_indicating_tags.include?(tag) }
-
-    # Check if request text indicates disagreement/incompleteness
-    normalized_req = new_req.downcase
-    disagreement_patterns = [
-      /\b(not|missing|incomplete|doesn't|does not|didn't|did not)\s+(work|implement|complete|done|finished)/,
-      /\b(fix|fixing|broken|wrong|incorrect|error|bug|issue|problem)\b/,
-      /\b(still|yet|also|additionally)\s+(need|missing|not|incomplete)/,
-      /\b(add|adding|implement|implementing|complete|completing)\s+(the|this|that|missing)/
-    ]
-
-    disagreement_patterns.any? { |pattern| normalized_req.match?(pattern) }
+  def user_disagrees_with_verification?(tags)
+    tags.any? { |tag| %w[#bug #regression #hotfix].include?(tag) }
   end
 end
