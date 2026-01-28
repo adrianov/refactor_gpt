@@ -70,6 +70,7 @@ class Superagent
     @current_request = req
     
     analyze_session_continuation(req)
+    @agent_executor.reset_agent_session unless @session_continuation
     save_current_session(req)
     
     start_index = determine_start_index(model_index_from_request, start_model_index)
@@ -244,9 +245,9 @@ class Superagent
   def handle_success(desc, context = '')
     @display.display_verification_result(true, desc, context)
     @display.display_total_runtime(@start_time)
+    @display.display_git_diff
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_passes_recap(@pass_timings)
-    @display.display_git_diff
     @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
   end

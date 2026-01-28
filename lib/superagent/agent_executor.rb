@@ -18,6 +18,11 @@ class AgentExecutor
     @display = display
     @tools_used = []
     @session_tracker = session_tracker
+    @agent_session_id = nil
+  end
+
+  def reset_agent_session
+    @agent_session_id = nil
   end
 
   def test_runner_running?(pid = nil)
@@ -144,11 +149,18 @@ class AgentExecutor
     type = json_obj['type']
     return [nil] * 5 if type == 'thinking' && (json_obj['text'].nil? || json_obj['text'].empty?)
 
+    extract_session_id(json_obj)
+
     [type, extract_text_from_json(json_obj)&.to_s, json_obj['request_id'] || json_obj['stream_id'] || type,
      extract_command_from_json(json_obj),
      (extract_tool_call_info(json_obj) if %w[tool_call tool_result].include?(type))]
   rescue JSON::ParserError
     [nil] * 5
+  end
+
+  def extract_session_id(json_obj)
+    return unless json_obj['session_id']
+    @agent_session_id ||= json_obj['session_id']
   end
 
   def extract_text_from_json(json_obj)
@@ -298,11 +310,10 @@ subtype: json_obj['subtype'] }
       --output-format
       stream-json
       --force
-      --model
-      gemini-3-flash
     ]
     cmd << '--plan' if plan_mode
     cmd.concat(['--mode', 'ask']) if verification_mode
+    cmd.concat(['--resume', @agent_session_id]) if @agent_session_id
     cmd.concat(['--model', model])
     cmd
   end
