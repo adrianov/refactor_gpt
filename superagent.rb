@@ -90,6 +90,9 @@ class Display
     @text_buffer ||= ''
     @at_start_of_line ||= true
 
+    # Collapse multiple trailing newlines to a single newline to avoid extra blank lines
+    @text_buffer = @text_buffer.sub(/\n{2,}\z/, "\n")
+
     # Process any remaining complete lines (these will get timestamps and newlines)
     process_complete_lines
 
@@ -141,6 +144,14 @@ class Display
 
     puts 'Git status:'.cyan
     status.each_line { |line| $stdout.puts "  #{line.chomp}" }
+    $stdout.puts ''
+    display_git_diff
+  end
+
+  def display_git_diff
+    return unless git_repo?
+
+    system("git diff")
     $stdout.puts ''
   end
 
@@ -460,7 +471,7 @@ class AgentExecutor
     type = json_obj['type']
     text = extract_text_from_json(json_obj)
 
-    text = text.to_s.strip unless text.nil?
+    text = text.to_s unless text.nil?
     text = nil if text&.empty?
     [type, text]
   rescue JSON::ParserError
@@ -488,8 +499,13 @@ class AgentExecutor
     end
   end
 
-  def build_and_display_command(*args)
-    cmd = ['agent', '--print', '--force', '--stream-partial-output', '--output-format', 'stream-json']
+  def build_and_display_command(*args, verification_mode: false)
+    cmd = ['agent', '--print', '--stream-partial-output', '--output-format', 'stream-json']
+    if verification_mode
+      cmd << '--mode' << 'ask'
+    else
+      cmd << '--force'
+    end
     cmd.concat(args)
     display_cmd = cmd.map do |arg|
       if arg.length > 50 || arg.include?("\n")
@@ -510,11 +526,11 @@ class AgentExecutor
       output.include?('http/2 stream closed') || output.include?('Connection stalled')
   end
 
-  def run_with_timeout_monitoring(model, wrapped)
+  def run_with_timeout_monitoring(model, wrapped, verification_mode: false)
     # Check if a test runner is already running in the system before starting the agent
     if test_runner_running?
       puts '⚠️  Test runner already running in system, no timeout applied'.yellow
-      return run_without_timeout(model, wrapped)
+      return run_without_timeout(model, wrapped, verification_mode: verification_mode)
     end
 
     test_runner_detected = false
@@ -572,7 +588,7 @@ class AgentExecutor
     end
 
     begin
-      cmd = build_and_display_command('--model', model, wrapped)
+      cmd = build_and_display_command('--model', model, wrapped, verification_mode: verification_mode)
       Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
         process_pid = wait_thr.pid
         execution_start_time = Time.now
@@ -581,7 +597,6 @@ class AgentExecutor
         final_result = ''
         stdin.close
         line_buffer = ''
-        text_buffer = ''
 
         loop do
           break if timed_out
@@ -620,19 +635,17 @@ class AgentExecutor
                 raw_output += remaining
                 line_buffer += remaining
 
-                line_buffer.each_line do |line|
+                # Process remaining complete lines the same way as in main loop
+                while (newline_idx = line_buffer.index("\n"))
+                  line = line_buffer[0..newline_idx]
+                  line_buffer = line_buffer[(newline_idx + 1)..-1] || ''
+
                   type, text = parse_json_stream_line(line.strip)
                   if text && !text.empty?
                     if type == 'result'
                       final_result = text
                     else
-                      text_buffer += text
-                      # Display complete lines
-                      while (newline_idx = text_buffer.index("\n"))
-                        line_to_display = text_buffer[0..newline_idx].strip
-                        text_buffer = text_buffer[(newline_idx + 1)..-1] || ''
-                        puts line_to_display unless line_to_display.empty?
-                      end
+                      @display.print_word(text)
                     end
                   end
                 end
@@ -650,24 +663,19 @@ class AgentExecutor
         if timed_out
           stdout_stderr.close rescue nil
           final_result += "\n[Process terminated due to timeout]"
-        else
-          remaining = stdout_stderr.read rescue ''
-          if remaining && !remaining.empty?
-            last_chunk_time = Time.now
-            raw_output += remaining
-            remaining.each_line do |line|
-              type, text = parse_json_stream_line(line.strip)
-              if text && !text.empty?
-                if type == 'result'
-                  final_result = text
-                else
-                  @display.print_word(text)
-                end
-              end
+        end
+
+        # Process any remaining incomplete line in line_buffer
+        unless line_buffer.empty?
+          type, text = parse_json_stream_line(line_buffer.strip)
+          if text && !text.empty?
+            if type == 'result'
+              final_result = text
+            else
+              @display.print_word(text)
             end
           end
         end
-
 
         execution_complete = true
 
@@ -697,8 +705,8 @@ class AgentExecutor
     end
   end
 
-  def run_without_timeout(model, wrapped)
-    cmd = build_and_display_command('--model', model, wrapped)
+  def run_without_timeout(model, wrapped, verification_mode: false)
+    cmd = build_and_display_command('--model', model, wrapped, verification_mode: verification_mode)
     stdout, stderr, status = Open3.capture3(*cmd)
     raw_output = stdout + stderr
     final_result = ''
@@ -721,14 +729,14 @@ class AgentExecutor
     [output, '', status]
   end
 
-  def run(model, p, max_retries: 3, base_delay: 1)
+  def run(model, p, max_retries: 3, base_delay: 1, verification_mode: false)
     wrapped = wrap_prompt(p)
     retries = 0
 
     loop do
       stdout, stderr, status = nil
       begin
-        stdout, stderr, status = run_with_timeout_monitoring(model, wrapped)
+        stdout, stderr, status = run_with_timeout_monitoring(model, wrapped, verification_mode: verification_mode)
         if status.nil? || !status.success?
           return [false, "Timeout after #{EXECUTION_TIMEOUT}s"] if stdout.nil?
         end
@@ -1020,16 +1028,19 @@ class VerificationHandler
       current_size_bytes = append_section(content_parts, current_size_bytes, max_size_bytes, status_text)
 
       unless diff_output.strip.empty?
-        current_size_bytes = append_diff_section(content_parts, current_size_bytes, max_size_bytes, diff_output, status_output)
+        append_diff_section(content_parts, current_size_bytes, max_size_bytes, diff_output, 
+status_output)
       end
     else
       no_git_text = "No git repository detected. Here are the file contents:\n\n"
       current_size_bytes = append_section(content_parts, current_size_bytes, max_size_bytes, no_git_text)
 
       unless file_contents.strip.empty?
-        current_size_bytes = append_file_contents_section(content_parts, current_size_bytes, max_size_bytes, file_contents)
+        append_file_contents_section(content_parts, current_size_bytes, max_size_bytes, 
+file_contents)
       else
-        current_size_bytes = append_section(content_parts, current_size_bytes, max_size_bytes, "No files found to verify.")
+        append_section(content_parts, current_size_bytes, max_size_bytes, 
+"No files found to verify.")
       end
     end
 
@@ -1057,7 +1068,7 @@ class VerificationHandler
     puts 'Verifying...'.blue
 
     verification_prompt = build_verification_prompt(req)
-    success, output = @agent_executor.run(model, verification_prompt)
+    success, output = @agent_executor.run(model, verification_prompt, verification_mode: true)
     return [false, 'Verification failed'] unless success
 
     verified, desc = parse_res(output.strip)
@@ -1159,7 +1170,6 @@ class Superagent
     @start_time = Time.now unless request
     @display.suggest_git_init unless request
     @display.update_git_status unless request
-    update_terminal_title('Reading request...')
     req = sanitize_request(request || @request_reader.read)
     @request_reader.validate(req)
 
@@ -1254,7 +1264,7 @@ class Superagent
     lock_path = InstanceLock.current_lock_path
     InstanceLock.release_lock(lock_path) if lock_path
 
-    update_terminal_title('Reading request...')
+    update_terminal_title('✅ Passed')
     $stdout.puts ''
     puts 'Enter the new request:'.cyan
     puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
@@ -1369,7 +1379,8 @@ class Superagent
 
     is_fix = fix_keywords.any? { |keyword| new_lower.include?(keyword) }
     is_improvement = improvement_keywords.any? { |keyword| new_lower.include?(keyword) }
-    is_continuation = continuation_keywords.any? { |keyword| new_lower.start_with?(keyword) || new_lower.match?(/\b#{keyword}\s/) }
+    is_continuation = continuation_keywords.any? { |keyword|
+ new_lower.start_with?(keyword) || new_lower.match?(/\b#{keyword}\s/) }
 
     is_fix || is_improvement || is_continuation
   end
