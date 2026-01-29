@@ -212,8 +212,12 @@ class Display
       $stdout.puts ''
     end
 
-    def display_verification_result(verified, desc, context = '')
-      prefix = verified ? '✔ Passed' : '✗ Failed'
+    def display_verification_result(verified, desc, context = '', call_failed: false)
+      prefix = if call_failed
+                 'Verification call did not complete'
+               else
+                 verified ? '✔ Passed' : '✗ Failed'
+               end
       suffix = context.empty? ? '' : " #{context}"
 
       if desc && !desc.empty?
@@ -253,11 +257,11 @@ class Display
 
     def failure_reason_message(output, reason)
       if output.nil? || output.to_s.strip.empty?
-        'no response (retryable)'
+        'no response (retryable, will retry up to 3 times)'
       elsif reason == :unrecoverable
         'backend error (not retryable)'
       elsif reason == :recoverable
-        'connection/network error (retryable)'
+        'connection/network error (retryable, will retry up to 3 times)'
       else
         first_line = output.to_s.strip.lines.first&.strip
         first_line && first_line.length <= 80 ? first_line : 'see output below'

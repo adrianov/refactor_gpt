@@ -230,7 +230,7 @@ class Superagent
 
     if call_failed
       record_attempt_failure(model)
-      @display.display_verification_result(false, desc)
+      @display.display_verification_result(false, desc, '', call_failed: true)
       $stdout.puts ''
       pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
       @pass_timings << pass_timing
@@ -260,7 +260,7 @@ class Superagent
       return [verified, desc, review_time, call_failed, retryable] unless call_failed && retryable
       break if attempt >= VERIFICATION_CALL_RETRIES
 
-      @display.puts 'Verification call failed (retryable), retrying...'.yellow
+      @display.puts 'Connection/network error during verification (retrying up to 3 times)...'.yellow
       $stdout.puts ''
     end
     [last_verified, last_desc, last_review_time, true, false]
