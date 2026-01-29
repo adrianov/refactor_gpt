@@ -100,7 +100,7 @@ class AgentExecutor
 
   def wrap_prompt(p, new_session: false)
     parts = []
-    parts << guidelines_section
+    parts << guidelines_section(always_include: new_session)
     parts << user_context_section
     parts << git_diff_section(new_session)
     parts << working_tree_section(new_session)
@@ -156,10 +156,13 @@ class AgentExecutor
     "\n\nWorking tree (bfs --nohidden, max #{CONTEXT_MAX_LINES} lines):\n#{text}"
   end
 
-  def guidelines_section
+  def guidelines_section(always_include: false)
     content = load_agents_content
     if content.nil? || content.strip.empty?
       content = "Project guidelines (default refactoring instructions):\n#{DEFAULT_USER_INSTRUCTION.strip}"
+    elsif always_include
+      content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.strip}\n\n" \
+                "General coding rules:\n#{DEFAULT_USER_INSTRUCTION.strip}"
     else
       content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.strip}"
     end
@@ -303,11 +306,16 @@ class AgentExecutor
     func_name = extract_tool_name(tool_call, json_obj)
     return nil unless func_name
 
-    tool_info = { name: func_name, arguments: parse_tool_args(extract_tool_args(tool_call, json_obj)), 
-subtype: json_obj['subtype'] }
+    tool_info = {
+      name: func_name,
+      arguments: parse_tool_args(extract_tool_args(tool_call, json_obj)),
+      subtype: json_obj['subtype'],
+      result: json_obj['result'] || json_obj['content']
+    }
     @tools_used << tool_info.dup unless @tools_used.any? { |t|
- t[:name] == func_name && t[:subtype] == tool_info[:subtype] }
-    
+      t[:name] == func_name && t[:subtype] == tool_info[:subtype]
+    }
+
     tool_info
   end
 
@@ -382,7 +390,7 @@ subtype: json_obj['subtype'] }
 
   RECOVERABLE_NETWORK_RETRIES = 2
 
-  def retryable_network_error?(output)
+  def retryable_error?(output)
     return false if output.to_s.empty?
 
     output.match?(/CANCEL|canceled|stream closed|0x8|http\/2 stream closed|Connection stalled/i)
@@ -391,20 +399,21 @@ subtype: json_obj['subtype'] }
   UNRECOVERABLE_PHRASES = %w[503 502 404].freeze
   UNRECOVERABLE_MODEL_PHRASES = %w[not found not available unavailable invalid].freeze
 
-  def unrecoverable_network_error?(output)
+  def unrecoverable_error?(output)
     return false if output.to_s.empty?
 
     n = output.downcase
     UNRECOVERABLE_PHRASES.any? { |p| n.include?(p) } ||
       (n.include?('rate limit') && n.include?('exceeded')) ||
+      n.include?('cannot use this model') ||
       (n.include?('model') && UNRECOVERABLE_MODEL_PHRASES.any? { |p| n.include?(p) })
   end
 
   def run_with_timeout_monitoring(model, wrapped, verification_mode: false)
     @tools_used = []
     @verification_mode = verification_mode
-    @passthrough = false
-    return run_without_timeout(model, wrapped, verification_mode: verification_mode) if test_runner_running?
+    @passthrough = test_runner_running?
+    return run_without_timeout(model, wrapped, verification_mode: verification_mode) if @passthrough
 
     @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil, 
 start: nil }
@@ -443,15 +452,18 @@ start: nil }
     wrapped = wrap_prompt(p, new_session: new_session)
     retries = 0
     loop do
-      stdout, _, status = run_with_timeout_monitoring(model, wrapped, verification_mode: verification_mode)
+      stdout, _, status, timeout_reason = run_with_timeout_monitoring(model, wrapped, 
+verification_mode: verification_mode)
       output = stdout || ''
-      return [true, output, nil] if status&.success?
-      
-      reason = if (status.nil? || !status.success?) && stdout.nil?
+      return [true, output, nil] if status&.success? || (verification_mode && output.strip.length > 0)
+
+      reason = if timeout_reason == :no_data
                  :recoverable
-               elsif unrecoverable_network_error?(output)
+               elsif (status.nil? || !status.success?) && stdout.nil?
+                 :recoverable
+               elsif unrecoverable_error?(output)
                  :unrecoverable
-               elsif retryable_network_error?(output) || output.include?('Timeout after')
+               elsif retryable_error?(output) || output.include?('Timeout after')
                  :recoverable
                end
 
@@ -488,7 +500,13 @@ start: nil }
   def process_json_stream_line(line, final)
     type, text, stream_id, command, tool = parse_json_stream_line(line.strip)
     unless @passthrough
-      @display.display_tool_call(tool) if tool
+      if tool
+        @display.display_tool_call(tool)
+        if tool[:name] == 'ask' && tool[:subtype] == 'completed'
+          @display.puts "Ask output:".cyan
+          tool[:result].to_s.each_line { |l| @display.puts "  #{l.chomp}".light_black }
+        end
+      end
       @display.puts "Running: #{command}".green if command && !command.empty?
     end
     return final unless text && !text.empty?
@@ -516,6 +534,7 @@ start: nil }
         break if @state[:complete]
         if @state[:pid] && !@state[:detected] && test_runner_running?(@state[:pid])
           @state[:detected] = @state[:disabled] = true
+          @passthrough = true
           @display.puts '⚠️  Test runner detected (child of agent), disabling timeout'.yellow
         end
       end
@@ -535,8 +554,10 @@ start: nil }
   def check_timeouts
     now = Time.now
     if @state[:start] && (now - @state[:start]) >= MAX_EXECUTION_TIMEOUT
+      @state[:timeout_reason] = :max_time
       terminate_agent("maximum execution time (#{MAX_EXECUTION_TIMEOUT}s)")
     elsif @state[:last_chunk] && (now - @state[:last_chunk]) >= EXECUTION_TIMEOUT
+      @state[:timeout_reason] = :no_data
       terminate_agent("no data received (#{EXECUTION_TIMEOUT}s)")
     end
   end
@@ -562,7 +583,7 @@ start: nil }
   end
 
   def setup_subprocess_run(model, wrapped, plan_mode: false)
-    @passthrough = !$stdin.tty?
+    @passthrough ||= !$stdin.tty?
     @display.reset_stream_tracking unless @passthrough
     cmd = build_command(model: model, plan_mode: plan_mode)
     display_command(cmd, wrapped) unless @passthrough
@@ -614,12 +635,14 @@ start: nil }
   def finalize_execution(raw, final, wait_thr)
     status = wait_thr.value rescue Struct.new(:success?).new(false)
     status = Struct.new(:success?).new(false) if @state && @state[:timed_out]
+    out = final.empty? ? raw : final
+    success_for_display = status.success? || (@verification_mode && out.to_s.strip.length > 0)
     unless @passthrough
       @display.flush_word_buffer
       display_tools_summary
-      @display.display_agent_call_result(status.success?, @tools_used.size)
+      @display.display_agent_call_result(success_for_display, @tools_used.size)
     end
-    [final.empty? ? raw : final, '', status]
+    [out, '', status, @state&.dig(:timeout_reason)]
   end
 
   def display_tools_summary

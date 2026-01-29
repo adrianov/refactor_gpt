@@ -6,6 +6,7 @@ require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
 require_relative "lib/refactor_gpt_utils"
 require_relative "lib/completion_notifier"
+require_relative "lib/refactor_instructions"
 require "shellwords"
 require "oj"
 require "tempfile"
@@ -13,6 +14,7 @@ require "tempfile"
 # Class to interact with OpenAI API
 class OpenAi
   include AgentsFileHandler
+  include RefactorInstructions
 
   def initialize(model: nil, debug: false)
     @debug = debug
@@ -93,7 +95,7 @@ user_instruction)
     fix_instruction = "Fix these issues from the previous refactoring step:\n#{warning_text}"
     fix_instruction += "\n\nOriginal instruction: #{user_instruction}" if user_instruction
 
-    raw_response = client.ask(refactor_messages(current_file_codes, fix_instruction))
+    raw_response = client.ask(refactor_messages(current_file_codes, fix_instruction), title: "Fixing warnings".cyan)
     ResponseParser.parse_files_from_response(raw_response, current_file_codes.keys, exit_on_error: false)
   end
 
@@ -123,8 +125,8 @@ user_instruction)
     [
       {role: "system", content: "You are an expert code reviewer. Assess if the user's refactoring instruction " \
                                "has been fully fulfilled. Respond ONLY with a JSON object: " \
-                               "{\"satisfied\": true/false, \"reason\": \"brief explanation\", " \
-                               "\"warnings\": [{\"message\": \"...\", \"probability\": 0..1, \"critical\": true/false}]}"},
+                               "{\"satisfied\": true/false, \"reason\": \"brief explanation\", \"warnings\": " \
+                               "[{\"message\": \"...\", \"probability\": 0..1, \"critical\": true/false}]}"},
       {role: "user", content: prompt}
     ]
   end
@@ -185,7 +187,9 @@ user_instruction)
 
   def process_stage(client, index, current_file_codes, user_instruction)
     display_stage_info(client, index)
-    raw_response = client.ask(refactor_messages(current_file_codes, user_instruction))
+    model_name = client.instance_variable_get(:@model)
+    raw_response = client.ask(refactor_messages(current_file_codes, user_instruction),
+      title: "Refactoring with #{model_name}".cyan)
     refactored_files = ResponseParser.parse_files_from_response(raw_response, current_file_codes.keys,
       exit_on_error: false)
 
@@ -271,7 +275,9 @@ user_instruction)
 
       Files provided as context use this format in the prompt and must NOT be
       returned:
-      <content filename="path/to/file.rb">complete file content</content>
+      <content filename="path/to/file.rb">
+      complete file content
+      </content>
 
       Content between <full_file_contents_to_replace> and </full_file_contents_to_replace> tags MUST be the complete file
       content from the first line to the last line. Never abbreviate, cut, or
@@ -302,59 +308,9 @@ user_instruction)
       Files are provided below using <content> tags. You may use some files only as
       context and leave them unchanged. Only return files you actually modify.
 
-      #{file_codes.map { |path, code| "<content filename=\"#{path}\">#{code}</content>" }.join("\n\n")}
+      #{file_codes.map { |path, code| "<content filename=\"#{path}\">\n#{code}\n</content>" }.join("\n\n")}
     HEREDOC
   end
-
-  DEFAULT_USER_INSTRUCTION = <<~HEREDOC
-    You are refactoring the following code. Apply these rules unless the user
-    explicitly overrides them:
-
-    1. Correctness & Robustness
-       - Identify and fix bugs or obvious mistakes.
-       - Improve error handling where it is clearly insufficient or unsafe.
-       - Prefer failing fast with clear messages over silent failures.
-
-    2. Readability & Naming
-       - Use clear, descriptive names for variables, methods, and classes.
-       - Avoid unnecessary abbreviations unless they are domain-standard.
-
-    3. Structure & Size
-       - Prefer small, focused methods.
-       - Where it improves clarity, extract helper methods instead of enforcing
-         an arbitrary line limit.
-       - Keep lines reasonably short (aim for <= 100 characters), but do not
-         harm readability just to satisfy a strict width.
-
-    4. Simplicity
-       - Simplify complex conditionals and branching where possible.
-       - Remove dead code and unnecessary indirection.
-       - Inline variables that are used only once when it improves clarity.
-
-    5. Style & Consistency
-       - Follow idiomatic Ruby style (Ruby community conventions).
-       - Keep formatting consistent with the surrounding code.
-
-    6. Comments & Documentation
-       - Preserve all existing comments verbatim unless they refer to code you
-       significantly change or a TODO you implement.
-       - Do not add new comments unless the user explicitly asks for them.
-
-    7. Behavior Preservation
-       - Preserve existing business logic and external behavior unless there is
-         a clear bug or the user explicitly requests a change.
-       - When you must change behavior to fix a bug, keep the change as small
-         and local as possible.
-
-    8. TODOs
-       - Implement TODOs only if they are fully specified and safe to complete
-       without guessing about missing requirements.
-       - If a TODO is ambiguous, leave it in place and do not invent behavior.
-
-    9. Default Behavior
-       - Do not change code behavior unless the user specifically asks for it
-       or a change is required to fix a clear bug.
-  HEREDOC
 end
 
 # Main runner class
