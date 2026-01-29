@@ -358,9 +358,28 @@ class Display
 
     def format_string_value(v)
       return v if v.length <= 50
+      return format_url_value(v) if v.match?(%r{\Ahttps?://})
       return format_path_value(v) if v.include?('/') && v.length > 40
-      
+
       "#{v[0..47]}..."
+    end
+
+    def format_url_value(v)
+      m = v.match(%r{\A(https?://[^/]+)(/.*)?\z})
+      return v if !m || v.length <= 80
+
+      origin = m[1]
+      path = m[2]
+      return origin if path.nil? || path.empty?
+      return v if (origin.length + path.length) <= 80
+
+      "#{origin}/...#{url_path_suffix(path)}"
+    end
+
+    def url_path_suffix(path)
+      filename = path.split('/').last
+      return '' if filename.nil? || filename.empty?
+      filename.length > 30 ? filename[-27..] : filename
     end
 
     def format_path_value(v)
