@@ -590,7 +590,6 @@ start: nil }
         break if @state[:complete]
         if @state[:pid] && !@state[:detected] && test_runner_running?(@state[:pid])
           @state[:detected] = @state[:disabled] = true
-          @passthrough = true
           @display.puts '⚠️  Test runner detected (child of agent), disabling timeout'.yellow
         end
       end
