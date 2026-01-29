@@ -57,10 +57,10 @@ class VerificationHandler
   end
 
   def parse_yes_res(n)
-    m = n.match(/\bYES\b\s*:?\s*(.*)/i)
+    m = n.match(/\bYES\b\s*:?\s*(.*)/m)
     return [true, 'Passed'] unless m && !m[1].strip.empty?
 
-    [true, remove_duplicates(m[1].strip.split(/\b(?:YES|NO)\s*:?\s*/i).first.strip)]
+    [true, m[1].strip]
   end
 
   def remove_duplicates(text)
@@ -130,7 +130,8 @@ class VerificationHandler
 
   def build_verification_prompt(req, previous_agent_response = nil)
     user_content = build_verification_user_content(req, previous_agent_response)
-    "#{build_verification_system_instruction}\n\n---\n\n#{user_content}"
+    guidelines = @agent_executor.guidelines_section(always_include: true)
+    "#{build_verification_system_instruction}\n\n---\n\n#{guidelines}\n\n---\n\n#{user_content}"
   end
 
   def run_verification(model, req, previous_agent_response = nil)

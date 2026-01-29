@@ -30,7 +30,8 @@ class SessionTracker
     return {tags: []} unless client
 
     prompt = build_classification_prompt(request)
-    response = query_ask_client(client, prompt)
+    response = query_ask_client(client, prompt, title: "Classifying request")
+    @display.puts "Tags: #{response}".light_black if response && !response.strip.empty?
     tags = parse_classification_response(response)
     {tags: tags}
   rescue StandardError => e
@@ -44,7 +45,10 @@ class SessionTracker
     client = create_ask_client
     return {continuation: false, tags: []} unless client
 
-    response = query_ask_client(client, build_continuation_analysis_prompt(new_request, previous_session[:request]))
+    response = query_ask_client(client,
+      build_continuation_analysis_prompt(new_request, previous_session[:request]),
+      title: "Analyzing continuation")
+    @display.puts "Continuation: #{response}".light_black if response && !response.strip.empty?
     parse_continuation_response(response)
   rescue StandardError => e
     @display.puts "Warning: Failed to analyze continuation: #{e.message}".yellow
@@ -55,7 +59,8 @@ class SessionTracker
     client = create_ask_client
     return default_description(request) unless client
 
-    response = query_ask_client(client, build_description_prompt(request, tags))
+    response = query_ask_client(client, build_description_prompt(request, tags), title: "Generating description")
+    @display.puts "Description: #{response}".light_black if response && !response.strip.empty?
     extract_description(response) || default_description(request)
   rescue StandardError => e
     @display.puts "Warning: Failed to generate description: #{e.message}".yellow
@@ -157,7 +162,7 @@ class SessionTracker
   end
 
   def create_ask_client
-    return AskGeminiClient.new(progress: false) if Utility.gemini_configured?
+    return AskGeminiClient.new(progress: true) if Utility.gemini_configured?
     return AskGptClient.new if Utility.openai_configured?
 
     nil
@@ -271,16 +276,16 @@ class SessionTracker
     HEREDOC
   end
 
-  def query_ask_client(client, prompt)
+  def query_ask_client(client, prompt, title: nil)
     if client.is_a?(AskGeminiClient)
-      client.ask([{role: "user", content: prompt}], title: nil)
+      client.ask([{role: "user", content: prompt}], title: title)
     else
       system_msg = "You are a request analyzer. Provide concise, structured responses."
       messages = [
         {role: "system", content: system_msg},
         {role: "user", content: prompt}
       ]
-      client.ask(messages, title: nil)
+      client.ask(messages, title: title)
     end
   end
 
