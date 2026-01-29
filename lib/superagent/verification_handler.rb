@@ -33,7 +33,7 @@ class VerificationHandler
   def parse_res(res)
     return [false, res] if res.nil? || res.strip.empty?
 
-    n = normalize_response(res)
+    n = res.strip
     up = n.upcase
 
     # Prioritize NO if both are present and NO comes first
@@ -47,15 +47,6 @@ class VerificationHandler
     else
       [false, res]
     end
-  end
-
-  def normalize_response(res)
-    normalized = res.strip
-    normalized = normalized.gsub(/\*\*(.*?)\*\*/, '\1')
-    normalized = normalized.gsub(/\*(.*?)\*/, '\1')
-    normalized = normalized.gsub(/__(.*?)__/, '\1')
-    normalized = normalized.gsub(/_(.*?)_/, '\1')
-    normalized.strip
   end
 
   def parse_no_res(n)
@@ -75,13 +66,12 @@ class VerificationHandler
   def remove_duplicates(text)
     return text if text.length < 20
 
-    norm = text.gsub(/\s+/, ' ').strip
+    norm = text.split.join(' ')
     half = norm.length / 2
     return text if half < 10
 
     first = norm[0, half]
-    second = (norm[half..] || '').gsub(/\s+/, ' ').strip
-    
+    second = (norm[half..] || '').split.join(' ')
     check_and_strip(text, first, second)
   end
 
