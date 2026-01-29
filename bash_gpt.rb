@@ -7,7 +7,7 @@ require_relative "lib/completion_notifier"
 require "shellwords"
 require "rbconfig"
 require "colorize"
-require "json"
+require "oj"
 
 # Simple system information detection with memoization
 class SystemInfo
@@ -131,8 +131,8 @@ class OpenAi
       {role: "user", content: user_instruction}
     ], json: true)
 
-    JSON.parse(response || "{}")
-  rescue JSON::ParserError => e
+    Oj.load(response || "{}")
+  rescue Oj::ParseError => e
     warn "JSON parsing error: #{e.message}" if @debug
     warn "Raw response: #{response}" if @debug
     {}
@@ -232,7 +232,7 @@ ai = OpenAi.new(debug: debug_mode)
 
   if debug_mode
     puts "AI Response:".yellow
-    puts JSON.pretty_generate(result)
+    puts Oj.dump(result, mode: :compat, indent: 2)
   end
 
   if result["context_commands"]&.any?

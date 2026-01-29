@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require 'json'
+require 'oj'
 require 'digest'
 require 'fileutils'
 require_relative '../../ask_gpt'
@@ -100,7 +100,7 @@ class SessionTracker
     }
 
     session_file = session_file_path
-    File.write(session_file, JSON.pretty_generate(session_data))
+    File.write(session_file, Oj.dump(session_data, mode: :compat, indent: 2))
     cleanup_old_sessions
   end
 
@@ -157,8 +157,8 @@ class SessionTracker
     return nil unless File.exist?(file_path)
 
     content = File.read(file_path)
-    JSON.parse(content, symbolize_names: true)
-  rescue JSON::ParserError
+    Oj.load(content, symbol_keys: true)
+  rescue Oj::ParseError
     nil
   rescue StandardError
     nil
