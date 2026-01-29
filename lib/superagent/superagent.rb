@@ -155,7 +155,13 @@ class Superagent
       highest_index_reached = idx if idx > highest_index_reached
       next if (@attempt_count_per_model[model] || 0) >= ATTEMPTS_PER_MODEL
 
-      break if run_model_attempt(model, idx, req) == :success
+      result = run_model_attempt(model, idx, req)
+      break if result == :success
+      if result == :switch_to_auto_only
+        @display.puts 'Usage limit reached; switching to auto-only model queue.'.yellow
+        execute_attempts(0, req)
+        return
+      end
     end
     @current_model_index = highest_index_reached
   end
@@ -170,8 +176,7 @@ class Superagent
     elapsed = Time.now - start
 
     unless success
-      record_network_failure(model, output, elapsed, reason)
-      return :continue
+      return record_network_failure(model, output, elapsed, reason) || :continue
     end
 
     @current_implementation_time = elapsed
@@ -184,7 +189,10 @@ class Superagent
   end
 
   def record_network_failure(model, output, implementation_time, reason = nil)
-    AutoOnlyLock.create if reason == :unrecoverable && @agent_executor.usage_unrecoverable?(output)
+    if reason == :unrecoverable && @agent_executor.usage_unrecoverable?(output)
+      AutoOnlyLock.create
+      @auto_only = true
+    end
     @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
     @display.display_agent_failure(output, reason)
     pass_timing = {
@@ -197,6 +205,7 @@ class Superagent
     }
     @pass_timings << pass_timing
     @display.display_pass_timing(pass_timing)
+    (@auto_only && reason == :unrecoverable && @agent_executor.usage_unrecoverable?(output)) ? :switch_to_auto_only : nil
   end
 
   def process_verification_and_fix(model, req)
@@ -371,7 +380,7 @@ class Superagent
     @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
-    @display.display_all_attempts_failed
+    @display.display_all_attempts_failed(@current_request)
     @display.display_total_runtime(@start_time)
     save_current_session(@current_request) if @current_request
     CompletionNotifier.notify_completion(success: false)

@@ -456,7 +456,8 @@ class AgentExecutor
     @passthrough = test_runner_running?
     return run_without_timeout(model, wrapped, verification_mode: verification_mode) if @passthrough
 
-    @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil, start: nil }
+    @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil, 
+start: nil }
     monitor_thread = start_monitor_thread
     timeout_thread = start_timeout_thread
 
