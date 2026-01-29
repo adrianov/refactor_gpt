@@ -53,6 +53,10 @@ class Superagent
       session_tracker: @session_tracker
     )
     @start_time = nil
+    @active_elapsed = 0
+    @waiting_elapsed = 0
+    @active_start = nil
+    @waiting_start = nil
     @current_pass = nil
     @current_model = nil
     @current_model_index = 0
@@ -71,7 +75,12 @@ class Superagent
 
   def run(start_model_index: 0, request: nil, continuation_analysis: nil)
     initialize_run(request)
+    @waiting_start = Time.now if request.nil?
     raw_req = request || @request_reader.read
+    if @waiting_start
+      @waiting_elapsed += Time.now - @waiting_start
+      @waiting_start = nil
+    end
     model_index_from_request = extract_model_index(raw_req)
     req = sanitize_request(raw_req)
     @request_reader.validate(req)
@@ -98,11 +107,13 @@ class Superagent
 
     @feature_start_time = Time.now
     @pass_timings = []
+    @active_start = Time.now
     execute_attempts(start_index, req)
     handle_final_failure unless @last_attempt_success
   end
 
   def run_plan_mode(req, start_index = 0)
+    @active_start = Time.now
     update_terminal_title('Planning...')
     @display.puts 'Running in plan mode...'.cyan
     $stdout.puts ''
@@ -301,6 +312,25 @@ class Superagent
     @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
   end
 
+  def add_active_segment
+    return unless @active_start
+
+    @active_elapsed += Time.now - @active_start
+    @active_start = nil
+  end
+
+  def add_waiting_segment
+    return unless @waiting_start
+
+    @waiting_elapsed += Time.now - @waiting_start
+    @waiting_start = nil
+  end
+
+  def finalize_runtime_before_display
+    add_active_segment
+    add_waiting_segment
+  end
+
 
   def handle_success(desc, context = '')
     @display.display_git_diff
@@ -309,7 +339,8 @@ class Superagent
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_passes_recap(@pass_timings)
     @display.display_verification_result(true, desc, context)
-    @display.display_total_runtime(@start_time)
+    finalize_runtime_before_display
+    @display.display_total_runtime(@start_time, active_elapsed: @active_elapsed, waiting_elapsed: @waiting_elapsed)
   end
 
   def handle_final_success(previous_req = nil)
@@ -330,6 +361,7 @@ class Superagent
       execute_new_request(combined, previous_req, model_index)
     else
       InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
+      add_active_segment
       prompt_for_new_request(previous_req)
     end
   end
@@ -338,7 +370,13 @@ class Superagent
     update_terminal_title('✅ Passed')
     $stdout.puts "\nEnter the new request:\n(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)\n\n"
 
+    @waiting_start = Time.now
     raw_new_req = @request_reader.read_interactive_silent
+    if @waiting_start
+      @waiting_elapsed += Time.now - @waiting_start
+      @waiting_start = nil
+    end
+    @active_start = Time.now
     return if raw_new_req.to_s.strip.empty?
 
     model_index = extract_model_index(raw_new_req)
@@ -372,7 +410,8 @@ class Superagent
   end
 
   def handle_plan_success
-    @display.display_total_runtime(@start_time)
+    finalize_runtime_before_display
+    @display.display_total_runtime(@start_time, active_elapsed: @active_elapsed, waiting_elapsed: @waiting_elapsed)
     @display.display_git_status
     CompletionNotifier.notify_completion(success: true)
     update_terminal_title(true)
@@ -385,7 +424,8 @@ class Superagent
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_all_attempts_failed(@current_request)
-    @display.display_total_runtime(@start_time)
+    finalize_runtime_before_display
+    @display.display_total_runtime(@start_time, active_elapsed: @active_elapsed, waiting_elapsed: @waiting_elapsed)
     save_current_session(@current_request) if @current_request
     CompletionNotifier.notify_completion(success: false)
     update_terminal_title(false)

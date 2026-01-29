@@ -237,11 +237,13 @@ class Display
       $stdout.puts ''
     end
 
-    def display_total_runtime(start_time)
+    def display_total_runtime(start_time, active_elapsed: nil, waiting_elapsed: nil)
       return unless start_time
 
-      elapsed = Time.now - start_time
-      puts "Run time: #{format_duration(elapsed)}".cyan
+      active = active_elapsed
+      active = Time.now - start_time if active.nil?
+      puts "Run time: #{format_duration(active)}".cyan
+      puts "Waiting for input: #{format_duration(waiting_elapsed)}".cyan if waiting_elapsed && waiting_elapsed >= 1
     end
 
     def display_agent_failure(output = nil, reason = nil)
