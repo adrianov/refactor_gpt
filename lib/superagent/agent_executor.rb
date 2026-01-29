@@ -426,7 +426,7 @@ class AgentExecutor
     @display.puts "  Prompt: #{preview}".light_black unless preview.empty?
   end
 
-  RECOVERABLE_NETWORK_RETRIES = 2
+  RECOVERABLE_NETWORK_RETRIES = 2 # 1 initial + 2 retries = 3 total attempts
 
   def retryable_error?(output)
     return false if output.to_s.empty?
