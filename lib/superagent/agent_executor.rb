@@ -25,10 +25,14 @@ class AgentExecutor
     @tools_used = []
     @session_tracker = session_tracker
     @agent_session_id = nil
+    @compact_pass_run = false
+    @model_call_finished_since_compact = false
   end
 
   def reset_agent_session
     @agent_session_id = nil
+    @compact_pass_run = false
+    @model_call_finished_since_compact = false
   end
 
   def resume_with_session_id(id)
@@ -234,7 +238,7 @@ class AgentExecutor
       if content.is_a?(Array)
         text_content = content.find { |c| c['type'] == 'text' }
         text = text_content ? text_content['text'] : nil
-        return text if text && !text.strip.empty?
+        return text if text && !text.to_s.strip.empty?
       elsif content.is_a?(String) && !content.strip.empty?
         return content
       end
@@ -243,7 +247,7 @@ class AgentExecutor
       json_obj['result']
     when 'thinking'
       text = json_obj['text']
-      return nil if text.nil? || text.strip.empty?
+      return nil if text.nil? || text.to_s.strip.empty?
       text
     when 'step', 'tool_call', 'tool_result'
       json_obj['step'] || json_obj['text'] || json_obj['content'] || json_obj['result']
@@ -368,6 +372,7 @@ class AgentExecutor
   end
 
   def looks_like_command?(cmd)
+    cmd = cmd.to_s
     return false if cmd.length < 4 || cmd.length > 500
     return false unless cmd.match?(/^[a-zA-Z0-9_\-\.\/\s\:\;\,\|\&\<\>\(\)\"\']+$/)
     # Reject single-word fragments that are not paths or flags (e.g. "run", "and a")
@@ -395,6 +400,7 @@ class AgentExecutor
   # Resuming with non-auto model: run agent --model auto -- /compact first to reduce context; skips if auto or no session.
   def run_compact_pass_if_needed(model)
     return unless @agent_session_id && model != 'auto'
+    return if @compact_pass_run && !@model_call_finished_since_compact
 
     @display.puts 'Compacting context (model auto)...'.light_black
     cmd = build_command(model: 'auto', plan_mode: false) + ['--', '/compact']
@@ -405,6 +411,8 @@ class AgentExecutor
         wait_thr.value
       end
     end
+    @compact_pass_run = true
+    @model_call_finished_since_compact = false
   rescue Timeout::Error
     @display.puts 'Compact pass timed out; continuing with main run.'.yellow
   end
@@ -475,15 +483,17 @@ start: nil }
     wrapped = wrap_prompt(p, new_session: new_session)
     run_compact_pass_if_needed(model)
     cmd = setup_subprocess_run(model, wrapped, plan_mode: true)
-    
+
     begin
-      Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
+      out = Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
         @state = { timed_out: false }
         stdin.write(wrapped)
         stdin.close
         result = process_agent_output(stdout_stderr, wait_thr)
         [result[2].success?, result[0]]
       end
+      @model_call_finished_since_compact = true
+      out
     rescue StandardError => e
       @display.puts "❌ Agent execution error: #{e.message}".red
       [false, "Execution error: #{e.message}"]
@@ -495,8 +505,9 @@ start: nil }
     run_compact_pass_if_needed(model)
     retries = 0
     loop do
-      stdout, _, status, timeout_reason = run_with_timeout_monitoring(model, wrapped, 
-verification_mode: verification_mode)
+      stdout, _, status, timeout_reason = run_with_timeout_monitoring(model, wrapped,
+        verification_mode: verification_mode)
+      @model_call_finished_since_compact = true
       output = stdout || ''
       return [true, output, nil] if status&.success? || (verification_mode && output.strip.length > 0)
 
