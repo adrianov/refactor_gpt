@@ -68,8 +68,10 @@ class RequestReader
     end
 
     def read
-      piped = read_from_stdin
-      return piped if piped && !piped.to_s.strip.empty?
+      unless $stdin.tty?
+        piped = read_from_stdin
+        return piped if piped && !piped.to_s.strip.empty?
+      end
       read_from_argv || read_interactive
     end
 

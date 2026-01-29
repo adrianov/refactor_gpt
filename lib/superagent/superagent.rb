@@ -439,7 +439,21 @@ class Superagent
     exit 1
   end
 
-  def update_terminal_title(_phase)
+  def update_terminal_title(phase)
+    return unless $stdout.tty? || $stderr.tty?
+
+    title = case phase
+            when true then '✅ Done'
+            when false then '❌ Error'
+            else phase.to_s
+            end
+    project_name = File.basename(Dir.pwd)
+    title = "#{project_name}: #{title}"
+    sequence = "\033]0;#{title}\007"
+    $stderr.print sequence if $stderr.tty?
+    $stderr.flush if $stderr.tty?
+  rescue StandardError
+    # Ignore terminal title update errors
   end
 
   def apply_continuation_analysis(analysis)
