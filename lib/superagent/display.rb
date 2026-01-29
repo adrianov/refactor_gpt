@@ -93,7 +93,7 @@ class Display
       @text_buffer = @text_buffer.sub(/\n{2,}\z/, "\n")
       process_complete_lines
 
-        unless @text_buffer.strip.empty?
+      unless @text_buffer.strip.empty?
         ensure_timestamp if @at_start_of_line
         $stdout.print body(@text_buffer)
         $stdout.puts '' unless @text_buffer.end_with?("\n")
@@ -169,6 +169,28 @@ class Display
       puts req.yellow
       $stdout.puts ''
       display_git_status
+    end
+
+    def display_pending_hint
+      $stdout.puts ''
+      puts '--- Queue input (type below, Enter twice to add) ---'.cyan
+      puts 'Extra requests are sent together to the next run.'.light_black
+      $stdout.puts ''
+    end
+
+    def display_pending_queue_reminder(queue_size)
+      n = queue_size || 0
+      suffix = n.positive? ? " (#{n} queued)" : ''
+      puts "📥 Queue#{suffix}: type request, Enter twice to add.".cyan
+      $stdout.puts ''
+    end
+
+    def display_pending_list(requests)
+      return if requests.nil? || requests.empty?
+
+      puts "Using #{requests.size} queued request(s):".cyan
+      requests.each_with_index { |r, i| $stdout.puts body("  #{i + 1}. #{r.lines.first&.chomp}") }
+      $stdout.puts ''
     end
 
     def display_session_type(continuation, tags)

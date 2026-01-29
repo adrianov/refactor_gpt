@@ -5,6 +5,7 @@ require_relative "request_reader"
 require_relative "agent_executor"
 require_relative "verification_handler"
 require_relative "session_tracker"
+require_relative "pending_request_queue"
 require_relative "../completion_notifier"
 require_relative "../instance_lock"
 require_relative "../../ask_gpt"
@@ -59,6 +60,9 @@ class Superagent
     @session_continuation = false
     @current_request = nil
     @attempt_count_per_model = {}
+    @pending_queue = PendingRequestQueue.new(@display)
+    @input_thread = nil
+    @input_wakeup_writer = nil
   end
 
   def run(start_model_index: 0, request: nil)
@@ -78,6 +82,8 @@ class Superagent
 
     return run_plan_mode(req, start_index) if @request_reader.plan_mode
 
+    @display.display_pending_hint if $stdin.tty?
+    start_pending_input_thread if $stdin.tty?
     @feature_start_time = Time.now
     @pass_timings = []
     execute_attempts(start_index, req)
@@ -146,7 +152,8 @@ class Superagent
     attempt_number = (@attempt_count_per_model[model] || 0) + 1
     update_terminal_title("Attempting: #{model} (attempt #{attempt_number}/#{ATTEMPTS_PER_MODEL})")
     @display.display_attempt_header(model, idx, MODELS.size)
-    
+    show_queue_reminder_if_tty
+
     start = Time.now
     success, output, = @agent_executor.run(model, req, new_session: !@session_continuation)
     elapsed = Time.now - start
@@ -257,10 +264,21 @@ class Superagent
     CompletionNotifier.notify_completion(success: true)
     current_req = previous_req || @current_request
     save_current_session(current_req) if current_req
+    ensure_pending_input_stopped
     return unless $stdin.tty?
 
-    InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
-    prompt_for_new_request(previous_req)
+    pending = @pending_queue.take_all
+    if pending.any?
+      combined = @pending_queue.to_combined_request(pending)
+      @display.display_pending_list(pending)
+      InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
+      exit 1 unless InstanceLock.acquire_lock
+      model_index = extract_model_index(combined)
+      execute_new_request(combined, previous_req, model_index)
+    else
+      InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
+      prompt_for_new_request(previous_req)
+    end
   end
 
   def prompt_for_new_request(previous_req)
@@ -308,6 +326,7 @@ class Superagent
   end
 
   def handle_final_failure
+    ensure_pending_input_stopped
     @display.display_all_attempts_failed
     @display.display_total_runtime(@start_time)
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
@@ -385,5 +404,60 @@ class Superagent
 
   def user_disagrees_with_verification?(tags)
     tags.any? { |tag| %w[#bug #regression #hotfix].include?(tag) }
+  end
+
+  def show_queue_reminder_if_tty
+    return unless $stdin.tty?
+
+    @display.display_pending_queue_reminder(@pending_queue.size)
+  end
+
+  def start_pending_input_thread
+    return if @input_thread&.alive?
+
+    reader, @input_wakeup_writer = IO.pipe
+    queue = @pending_queue
+    @input_thread = Thread.new { run_pending_input_loop(reader, queue) }
+  end
+
+  def run_pending_input_loop(reader, queue)
+    buffer = []
+    loop do
+      ready = IO.select([$stdin, reader], nil, nil, 0.5)
+      break if ready.nil?
+      break flush_and_close(reader, buffer, queue) if ready[0].include?(reader)
+      next unless ready[0].include?($stdin)
+
+      line = $stdin.gets
+      break if line.nil?
+
+      buffer = process_pending_line(line.chomp, buffer, queue)
+    end
+    reader.close rescue nil
+  end
+
+  def process_pending_line(line, buffer, queue)
+    if line.empty? && buffer.any?
+      queue.add(buffer.join("\n"))
+      return []
+    end
+    return buffer << line unless line.empty?
+
+    buffer
+  end
+
+  def flush_and_close(_reader, buffer, queue)
+    queue.add(buffer.join("\n")) if buffer.any?
+  end
+
+  def ensure_pending_input_stopped
+    return unless @input_thread&.alive?
+
+    @input_wakeup_writer&.write('.')
+    @input_wakeup_writer&.close
+    @input_thread.join(2)
+    @input_thread.kill if @input_thread.alive?
+    @input_thread = nil
+    @input_wakeup_writer = nil
   end
 end
