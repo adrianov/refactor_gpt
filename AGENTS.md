@@ -53,7 +53,7 @@ When modifying LLM prompts or system instructions in AI-driven applications:
 
 ### Imports and Dependencies
 - Use `require_relative` for local files: `require_relative "lib/openai_client"`
-- External gems required: `httpx`, `oj`, `ruby-progressbar`, `colorize`, `shellwords`
+- External gems required: `httpx`, `oj`, `ruby-progressbar`, `colorize`, `shellwords`, `tty-box`, `tty-cursor` (superagent TUI)
 - Use `rbconfig` for OS detection in cross-platform scripts
 - Use `reline` for interactive CLI input
 

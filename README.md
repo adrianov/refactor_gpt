@@ -12,9 +12,13 @@ A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring
 ## Installation
 
 1. Clone this repository
-2. Install required Ruby gems:
+2. Install required Ruby gems (either):
    ```bash
-   gem install httpx oj ruby-progressbar colorize
+   bundle install
+   ```
+   or:
+   ```bash
+   gem install httpx oj ruby-progressbar colorize tty-box tty-cursor
    ```
 3. Install The Silver Searcher (required for `ag_gpt.rb`):
    - macOS: `brew install the_silver_searcher`
