@@ -712,6 +712,8 @@ def process_with_buffering(client, messages)
 end
 
 def correct_grammar(client, question)
+  return [question, nil] if question.lines.count > 2
+
   grammar_instruction = <<~HEREDOC
     Correct the grammar, spelling, and clarity of the following question or statement while preserving its exact meaning and intent.
     
