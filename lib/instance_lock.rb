@@ -5,7 +5,11 @@ require "digest"
 
 # Manages file-based locking to ensure only one instance runs per directory
 module InstanceLock
-  LOCK_DIR = File.join(Dir.home, ".refactor_gpt_instance_locks")
+  LOCK_DIR = begin
+    File.join(Dir.home, ".refactor_gpt_instance_locks")
+  rescue ArgumentError
+    File.join(Dir.tmpdir, "refactor_gpt_instance_locks")
+  end
   LOCK_CHECK_INTERVAL = 0.5
   STALE_LOCK_TIMEOUT = 3600 # 1 hour - consider lock stale if older than this
 
