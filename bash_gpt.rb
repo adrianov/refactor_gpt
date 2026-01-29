@@ -221,7 +221,7 @@ CompletionNotifier.setup_exit_hook
 
 if user_instruction_parts.empty?
   puts "Usage: #{File.basename($PROGRAM_NAME)} [--debug] \"What to do\"".cyan
-  exit
+  exit 0
 end
 
 user_instruction = user_instruction_parts.join(" ")

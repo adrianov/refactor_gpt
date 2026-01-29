@@ -127,8 +127,7 @@ def get_feature_request(args)
   stdin_request = read_feature_request_from_stdin
   return stdin_request if stdin_request && !stdin_request.empty?
 
-  puts "NO: No feature request provided. Usage: verify_gpt.rb [--debug] <feature description>"
-  exit 1
+  exit 0
 end
 
 def parse_response(response)

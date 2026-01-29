@@ -74,7 +74,6 @@ class RequestReader
     def validate(req)
       return true if req && !req.strip.empty?
 
-      @display.puts 'No request provided. Exiting.'.yellow
-      exit 1
+      exit 0
     end
   end

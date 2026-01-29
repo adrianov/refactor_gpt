@@ -143,7 +143,7 @@ end
 
 unless check_ag_installed
   warn "'ag' (The Silver Searcher) is not installed. Please install it to proceed."
-  exit(1)
+  exit 1
 end
 
 CompletionNotifier.setup_exit_hook
@@ -151,7 +151,7 @@ CompletionNotifier.setup_exit_hook
 if ARGV.empty?
   puts "Search through your code with human language."
   puts "Usage: #{File.basename($PROGRAM_NAME)} \"What to search in human language\""
-  exit(0)
+  exit 0
 end
 
 user_instruction = ARGV.join(" ")

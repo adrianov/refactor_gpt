@@ -433,7 +433,7 @@ if ARGV.empty?
     "Usage: #{File.basename($PROGRAM_NAME)} <file1> [file2 ...] " \
     '["Instructions what to do."]'
   )
-  exit 1
+  exit 0
 end
 
 RefactorGptRunner.new.run(ARGV)

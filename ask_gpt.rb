@@ -212,8 +212,7 @@ module Utility
   def self.read_stdin_question
     input = $stdin.read
     if input.nil? || input.strip.empty?
-      warn "No question provided. Exiting."
-      exit 1
+      exit 0
     end
     [input.strip]
   end
@@ -608,8 +607,7 @@ end
 def get_piped_question
   input = $stdin.read
   if input.nil? || input.strip.empty?
-    warn "No question provided. Exiting."
-    exit 1
+    exit 0
   end
   input.strip
 end
