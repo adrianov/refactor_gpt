@@ -11,17 +11,19 @@ class Display
   BODY_COLOR = :light_black
   CURSOR = TTY::Cursor
 
-    def puts(*args)
-      @at_start_of_line = true
-      return super(*args) if args.empty? || args.first.to_s.strip.empty?
+  attr_accessor :split_pane
 
-      ts = timestamp_str
-      args[0] = format_with_timestamp(args[0], ts) if args.first.is_a?(String)
-      super(*args)
-      $stdout.flush
-    end
+  def puts(*args)
+    @at_start_of_line = true
+    return if args.empty? || args.first.to_s.strip.empty?
 
-    def initialize(skip_midnight_check: false)
+    ts = timestamp_str
+    str = args.first.is_a?(String) ? format_with_timestamp(args[0], ts) : args[0].to_s
+    out_puts(str)
+    $stdout.flush
+  end
+
+  def initialize(skip_midnight_check: false)
       @text_buffer = ''
       @at_start_of_line = true
       @current_stream_id = nil
@@ -54,9 +56,9 @@ class Display
       ]
 
       message = messages.sample
-      $stdout.puts ''
+      out_puts ''
       puts message.yellow
-      $stdout.puts ''
+      out_puts ''
       exit 0
     end
 
@@ -72,7 +74,7 @@ class Display
       if is_new_stream
         @current_stream_id = stream_id
         @has_printed_in_stream = false
-        $stdout.puts '' unless @text_buffer.empty?
+        out_puts '' unless @text_buffer.empty?
       end
 
       @text_buffer += text.to_s
@@ -80,7 +82,7 @@ class Display
 
       if @text_buffer.length > 200 && !@text_buffer.include?("\n")
         ensure_timestamp(is_new_stream: is_new_stream) if @at_start_of_line
-        $stdout.print body(@text_buffer)
+        out_print body(@text_buffer)
         @text_buffer = ''
         @at_start_of_line = false
         @has_printed_in_stream = true
@@ -99,8 +101,8 @@ class Display
 
       unless @text_buffer.to_s.strip.empty?
         ensure_timestamp if @at_start_of_line
-        $stdout.print body(@text_buffer)
-        $stdout.puts '' unless @text_buffer.end_with?("\n")
+        out_print body(@text_buffer)
+        out_puts '' unless @text_buffer.end_with?("\n")
         @text_buffer = ''
         @at_start_of_line = true
         @has_printed_in_stream = true
@@ -127,7 +129,7 @@ class Display
                     when 2 then '⠹'
                     else '⠸'
                     end
-        $stdout.print "\r#{timestamp_str}#{indicator.colorize(:light_black)}"
+        out_print "\r#{timestamp_str}#{indicator.colorize(:light_black)}"
         $stdout.flush
         @last_thinking_indicator_time = now
       end
@@ -135,7 +137,7 @@ class Display
 
     def clear_thinking_indicator
       return unless @thinking_indicator_count && @thinking_indicator_count > 0
-      $stdout.print CURSOR.clear_line
+      out_print CURSOR.clear_line
       @thinking_indicator_count = 0
       @last_thinking_indicator_time = nil
     end
@@ -147,35 +149,40 @@ class Display
       return if status.empty?
 
       puts 'Git status:'.cyan
-      status.each_line { |line| $stdout.puts body("  #{line.chomp}") }
-      $stdout.puts ''
+      status.each_line { |line| out_puts body("  #{line.chomp}") }
+      out_puts ''
     end
 
     def display_git_diff
       return unless git_repo?
 
-      system("git diff")
-      $stdout.puts ''
+      if @split_pane&.enabled?
+        diff = `git diff 2>&1`
+        out_puts diff if diff && !diff.strip.empty?
+      else
+        system("git diff")
+      end
+      out_puts ''
     end
 
     def display_session_description(description)
       return unless description && !description.to_s.strip.empty?
 
-      $stdout.puts ''
+      out_puts ''
       puts "Session: #{description}".cyan
-      $stdout.puts ''
+      out_puts ''
     end
 
     def display_start_message(req, continuation = false, tags = [])
       puts "\nSuperagent:".cyan
       display_session_type(continuation, tags)
       puts req.yellow
-      $stdout.puts ''
+      out_puts ''
       display_git_status
     end
 
     def display_pending_hint
-      $stdout.puts ''
+      out_puts ''
       box = TTY::Box.frame(
         "📥 Interactive Queue is active while agent runs.",
         'Type request below, press Enter twice to queue.',
@@ -183,16 +190,16 @@ class Display
         padding: [0, 1],
         border: :light
       )
-      $stdout.print box
-      $stdout.puts ''
+      out_print box
+      out_puts ''
     end
 
     def display_pending_list(requests)
       return if requests.nil? || requests.empty?
 
       puts "Using #{requests.size} queued request(s):".cyan
-      requests.each_with_index { |r, i| $stdout.puts body("  #{i + 1}. #{r.lines.first&.chomp}") }
-      $stdout.puts ''
+      requests.each_with_index { |r, i| out_puts body("  #{i + 1}. #{r.lines.first&.chomp}") }
+      out_puts ''
     end
 
     def display_session_type(continuation, tags)
@@ -200,16 +207,16 @@ class Display
         tag_display = tags.empty? ? '' : " [#{tags.join(', ')}]"
         puts "↻ Continuing previous session#{tag_display}".light_blue
         puts 'Step: Resuming previous session'.cyan
-        $stdout.puts ''
+        out_puts ''
       elsif tags.any?
         puts "🆕 New session [#{tags.join(', ')}]".light_blue
-        $stdout.puts ''
+        out_puts ''
       end
     end
 
     def display_attempt_header(model, idx, total)
       puts "--- Attempt #{idx + 1}/#{total}: #{model} ---".blue
-      $stdout.puts ''
+      out_puts ''
     end
 
     def display_verification_result(verified, desc, context = '', call_failed: false)
@@ -222,7 +229,7 @@ class Display
 
       if desc && !desc.empty?
         puts "#{prefix}#{suffix}:".send(verified ? :green : :yellow)
-        desc.each_line { |line| $stdout.puts body("  #{line.chomp}") }
+        desc.each_line { |line| out_puts body("  #{line.chomp}") }
       elsif verified
         puts "#{prefix}#{suffix}! Success.".send(:green)
       else
@@ -234,7 +241,7 @@ class Display
       prefix = success ? '✔ Agent call' : '✗ Agent call'
       suffix = success ? ": success (#{tools_count} tools)" : ': failed'
       puts "#{prefix}#{suffix}".send(success ? :green : :yellow)
-      $stdout.puts ''
+      out_puts ''
     end
 
     def display_total_runtime(start_time, active_elapsed: nil, waiting_elapsed: nil)
@@ -250,11 +257,11 @@ class Display
       msg = failure_reason_message(output, reason)
       puts "Agent failed: #{msg}. Next...".yellow
       if output && !output.to_s.strip.empty?
-        $stdout.puts ''
-        $stdout.puts 'Agent output:'.yellow
-        output.each_line { |line| $stdout.puts body("  #{line.chomp}") }
+        out_puts ''
+        out_puts 'Agent output:'.yellow
+        output.each_line { |line| out_puts body("  #{line.chomp}") }
       end
-      $stdout.puts ''
+      out_puts ''
     end
 
     def failure_reason_message(output, reason)
@@ -425,26 +432,26 @@ class Display
       system("git fetch > #{File::NULL} 2>&1")
       status_output = `git status 2>&1`
       if $?.success?
-        status_output.to_s.strip.each_line { |line| $stdout.puts body(line.chomp) }
+        status_output.to_s.strip.each_line { |line| out_puts body(line.chomp) }
       else
         puts 'Warning: Failed to get git status'.yellow
       end
-      $stdout.puts ''
+      out_puts ''
     end
 
     def suggest_git_init
       return if git_repo?
 
-      $stdout.puts ''
+      out_puts ''
       puts '💡 Suggestion: Initialize a git repository for better tracking and verification.'.yellow
-      $stdout.puts ''
+      out_puts ''
       puts 'Advantages:'.cyan
-      $stdout.puts body('  • Automatic change tracking - see exactly what was modified')
-      $stdout.puts body('  • Faster verification - uses git diff instead of reading all files')
-      $stdout.puts body('  • Better context for AI - only changed code is analyzed')
-      $stdout.puts body('  • Easy rollback - revert changes if needed')
-      $stdout.puts body('  • Version history - track your code evolution')
-      $stdout.puts ''
+      out_puts body('  • Automatic change tracking - see exactly what was modified')
+      out_puts body('  • Faster verification - uses git diff instead of reading all files')
+      out_puts body('  • Better context for AI - only changed code is analyzed')
+      out_puts body('  • Easy rollback - revert changes if needed')
+      out_puts body('  • Version history - track your code evolution')
+      out_puts ''
 
       return unless $stdin.tty?
 
@@ -459,17 +466,17 @@ class Display
         else
           puts 'Failed to initialize git repository.'.yellow
         end
-        $stdout.puts ''
+        out_puts ''
       else
         puts 'Skipping git initialization.'.yellow
-        $stdout.puts ''
+        out_puts ''
       end
     end
 
     def display_pass_timing(pass_timing)
       return unless pass_timing
 
-      $stdout.puts ''
+      out_puts ''
       puts "Pass #{pass_timing[:pass]} timing:".cyan
       
       display_timing_item("Implementation", pass_timing[:implementation_time], :light_blue)
@@ -477,7 +484,7 @@ class Display
       display_timing_item("Fix", pass_timing[:fix_time], :light_blue)
       display_timing_item("Total", pass_timing[:total_time], :cyan)
       
-      $stdout.puts ''
+      out_puts ''
     end
 
     def display_timing_item(label, time, color)
@@ -494,22 +501,22 @@ class Display
       total_review = pass_timings.sum { |p| p[:review_time] || 0 }
       total_fix = pass_timings.sum { |p| p[:fix_time] || 0 }
       
-      $stdout.puts ''
+      out_puts ''
       puts "Feature/Bugfix/Chore timing:".cyan
       puts "  Implementation: #{format_duration(total_implementation)}".light_blue
       puts "  Review: #{format_duration(total_review)}".light_blue
       puts "  Fix: #{format_duration(total_fix)}".light_blue
       puts "  Total: #{format_duration(total_feature_time)}".cyan
-      $stdout.puts ''
+      out_puts ''
     end
 
     def display_passes_recap(pass_timings)
       return unless pass_timings && !pass_timings.empty?
 
-      $stdout.puts ''
+      out_puts ''
       puts "Models used and timings:".cyan
       pass_timings.each { |pass| display_single_pass_recap(pass) }
-      $stdout.puts ''
+      out_puts ''
     end
 
     def display_single_pass_recap(pass)
@@ -526,6 +533,19 @@ class Display
     def display_pass_detail(label, time, color: :light_black)
       return unless time && time > 0
       puts "    #{label}: #{format_duration(time)}".send(color)
+    end
+
+    def out_print(str)
+      if @split_pane&.enabled?
+        @split_pane.with_output_row { $stdout.print str }
+        @split_pane.advance_output_row(str.to_s.count("\n"))
+      else
+        $stdout.print str
+      end
+    end
+
+    def out_puts(str = '')
+      out_print(str.to_s.end_with?("\n") ? str : "#{str}\n")
     end
 
     private
@@ -557,11 +577,11 @@ class Display
         unless line_content.empty? || line_content == @last_printed_line
           @last_printed_line = line_content
           ensure_timestamp(is_new_stream: is_new_stream)
-          $stdout.print body(line_content)
+          out_print body(line_content)
           @has_printed_in_stream = true
         end
 
-        $stdout.puts ''
+        out_puts ''
         @at_start_of_line = true
         $stdout.flush
       end
@@ -571,7 +591,7 @@ class Display
       return unless @at_start_of_line
       return if @has_printed_in_stream && !is_new_stream
 
-      $stdout.print timestamp_str
+      out_print timestamp_str
       @at_start_of_line = false
     end
 
@@ -582,19 +602,19 @@ class Display
 
     def print_tool_line_started(text)
       if @tool_line_in_progress
-        $stdout.puts ''
+        out_puts ''
         @at_start_of_line = true
       end
       line = "#{timestamp_str}#{body(text)}"
-      $stdout.print line
+      out_print line
       @at_start_of_line = false
       $stdout.flush
     end
 
     def overwrite_line_with_timestamp(text)
-      $stdout.print "\r#{CURSOR.clear_line}"
-      $stdout.print "#{timestamp_str}#{body(text)}"
-      $stdout.puts ''
+      out_print "\r#{CURSOR.clear_line}"
+      out_print "#{timestamp_str}#{body(text)}"
+      out_puts ''
       @at_start_of_line = true
       $stdout.flush
     end
