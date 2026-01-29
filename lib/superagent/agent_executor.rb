@@ -2,6 +2,7 @@
 
 require 'open3'
 require 'json'
+require 'oj'
 require 'rbconfig'
 require 'timeout'
 require_relative '../agents_file_handler'
@@ -32,10 +33,6 @@ class AgentExecutor
 
   def resume_with_session_id(id)
     @agent_session_id = id
-  end
-
-  def detect_language
-    nil
   end
 
   def test_runner_running?(pid = nil)
@@ -160,7 +157,7 @@ class AgentExecutor
     "\n\nWorking tree (bfs --nohidden, max #{CONTEXT_MAX_LINES} lines):\n#{text}"
   end
 
-  def guidelines_section(always_include: false, language: nil)
+  def guidelines_section(always_include: false)
     content = load_agents_content
     if content.nil? || content.strip.empty?
       content = "Project guidelines (default refactoring instructions):\n#{DEFAULT_USER_INSTRUCTION.strip}"
@@ -207,11 +204,13 @@ class AgentExecutor
   end
 
   def parse_json_stream_line(line)
-    return [nil] * 5 if line.nil? || line.strip.empty? || line.include?('=>')
-    return [nil] * 5 if line.match?(/[:"']role["']/) && line.match?(/[:"']user["']/)
+    return [nil] * 5 if line.nil?
+    stripped = line.strip
+    return [nil] * 5 if stripped.empty?
 
-    json_obj = JSON.parse(line.strip)
+    json_obj = Oj.load(stripped)
     type = json_obj['type']
+    return [nil] * 5 if %w[user system].include?(type)
     return [nil] * 5 if type == 'thinking' && (json_obj['text'].nil? || json_obj['text'].empty?)
 
     extract_session_id(json_obj)
@@ -219,7 +218,7 @@ class AgentExecutor
     [type, extract_text_from_json(json_obj)&.to_s, json_obj['request_id'] || json_obj['stream_id'] || type,
      extract_command_from_json(json_obj),
      (extract_tool_call_info(json_obj) if %w[tool_call tool_result].include?(type))]
-  rescue JSON::ParserError
+  rescue Oj::ParseError, JSON::ParserError
     [nil] * 5
   end
 
@@ -263,10 +262,10 @@ class AgentExecutor
       
       if func_name&.match?(/^(run|execute|command)/i) && func_args
         begin
-          args = func_args.is_a?(String) ? JSON.parse(func_args) : func_args
+          args = func_args.is_a?(String) ? Oj.load(func_args) : func_args
           return args['command'] || args['cmd'] || args['input'] if args.is_a?(Hash)
           return func_args if func_args.is_a?(String) && func_args.match?(/^[a-zA-Z0-9_\-\.\/\s]+$/)
-        rescue JSON::ParserError
+        rescue Oj::ParseError, JSON::ParserError
           return func_args if func_args.is_a?(String) && func_args.length < 200
         end
       end
@@ -275,6 +274,10 @@ class AgentExecutor
       return input if input.is_a?(String) && input.match?(/^[a-zA-Z0-9_\-\.\/\s]+$/) && input.length < 200
       return tool_call['command'] if tool_call['command']
     end
+
+    # Only parse command from free text when this line is a tool event; avoid treating
+    # assistant/prompt text (e.g. "Running: run") as a shell command.
+    return nil unless %w[tool_call tool_result].include?(json_obj['type'])
 
     extract_command_from_text(extract_text_from_json(json_obj))
   end
@@ -359,14 +362,16 @@ class AgentExecutor
   def parse_tool_args(func_args)
     return func_args unless func_args.is_a?(String)
 
-    JSON.parse(func_args)
-  rescue JSON::ParserError
+    Oj.load(func_args)
+  rescue Oj::ParseError, JSON::ParserError
     func_args
   end
 
   def looks_like_command?(cmd)
-    return false if cmd.length < 2 || cmd.length > 500
+    return false if cmd.length < 4 || cmd.length > 500
     return false unless cmd.match?(/^[a-zA-Z0-9_\-\.\/\s\:\;\,\|\&\<\>\(\)\"\']+$/)
+    # Reject single-word fragments that are not paths or flags (e.g. "run", "and a")
+    return false if cmd.strip !~ /\s/ && !cmd.include?('/') && !cmd.match?(/^\-+\w/)
 
     cmd.match?(/\b(rspec|rake|make|npm|yarn|bundle|ruby|python|node|go| cargo|test|spec|build|run)\b/i) ||
       cmd.match?(/[\/\-]/) ||
@@ -387,9 +392,30 @@ class AgentExecutor
     cmd
   end
 
+  # Resuming with non-auto model: run agent --model auto -- /compact first to reduce context; skips if auto or no session.
+  def run_compact_pass_if_needed(model)
+    return unless @agent_session_id && model != 'auto'
+
+    @display.puts 'Compacting context (model auto)...'.light_black
+    cmd = build_command(model: 'auto', plan_mode: false) + ['--', '/compact']
+    Timeout.timeout(120) do
+      Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
+        stdin.close
+        stdout_stderr.read
+        wait_thr.value
+      end
+    end
+  rescue Timeout::Error
+    @display.puts 'Compact pass timed out; continuing with main run.'.yellow
+  end
+
   def display_command(cmd, prompt)
-    display_prompt = prompt.length > 50 || prompt.include?("\n") ? "'#{prompt[0..50].gsub("\n", " ")}...'" : prompt
-    @display.puts "Running: #{cmd.join(' ')} #{display_prompt}"
+    @display.puts "Running: #{cmd.join(' ')}".green
+    preview = prompt.to_s.strip
+    if preview.length > 60 || preview.include?("\n")
+      preview = preview.gsub(/\n+/, ' ').strip[0..59] + '...'
+    end
+    @display.puts "  Prompt: #{preview}".light_black unless preview.empty?
   end
 
   RECOVERABLE_NETWORK_RETRIES = 2
@@ -410,7 +436,18 @@ class AgentExecutor
     UNRECOVERABLE_PHRASES.any? { |p| n.include?(p) } ||
       (n.include?('rate limit') && n.include?('exceeded')) ||
       n.include?('cannot use this model') ||
-      (n.include?('model') && UNRECOVERABLE_MODEL_PHRASES.any? { |p| n.include?(p) })
+      (n.include?('model') && UNRECOVERABLE_MODEL_PHRASES.any? { |p| n.include?(p) }) ||
+      n.include?('usage limit') ||
+      n.include?('this error is unrecoverable')
+  end
+
+  def usage_unrecoverable?(output)
+    return false if output.to_s.empty?
+
+    n = output.downcase
+    (n.include?('rate limit') && n.include?('exceeded')) ||
+      n.include?('usage limit') ||
+      n.include?('this error is unrecoverable')
   end
 
   def run_with_timeout_monitoring(model, wrapped, verification_mode: false)
@@ -419,8 +456,7 @@ class AgentExecutor
     @passthrough = test_runner_running?
     return run_without_timeout(model, wrapped, verification_mode: verification_mode) if @passthrough
 
-    @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil, 
-start: nil }
+    @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil, start: nil }
     monitor_thread = start_monitor_thread
     timeout_thread = start_timeout_thread
 
@@ -436,6 +472,7 @@ start: nil }
   def run_plan_mode(model, p, new_session: false)
     @tools_used = []
     wrapped = wrap_prompt(p, new_session: new_session)
+    run_compact_pass_if_needed(model)
     cmd = setup_subprocess_run(model, wrapped, plan_mode: true)
     
     begin
@@ -454,6 +491,7 @@ start: nil }
 
   def run(model, p, base_delay: 1, verification_mode: false, new_session: false)
     wrapped = wrap_prompt(p, new_session: new_session)
+    run_compact_pass_if_needed(model)
     retries = 0
     loop do
       stdout, _, status, timeout_reason = run_with_timeout_monitoring(model, wrapped, 
