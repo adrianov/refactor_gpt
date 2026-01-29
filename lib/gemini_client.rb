@@ -210,16 +210,17 @@ class GeminiClient
     sleep(delay)
   end
 
-  def handle_network_resource_retry(error, retries, max_retries, base_delay)
+  def handle_network_resource_retry(_error, retries, max_retries, base_delay)
     delay = base_delay * (2**(retries - 1))
     warn "⚠️  Network/resource error, retrying in #{delay}s... (#{retries}/#{max_retries})"
     sleep(delay)
   end
 
   def is_network_resource_error?(error_message)
-    error_message.include?("resource_exhausted") || error_message.include?("Connection stalled") ||
-      error_message.include?("CANCEL") || error_message.include?("canceled") ||
-      error_message.include?("stream closed") || error_message.include?("0x8")
+    msg = error_message.to_s
+    msg.include?("resource_exhausted") || msg.match?(/connection\s+stalled/i) ||
+      msg.include?("CANCEL") || msg.include?("canceled") ||
+      msg.include?("stream closed") || msg.include?("0x8")
   end
 
   def execute_with_network_retry(max_retries: 3, base_delay: 1)
@@ -238,7 +239,7 @@ class GeminiClient
     end
   end
 
-  def handle_rate_limit_retry(error, retries, max_retries, base_delay)
+  def handle_rate_limit_retry(error, retries, max_retries, _base_delay)
     delays = [5, 10, 30]
     delay = error.retry_after || delays[retries - 1] || delays.last
     error_msg = error.message.include?("Rate limited by API:") ? error.message.split(": ", 2).last : nil

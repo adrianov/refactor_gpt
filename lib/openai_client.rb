@@ -162,16 +162,18 @@ class OpenAiClient
     sleep(delay)
   end
 
-  def handle_network_resource_retry(error, retries, max_retries, base_delay)
+  def handle_network_resource_retry(_error, retries, max_retries, base_delay)
     delay = base_delay * (2**(retries - 1))
     warn "⚠️  Network/resource error, retrying in #{delay}s... (#{retries}/#{max_retries})"
     sleep(delay)
   end
 
   def is_network_resource_error?(error_message)
-    error_message.include?("resource_exhausted") || error_message.include?("Connection stalled") ||
-      error_message.include?("CANCEL") || error_message.include?("canceled") ||
-      error_message.include?("stream closed") || error_message.include?("0x8")
+    msg = error_message.to_s
+    msg.include?("resource_exhausted") || msg.match?(/connection\s+stalled/i) ||
+      msg.include?("CANCEL") || msg.include?("canceled") ||
+      msg.include?("stream closed") || msg.include?("0x8") ||
+      msg.include?("SSL_read: unexpected eof while reading")
   end
 
   def execute_with_network_retry(max_retries: 3, base_delay: 1)
@@ -190,7 +192,7 @@ class OpenAiClient
     end
   end
 
-  def handle_rate_limit_retry(error, retries, max_retries, base_delay)
+  def handle_rate_limit_retry(error, retries, max_retries, _base_delay)
     delays = [5, 10, 30]
     delay = error.retry_after || delays[retries - 1] || delays.last
     error_msg = error.message.include?("Rate limited by API:") ? error.message.split(": ", 2).last : nil
@@ -262,10 +264,17 @@ class OpenAiClient
 
   def handle_response_errors(response)
     return if response.status == 200
+    return handle_error_response_without_status(response) if response.status.nil?
 
     handle_non_success_status(response)
   rescue NoMethodError
     handle_error_response_without_status(response)
+  rescue HTTPX::Error => e
+    if is_network_resource_error?(e.message.to_s)
+      raise NetworkResourceError.new("Network/resource error: #{e.message}")
+    end
+
+    raise e
   end
 
   def handle_non_success_status(response)
@@ -273,6 +282,8 @@ class OpenAiClient
     raise_server_error(response) if response.status >= 500 && response.status < 600
 
     error_message = extract_error_message_from_response(response)
+    error_message ||= response.error.to_s if response.respond_to?(:error)
+    error_message ||= response.message.to_s if response.respond_to?(:message)
     if error_message && is_network_resource_error?(error_message)
       raise NetworkResourceError.new("Network/resource error: #{error_message}")
     end
@@ -318,6 +329,9 @@ class OpenAiClient
     raise ServerError.new("Server error", status: error_status) if error_status && error_status >= 500
 
     error_message = extract_error_message_from_response_object(response)
+    error_message ||= response.error.to_s if response.respond_to?(:error)
+    error_message ||= response.message.to_s if response.respond_to?(:message)
+
     if error_message && is_network_resource_error?(error_message)
       raise NetworkResourceError.new("Network/resource error: #{error_message}")
     end
@@ -677,7 +691,6 @@ class OpenAiClient
   end
 
   def load_env_vars
-    # This method is now provided by AgentsFileHandler
     super
   end
 end
