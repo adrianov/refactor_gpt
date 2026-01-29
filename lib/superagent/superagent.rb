@@ -170,7 +170,6 @@ class Superagent
     save_agent_summary(output) if output&.strip && !output.strip.empty?
 
     result = process_verification_and_fix(model, req)
-    show_queue_reminder_if_tty if result != :success
     record_attempt_failure(model) if result != :success
     result
   end
@@ -358,22 +357,28 @@ class Superagent
 
   def analyze_session_continuation(req)
     previous_session = @session_tracker.load_previous_session
-    
+
     if previous_session
       analysis = @session_tracker.analyze_continuation(req, previous_session)
       @session_continuation = analysis[:continuation]
       @session_tags = analysis[:tags]
+      if @session_continuation && previous_session[:agent_session_id]
+        @agent_executor.resume_with_session_id(previous_session[:agent_session_id])
+      end
     else
       @session_continuation = false
       classification = @session_tracker.classify_request(req)
       @session_tags = classification[:tags]
     end
-    
+
     @session_description = @session_tracker.generate_session_description(req, @session_tags)
   end
 
   def save_current_session(req, summary = :not_provided)
-    @session_tracker.save_session(req, @session_description, @session_tags, @session_continuation, summary)
+    @session_tracker.save_session(
+      req, @session_description, @session_tags, @session_continuation, summary,
+      agent_session_id: @agent_executor.agent_session_id
+    )
   end
 
   def save_agent_summary(summary)
@@ -407,12 +412,6 @@ class Superagent
 
   def user_disagrees_with_verification?(tags)
     tags.any? { |tag| %w[#bug #regression #hotfix].include?(tag) }
-  end
-
-  def show_queue_reminder_if_tty
-    return unless $stdin.tty?
-
-    @display.display_pending_queue_reminder(@pending_queue.size)
   end
 
   def start_pending_input_thread

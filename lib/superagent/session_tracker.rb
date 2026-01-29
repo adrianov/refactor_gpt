@@ -66,10 +66,11 @@ class SessionTracker
     "Session: #{request[0..100]}..."
   end
 
-  def save_session(request, description, tags, continuation, last_agent_summary = :not_provided)
+  def save_session(request, description, tags, continuation, last_agent_summary = :not_provided, agent_session_id: nil)
     previous_session = load_previous_session
     request_history = build_request_history(continuation, previous_session)
     agent_summary = determine_agent_summary(continuation, previous_session, last_agent_summary)
+    stored_session_id = agent_session_id || previous_session&.dig(:agent_session_id)
 
     session_data = {
       request: request,
@@ -78,6 +79,7 @@ class SessionTracker
       continuation: continuation,
       request_history: request_history,
       last_agent_summary: agent_summary,
+      agent_session_id: stored_session_id,
       timestamp: Time.now.to_i,
       cwd: Dir.pwd
     }

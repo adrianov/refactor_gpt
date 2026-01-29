@@ -15,6 +15,8 @@ class AgentExecutor
   TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
   TEST_RUNNER_CHECK_INTERVAL = 2
 
+  attr_reader :agent_session_id
+
   def initialize(display, session_tracker: nil)
     @display = display
     @tools_used = []
@@ -24,6 +26,10 @@ class AgentExecutor
 
   def reset_agent_session
     @agent_session_id = nil
+  end
+
+  def resume_with_session_id(id)
+    @agent_session_id = id
   end
 
   def test_runner_running?(pid = nil)
