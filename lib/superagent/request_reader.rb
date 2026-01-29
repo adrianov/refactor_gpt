@@ -24,7 +24,7 @@ class RequestReader
     end
 
     def read_from_stdin
-      $stdin.read.strip unless $stdin.tty?
+      $stdin.read.strip
     end
 
     def read_interactive

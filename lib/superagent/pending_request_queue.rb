@@ -3,8 +3,6 @@
 # Thread-safe queue for requests entered while the agent is running.
 # Combined into one message for the next agent run.
 class PendingRequestQueue
-  attr_accessor :split_pane
-
   def initialize(display)
     @queue = []
     @mutex = Mutex.new
@@ -18,11 +16,7 @@ class PendingRequestQueue
       @queue << request.to_s.strip
       preview = request.to_s.strip.lines.first&.chomp
       preview = preview[0..60] + '...' if preview && preview.length > 60
-      if @split_pane&.enabled?
-        @split_pane.show_queued(@queue.size, preview)
-      else
-        @display.puts "Queued (#{@queue.size}): #{preview}".light_blue
-      end
+      @display.puts "Queued (#{@queue.size}): #{preview}".light_blue
     end
   end
 

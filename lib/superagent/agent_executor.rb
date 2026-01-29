@@ -669,7 +669,7 @@ start: nil }
   end
 
   def setup_subprocess_run(model, wrapped, plan_mode: false)
-    @passthrough ||= !$stdin.tty?
+    @passthrough = false
     @display.reset_stream_tracking unless @passthrough
     cmd = build_command(model: model, plan_mode: plan_mode)
     display_command(cmd, wrapped) unless @passthrough

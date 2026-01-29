@@ -11,8 +11,6 @@ class Display
   BODY_COLOR = :light_black
   CURSOR = TTY::Cursor
 
-  attr_accessor :split_pane
-
   def puts(*args)
     @at_start_of_line = true
     return if args.empty? || args.first.to_s.strip.empty?
@@ -156,12 +154,7 @@ class Display
     def display_git_diff
       return unless git_repo?
 
-      if @split_pane&.enabled?
-        diff = `git diff 2>&1`
-        out_puts diff if diff && !diff.strip.empty?
-      else
-        system("git diff")
-      end
+      system("git diff")
       out_puts ''
     end
 
@@ -453,8 +446,6 @@ class Display
       out_puts body('  • Version history - track your code evolution')
       out_puts ''
 
-      return unless $stdin.tty?
-
       puts 'Initialize git repository? (y/N)'.colorize(BODY_COLOR)
       answer = $stdin.gets.to_s.chomp.downcase
 
@@ -536,12 +527,7 @@ class Display
     end
 
     def out_print(str)
-      if @split_pane&.enabled?
-        @split_pane.with_output_row { $stdout.print str }
-        @split_pane.advance_output_row(str.to_s.count("\n"))
-      else
-        $stdout.print str
-      end
+      $stdout.print str
     end
 
     def out_puts(str = '')

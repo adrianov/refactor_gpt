@@ -100,10 +100,8 @@ class Superagent
 
     return run_plan_mode(req, start_index) if @request_reader.plan_mode
 
-    if $stdin.tty?
-      @display.display_pending_hint
-      start_pending_input_thread
-    end
+    @display.display_pending_hint
+    start_pending_input_thread
 
     @feature_start_time = Time.now
     @pass_timings = []
@@ -359,7 +357,6 @@ class Superagent
     current_req = previous_req || @current_request
     save_current_session(current_req) if current_req
     ensure_pending_input_stopped
-    return unless $stdin.tty?
 
     pending = @pending_queue.take_all
     if pending.any?
@@ -442,24 +439,7 @@ class Superagent
     exit 1
   end
 
-  def update_terminal_title(phase)
-    return unless $stdout.tty? || $stderr.tty?
-
-    title = case phase
-            when true then '✅ Done'
-            when false then '❌ Error'
-            else phase.to_s
-            end
-
-    # Prepend terminal title with short pwd
-    project_name = File.basename(Dir.pwd)
-    title = "#{project_name}: #{title}"
-
-    sequence = "\033]0;#{title}\007"
-    $stderr.print sequence if $stderr.tty?
-    $stderr.flush if $stderr.tty?
-  rescue StandardError
-    # Ignore terminal title update errors
+  def update_terminal_title(_phase)
   end
 
   def apply_continuation_analysis(analysis)
