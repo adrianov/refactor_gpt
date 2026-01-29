@@ -5,10 +5,12 @@ require 'json'
 require 'rbconfig'
 require 'timeout'
 require_relative '../agents_file_handler'
+require_relative '../refactor_instructions'
 
 # Handles agent command execution with retry logic
 class AgentExecutor
   include AgentsFileHandler
+  include RefactorInstructions
   EXECUTION_TIMEOUT = 60
   MAX_EXECUTION_TIMEOUT = 600
   CONTEXT_MAX_LINES = 500
@@ -99,12 +101,37 @@ class AgentExecutor
   def wrap_prompt(p, new_session: false)
     parts = []
     parts << guidelines_section
+    parts << user_context_section
     parts << git_diff_section(new_session)
     parts << working_tree_section(new_session)
     parts << summary_section
     parts << history_section
     parts << non_interactive_notice
     p + parts.compact.join
+  end
+
+  def user_context_section
+    parts = []
+    # Friendly date time in user timezone
+    parts << "Current time: #{Time.now.strftime("%A, %B %d, %Y at %I:%M %p %Z")}"
+    
+    # Environment info
+    parts << "OS: #{RbConfig::CONFIG['host_os']}"
+    parts << "Shell: #{ENV['SHELL']}"
+    parts << "User: #{ENV['USER'] || ENV['USERNAME']}"
+    parts << "Project root: #{Dir.pwd}"
+    
+    parts.concat(user_preferences_from_env)
+    "\n\n" + parts.join("\n")
+  end
+
+  def user_preferences_from_env
+    env_vars = load_env_vars
+    # Filter out tokens, keys, and URLs which are usually not "preferences"
+    prefs = env_vars.reject { |k, _| k.match?(/TOKEN|KEY|URL|SECRET|PASSWORD|AUTH/i) }
+    return [] if prefs.empty?
+
+    ["User preferences from environment:"] + prefs.map { |k, v| "  #{k}=#{v}" }
   end
 
   def git_diff_section(new_session)
@@ -131,9 +158,13 @@ class AgentExecutor
 
   def guidelines_section
     content = load_agents_content
-    return nil if content.nil? || content.strip.empty?
+    if content.nil? || content.strip.empty?
+      content = "Project guidelines (default refactoring instructions):\n#{DEFAULT_USER_INSTRUCTION.strip}"
+    else
+      content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.strip}"
+    end
 
-    "\n\nProject guidelines (from AGENTS.md or AGENTS.rb):\n#{content.strip}"
+    "\n\n#{content}"
   end
 
   def summary_section
@@ -160,16 +191,12 @@ class AgentExecutor
 
   def load_agents_content
     project_root = Dir.pwd
+    parts = []
     agents_rb = File.join(project_root, 'AGENTS.rb')
-    agents_md = File.join(project_root, 'AGENTS.md')
-    
-    if File.exist?(agents_rb)
-      File.read(agents_rb)
-    elsif File.exist?(agents_md)
-      File.read(agents_md)
-    else
-      ''
-    end
+    parts << "--- AGENTS.rb ---\n#{File.read(agents_rb).strip}" if File.exist?(agents_rb)
+    file_content = load_agents_file(project_root)
+    parts << file_content if file_content && !file_content.strip.empty?
+    parts.empty? ? '' : parts.join("\n\n")
   end
 
   def parse_json_stream_line(line)
@@ -334,7 +361,7 @@ subtype: json_obj['subtype'] }
       cmd.match?(/^[a-z]+\s+[a-z]/i)
   end
 
-  def build_command(model:, plan_mode: false, verification_mode: false)
+  def build_command(model:, plan_mode: false)
     cmd = %w[
       agent
       --print
@@ -343,7 +370,6 @@ subtype: json_obj['subtype'] }
       --force
     ]
     cmd << '--plan' if plan_mode
-    cmd.concat(['--mode', 'ask']) if verification_mode
     cmd.concat(['--resume', @agent_session_id]) if @agent_session_id
     cmd.concat(['--model', model])
     cmd
@@ -377,6 +403,7 @@ subtype: json_obj['subtype'] }
   def run_with_timeout_monitoring(model, wrapped, verification_mode: false)
     @tools_used = []
     @verification_mode = verification_mode
+    @passthrough = false
     return run_without_timeout(model, wrapped, verification_mode: verification_mode) if test_runner_running?
 
     @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil, 
@@ -395,24 +422,16 @@ start: nil }
 
   def run_plan_mode(model, p, new_session: false)
     @tools_used = []
-    @display.reset_stream_tracking
     wrapped = wrap_prompt(p, new_session: new_session)
-    cmd = build_command(model: model, plan_mode: true)
-    display_command(cmd, wrapped)
+    cmd = setup_subprocess_run(model, wrapped, plan_mode: true)
     
-    raw, final = '', ''
     begin
       Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
+        @state = { timed_out: false }
         stdin.write(wrapped)
         stdin.close
-        stdout_stderr.each_line do |line|
-          raw += line
-          final = process_json_stream_line(line, final)
-        end
-        status = wait_thr.value
-        @display.flush_word_buffer
-        display_tools_summary
-        [status.success?, final.empty? ? raw : final]
+        result = process_agent_output(stdout_stderr, wait_thr)
+        [result[2].success?, result[0]]
       end
     rescue StandardError => e
       @display.puts "❌ Agent execution error: #{e.message}".red
@@ -450,23 +469,15 @@ start: nil }
     [false, "Execution error: #{e.message}", :unrecoverable]
   end
 
-  def run_without_timeout(model, wrapped, verification_mode: false)
+  def run_without_timeout(model, wrapped, _verification_mode = false)
     @tools_used = []
-    @verification_mode = verification_mode
-    @display.reset_stream_tracking
-    cmd = build_command(model: model, verification_mode: verification_mode)
-    display_command(cmd, wrapped)
-    
-    raw, final = '', ''
+    cmd = setup_subprocess_run(model, wrapped)
     begin
       Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
+        @state = { timed_out: false }
         stdin.write(wrapped)
         stdin.close
-        stdout_stderr.each_line do |line|
-          raw += line
-          final = process_json_stream_line(line, final)
-        end
-        finalize_execution(raw, final, wait_thr)
+        process_agent_output(stdout_stderr, wait_thr)
       end
     rescue StandardError => e
       @display.puts "❌ Agent execution error: #{e.message}".red
@@ -476,18 +487,20 @@ start: nil }
 
   def process_json_stream_line(line, final)
     type, text, stream_id, command, tool = parse_json_stream_line(line.strip)
-    @display.display_tool_call(tool) if tool
-    @display.puts "Running: #{command}".green if command && !command.empty?
+    unless @passthrough
+      @display.display_tool_call(tool) if tool
+      @display.puts "Running: #{command}".green if command && !command.empty?
+    end
     return final unless text && !text.empty?
 
     case type
     when 'result'
       text
     when 'thinking'
-      @display.print_thinking_indicator
+      @display.print_thinking_indicator unless @passthrough
       final
     when 'assistant', nil
-      @display.print_word(text, stream_id: stream_id)
+      @display.print_word(text, stream_id: stream_id) unless @passthrough
       final
     else
       final
@@ -537,10 +550,8 @@ start: nil }
     Process.kill('KILL', @state[:pid]) unless @state[:complete]
   end
 
-  def execute_agent_process(model, wrapped, verification_mode: false)
-    @display.reset_stream_tracking
-    cmd = build_command(model: model, verification_mode: verification_mode)
-    display_command(cmd, wrapped)
+  def execute_agent_process(model, wrapped, _verification_mode = false)
+    cmd = setup_subprocess_run(model, wrapped)
     Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
       @state[:pid] = wait_thr.pid
       @state[:start] = @state[:last_chunk] = Time.now
@@ -548,6 +559,14 @@ start: nil }
       stdin.close
       process_agent_output(stdout_stderr, wait_thr)
     end
+  end
+
+  def setup_subprocess_run(model, wrapped, plan_mode: false)
+    @passthrough = !$stdin.tty?
+    @display.reset_stream_tracking unless @passthrough
+    cmd = build_command(model: model, plan_mode: plan_mode)
+    display_command(cmd, wrapped) unless @passthrough
+    cmd
   end
 
   def process_agent_output(stdout_stderr, wait_thr)
@@ -564,35 +583,42 @@ start: nil }
         rescue EOFError then break
         end
       elsif !wait_thr.alive?
-        process_remaining_output(stdout_stderr, raw, final, buffer)
+        raw, final, buffer = process_remaining_output(stdout_stderr, raw, final, buffer)
         break
       end
     end
     finalize_execution(raw, final, wait_thr)
   end
 
-  def process_remaining_output(stdout_stderr, _raw, final, buffer)
+  def process_remaining_output(stdout_stderr, raw, final, buffer)
     remaining = stdout_stderr.read rescue nil
-    if remaining
-      buffer += remaining
-      _, _ = process_buffer(buffer, final)
-    end
+    return [raw, final, buffer] unless remaining
+
+    raw += remaining
+    buffer += remaining
+    buffer, final = process_buffer(buffer, final)
+    [raw, final, buffer]
   end
 
   def process_buffer(buffer, final)
     while (idx = buffer.index("\n"))
-      line = buffer[0..idx].strip
+      line_with_newline = buffer[0..idx]
+      line = line_with_newline.strip
       buffer = buffer[(idx + 1)..-1] || ''
+      $stdout.write(line_with_newline) && $stdout.flush if @passthrough
       final = process_json_stream_line(line, final)
     end
     [buffer, final]
   end
 
   def finalize_execution(raw, final, wait_thr)
-    @display.flush_word_buffer
-    display_tools_summary
     status = wait_thr.value rescue Struct.new(:success?).new(false)
     status = Struct.new(:success?).new(false) if @state && @state[:timed_out]
+    unless @passthrough
+      @display.flush_word_buffer
+      display_tools_summary
+      @display.display_agent_call_result(status.success?, @tools_used.size)
+    end
     [final.empty? ? raw : final, '', status]
   end
 

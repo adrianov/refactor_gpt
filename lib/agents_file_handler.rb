@@ -1,14 +1,15 @@
 # frozen_string_literal: true
 
-# Shared module for handling AGENTS.md file operations
+# Shared module for loading project guidelines from AGENTS.md and .cursorrules
 module AgentsFileHandler
   def load_agents_file(project_root = nil)
     project_root ||= script_directory
-    agents_file = File.join(project_root, 'AGENTS.md')
-
-    return '' unless File.exist?(agents_file)
-
-    File.read(agents_file)
+    parts = []
+    agents_md = File.join(project_root, 'AGENTS.md')
+    cursorrules = File.join(project_root, '.cursorrules')
+    parts << "--- AGENTS.md ---\n#{File.read(agents_md).strip}" if File.exist?(agents_md)
+    parts << "--- .cursorrules ---\n#{File.read(cursorrules).strip}" if File.exist?(cursorrules)
+    parts.empty? ? '' : parts.join("\n\n")
   end
 
   def load_env_vars(project_root = nil)
