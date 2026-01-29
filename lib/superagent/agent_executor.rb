@@ -434,6 +434,14 @@ class AgentExecutor
     output.match?(/CANCEL|canceled|stream closed|0x8|http\/2 stream closed|Connection stalled/i)
   end
 
+  def stream_json_init?(output)
+    s = output.to_s.strip
+    return false if s.empty?
+    return true if s.start_with?('{') && s.include?('"type"') && s.include?('"system"')
+
+    false
+  end
+
   UNRECOVERABLE_PHRASES = %w[503 502 404].freeze
   UNRECOVERABLE_MODEL_PHRASES = %w[not found not available unavailable invalid].freeze
 
@@ -509,7 +517,11 @@ start: nil }
         verification_mode: verification_mode)
       @model_call_finished_since_compact = true
       output = (stdout || '').to_s
-      if verification_mode && (retryable_error?(output) || output.include?('Timeout after'))
+      if output.to_s.strip.empty?
+        # Empty response is retryable; do not return success
+      elsif verification_mode && (
+        stream_json_init?(output) || retryable_error?(output) || output.include?('Timeout after')
+      )
         # Treat as failure so verifier retries; do not return success
       elsif status&.success?
         return [true, output, nil]
@@ -522,6 +534,8 @@ start: nil }
                elsif timeout_reason == :no_data
                  :recoverable
                elsif (status.nil? || !status.success?) && stdout.nil?
+                 :recoverable
+               elsif stream_json_init?(output)
                  :recoverable
                elsif unrecoverable_error?(output)
                  :unrecoverable
