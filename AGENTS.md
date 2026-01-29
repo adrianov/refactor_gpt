@@ -33,6 +33,7 @@ When working with this codebase, follow these refactoring principles:
 - **Simplicity**: Keep methods under 15 lines when possible, remove dead code
 - **Consistency**: Follow idiomatic Ruby style and existing patterns
 - **Behavior Preservation**: Never change functionality unless fixing bugs or explicitly requested
+- **Refactor when it helps**: Do not hesitate to refactor when it improves code quality; apply the guidelines above even if it means broader changes.
 
 ### LLM Instruction Optimization
 When modifying LLM prompts or system instructions in AI-driven applications:
