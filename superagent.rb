@@ -15,6 +15,7 @@ require_relative "lib/superagent/request_reader"
 require_relative "lib/superagent/agent_executor"
 require_relative "lib/superagent/verification_handler"
 require_relative "lib/superagent/superagent"
+require_relative "lib/superagent/auto_only_lock"
 require_relative "lib/completion_notifier"
 require_relative "lib/instance_lock"
 
@@ -25,6 +26,8 @@ if __FILE__ == $PROGRAM_NAME
   ARGV.delete('--no-midnight')
   
   display = Display.new(skip_midnight_check: skip_midnight_check)
+  auto_only = AutoOnlyLock.exist?
+  display.puts 'Auto-only lock file is set; running in auto-only mode.'.yellow if auto_only
   lock_path = nil
   request_reader = RequestReader.new(display)
   pre_read_request = nil
@@ -49,7 +52,8 @@ if __FILE__ == $PROGRAM_NAME
       exit 1
     end
     
-    Superagent.new(display: display, request_reader: request_reader).run(request: pre_read_request)
+    Superagent.new(display: display, request_reader: request_reader, auto_only: auto_only)
+      .run(request: pre_read_request)
   ensure
     InstanceLock.release_lock(lock_path) if lock_path
   end
