@@ -2,11 +2,10 @@
 
 require "fileutils"
 require "digest"
-require "tmpdir"
 
 # Manages file-based locking to ensure only one instance runs per directory
 module InstanceLock
-  LOCK_DIR = File.join(Dir.tmpdir, "refactor_gpt_instance_locks")
+  LOCK_DIR = File.join(Dir.home, ".refactor_gpt_instance_locks")
   LOCK_CHECK_INTERVAL = 0.5
   STALE_LOCK_TIMEOUT = 3600 # 1 hour - consider lock stale if older than this
 
@@ -37,7 +36,7 @@ module InstanceLock
     FileUtils.mkdir_p(LOCK_DIR)
   end
 
-  def self.acquire_lock(waiting_message: nil, &block)
+  def self.acquire_lock(waiting_message: nil)
     ensure_lock_dir
     lock_path = lock_file_path
 
