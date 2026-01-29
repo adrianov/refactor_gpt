@@ -509,7 +509,13 @@ start: nil }
         verification_mode: verification_mode)
       @model_call_finished_since_compact = true
       output = (stdout || '').to_s
-      return [true, output, nil] if status&.success? || (verification_mode && output.to_s.strip.length > 0)
+      if verification_mode && (retryable_error?(output) || output.include?('Timeout after'))
+        # Treat as failure so verifier retries; do not return success
+      elsif status&.success?
+        return [true, output, nil]
+      elsif verification_mode && output.to_s.strip.length > 0
+        return [true, output, nil]
+      end
 
       reason = if output.to_s.strip.empty?
                  :recoverable
