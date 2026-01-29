@@ -173,15 +173,15 @@ class Display
 
     def display_pending_hint
       $stdout.puts ''
-      puts '--- Queue input (type below, Enter twice to add) ---'.cyan
-      puts 'Extra requests are sent together to the next run.'.light_black
+      puts '--- Interactive Queue (type below, Enter twice to add) ---'.cyan
+      puts 'Requests are collected and sent together to the next run.'.light_black
       $stdout.puts ''
     end
 
     def display_pending_queue_reminder(queue_size)
-      n = queue_size || 0
-      suffix = n.positive? ? " (#{n} queued)" : ''
-      puts "📥 Queue#{suffix}: type request, Enter twice to add.".cyan
+      return if queue_size.to_i.zero?
+
+      puts "📥 Queue (#{queue_size} queued): type request, Enter twice to add.".cyan
       $stdout.puts ''
     end
 

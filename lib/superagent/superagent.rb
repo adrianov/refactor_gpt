@@ -82,8 +82,11 @@ class Superagent
 
     return run_plan_mode(req, start_index) if @request_reader.plan_mode
 
-    @display.display_pending_hint if $stdin.tty?
-    start_pending_input_thread if $stdin.tty?
+    if $stdin.tty?
+      @display.display_pending_hint
+      start_pending_input_thread
+    end
+
     @feature_start_time = Time.now
     @pass_timings = []
     execute_attempts(start_index, req)
@@ -433,6 +436,9 @@ class Superagent
 
       buffer = process_pending_line(line.chomp, buffer, queue)
     end
+  rescue StandardError
+    # Silently ignore input errors in background thread
+  ensure
     reader.close rescue nil
   end
 
