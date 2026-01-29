@@ -69,15 +69,19 @@ class Superagent
     @auto_only = auto_only
   end
 
-  def run(start_model_index: 0, request: nil)
+  def run(start_model_index: 0, request: nil, continuation_analysis: nil)
     initialize_run(request)
     raw_req = request || @request_reader.read
     model_index_from_request = extract_model_index(raw_req)
     req = sanitize_request(raw_req)
     @request_reader.validate(req)
     @current_request = req
-    
-    analyze_session_continuation(req)
+
+    if continuation_analysis
+      apply_continuation_analysis(continuation_analysis)
+    else
+      analyze_session_continuation(req)
+    end
     @agent_executor.reset_agent_session unless @session_continuation
     save_current_session(req)
     
@@ -358,7 +362,7 @@ class Superagent
     display_continuation_message(analysis, start_index)
     @request_reader = RequestReader.new(@display)
     @request_reader.instance_variable_set(:@plan_mode, false)
-    run(start_model_index: start_index, request: new_req)
+    run(start_model_index: start_index, request: new_req, continuation_analysis: analysis)
   end
 
   def display_continuation_message(analysis, start_index)
@@ -408,16 +412,20 @@ class Superagent
     # Ignore terminal title update errors
   end
 
-  def analyze_session_continuation(req)
-    previous_session = @session_tracker.load_previous_session
-    analysis = @session_tracker.analyze_continuation_and_description(req, previous_session)
-
+  def apply_continuation_analysis(analysis)
     @session_continuation = analysis[:continuation]
-    @session_tags = analysis[:tags]
+    @session_tags = analysis[:tags] || []
     @session_description = analysis[:description]
+    previous_session = @session_tracker.load_previous_session
     if @session_continuation && previous_session && previous_session[:agent_session_id]
       @agent_executor.resume_with_session_id(previous_session[:agent_session_id])
     end
+  end
+
+  def analyze_session_continuation(req)
+    previous_session = @session_tracker.load_previous_session
+    analysis = @session_tracker.analyze_continuation_and_description(req, previous_session)
+    apply_continuation_analysis(analysis)
   end
 
   def save_current_session(req, summary = :not_provided)
