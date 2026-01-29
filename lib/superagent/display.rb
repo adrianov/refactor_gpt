@@ -264,8 +264,12 @@ class Display
       end
     end
 
-    def display_all_attempts_failed
+    def display_all_attempts_failed(original_request = nil)
       puts 'All attempts failed.'.red
+      return if original_request.to_s.strip.empty?
+
+      preview = original_request.strip.lines.first(5).join.rstrip
+      puts "Original query: #{preview}".yellow
     end
 
     def display_tool_call(tool_call_info)
