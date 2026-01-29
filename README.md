@@ -124,7 +124,6 @@ Features:
 - **Detailed logging**: Provides timestamped logs and tracks git status throughout the process.
 - **Performance tracking**: Reports total runtime upon completion.
 - **Interactive mode**: Supports interactive request input if no arguments are provided.
-- **Stream-json filter**: Pipe agent output to `ruby lib/superagent/stream_json_filter.rb` for assistant messages and final result only.
 
 ### refactor_gpt.rb
 
