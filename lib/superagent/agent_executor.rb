@@ -34,6 +34,10 @@ class AgentExecutor
     @agent_session_id = id
   end
 
+  def detect_language
+    nil
+  end
+
   def test_runner_running?(pid = nil)
     return false unless RbConfig::CONFIG['host_os'] =~ /linux|darwin|bsd/
 
@@ -156,7 +160,7 @@ class AgentExecutor
     "\n\nWorking tree (bfs --nohidden, max #{CONTEXT_MAX_LINES} lines):\n#{text}"
   end
 
-  def guidelines_section(always_include: false)
+  def guidelines_section(always_include: false, language: nil)
     content = load_agents_content
     if content.nil? || content.strip.empty?
       content = "Project guidelines (default refactoring instructions):\n#{DEFAULT_USER_INSTRUCTION.strip}"
@@ -457,7 +461,9 @@ verification_mode: verification_mode)
       output = stdout || ''
       return [true, output, nil] if status&.success? || (verification_mode && output.strip.length > 0)
 
-      reason = if timeout_reason == :no_data
+      reason = if output.to_s.strip.empty?
+                 :recoverable
+               elsif timeout_reason == :no_data
                  :recoverable
                elsif (status.nil? || !status.success?) && stdout.nil?
                  :recoverable

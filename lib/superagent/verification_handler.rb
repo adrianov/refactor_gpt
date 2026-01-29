@@ -142,12 +142,15 @@ class VerificationHandler
   def run_verification(model, req, previous_agent_response = nil)
     verification_prompt = build_verification_prompt(req, previous_agent_response)
     start_time = Time.now
-    success, output = @agent_executor.run(model, verification_prompt, verification_mode: true)
+    success, output, reason = @agent_executor.run(model, verification_prompt, verification_mode: true)
     duration = Time.now - start_time
-    return [false, 'Verification failed', duration] unless success
+    unless success
+      desc = output.to_s.strip.empty? ? 'Verification call failed (no response)' : output.lines.first.to_s.strip
+      return [false, desc, duration, true, reason == :recoverable]
+    end
 
     verified, desc = parse_res(output.strip)
-    [verified, desc || 'Failed', duration]
+    [verified, desc || 'Failed', duration, false, false]
   end
 
   def retry_with_fix(model, req)
@@ -158,7 +161,7 @@ class VerificationHandler
     success, fix_output = @agent_executor.run(model, fix_prompt)
     return [false, nil, 0, nil] unless success
 
-    verified, desc, review_time = run_verification(model, req, fix_output)
+    verified, desc, review_time, _call_failed, _retryable = run_verification(model, req, fix_output)
     [verified, desc, review_time, fix_output]
   end
 

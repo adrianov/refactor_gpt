@@ -109,7 +109,7 @@ class Superagent
       success, output = @agent_executor.run_plan_mode(model, req, new_session: !@session_continuation)
       return handle_plan_success if success
 
-      @display.display_agent_failure(output)
+      @display.display_agent_failure(output, nil)
     end
 
     handle_final_failure
@@ -158,11 +158,11 @@ class Superagent
     @display.display_attempt_header(model, idx, MODELS.size)
 
     start = Time.now
-    success, output, = @agent_executor.run(model, req, new_session: !@session_continuation)
+    success, output, reason = @agent_executor.run(model, req, new_session: !@session_continuation)
     elapsed = Time.now - start
 
     unless success
-      record_network_failure(model, output, elapsed)
+      record_network_failure(model, output, elapsed, reason)
       return :continue
     end
 
@@ -175,9 +175,9 @@ class Superagent
     result
   end
 
-  def record_network_failure(model, output, implementation_time)
+  def record_network_failure(model, output, implementation_time, reason = nil)
     @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
-    @display.display_agent_failure(output)
+    @display.display_agent_failure(output, reason)
     pass_timing = {
       pass: @current_pass,
       model: model,
@@ -202,9 +202,19 @@ class Superagent
     }
 
     update_terminal_title("Verifying: #{model}")
-    verified, desc, review_time = @verification_handler.run_verification(model, req, @current_agent_output)
+    verified, desc, review_time, call_failed, _ = run_verification_with_retries(model, req)
     pass_timing[:review_time] = review_time
     $stdout.puts ''
+
+    if call_failed
+      record_attempt_failure(model)
+      @display.display_verification_result(false, desc)
+      $stdout.puts ''
+      pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
+      @pass_timings << pass_timing
+      @display.display_pass_timing(pass_timing)
+      return :continue
+    end
 
     if verified
       finalize_success(pass_timing, pass_start, desc, req)
@@ -214,6 +224,24 @@ class Superagent
     @display.display_verification_result(false, desc)
     $stdout.puts ''
     retry_verification_with_fix(model, req, pass_timing, pass_start)
+  end
+
+  VERIFICATION_CALL_RETRIES = 2
+
+  def run_verification_with_retries(model, req)
+    last_verified, last_desc, last_review_time = nil, nil, nil
+    (VERIFICATION_CALL_RETRIES + 1).times do |attempt|
+      verified, desc, review_time, call_failed, retryable = @verification_handler.run_verification(
+        model, req, @current_agent_output
+      )
+      last_verified, last_desc, last_review_time = verified, desc, review_time
+      return [verified, desc, review_time, call_failed, retryable] unless call_failed && retryable
+      break if attempt >= VERIFICATION_CALL_RETRIES
+
+      @display.puts 'Verification call failed (retryable), retrying...'.yellow
+      $stdout.puts ''
+    end
+    [last_verified, last_desc, last_review_time, true, false]
   end
 
   def retry_verification_with_fix(model, req, pass_timing, pass_start)

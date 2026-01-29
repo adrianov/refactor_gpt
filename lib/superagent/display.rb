@@ -240,14 +240,28 @@ class Display
       puts "Run time: #{format_duration(elapsed)}".cyan
     end
 
-    def display_agent_failure(output = nil)
-      puts 'Agent failed. Next...'.yellow
+    def display_agent_failure(output = nil, reason = nil)
+      msg = failure_reason_message(output, reason)
+      puts "Agent failed: #{msg}. Next...".yellow
       if output && !output.strip.empty?
         $stdout.puts ''
         $stdout.puts 'Agent output:'.yellow
         output.each_line { |line| $stdout.puts body("  #{line.chomp}") }
       end
       $stdout.puts ''
+    end
+
+    def failure_reason_message(output, reason)
+      if output.nil? || output.to_s.strip.empty?
+        'no response (retryable)'
+      elsif reason == :unrecoverable
+        'backend error (not retryable)'
+      elsif reason == :recoverable
+        'connection/network error (retryable)'
+      else
+        first_line = output.strip.lines.first&.strip
+        first_line && first_line.length <= 80 ? first_line : 'see output below'
+      end
     end
 
     def display_all_attempts_failed
