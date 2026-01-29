@@ -33,31 +33,36 @@ class VerificationHandler
   def parse_res(res)
     return [false, res] if res.nil? || res.strip.empty?
 
-    n = res.strip
-    up = n.upcase
+    line = extract_final_verdict_line(res)
+    return [false, res] unless line
 
-    # Prioritize NO if both are present and NO comes first
-    yes_match = up.match(/\bYES\b/i)
-    no_match = up.match(/\bNO\b/i)
-
-    if no_match && (yes_match.nil? || no_match.begin(0) < yes_match.begin(0))
-      parse_no_res(n)
-    elsif yes_match
-      parse_yes_res(n)
+    if line[:verdict] == :no
+      parse_no_res(line[:text])
     else
-      [false, res]
+      parse_yes_res(line[:text])
     end
   end
 
+  def extract_final_verdict_line(text)
+    last_match = nil
+    text.to_s.each_line do |line|
+      match = line.match(/^\s*(YES|NO)\b\s*:?\s*(.*)$/i)
+      next unless match
+
+      last_match = { verdict: match[1].casecmp('no').zero? ? :no : :yes, text: line.strip }
+    end
+    last_match
+  end
+
   def parse_no_res(n)
-    m = n.match(/\bNO\b\s*:?\s*(.*)/i)
+    m = n.match(/^\s*NO\b\s*:?\s*(.*)$/i)
     return [false, 'Failed'] unless m && !m[1].strip.empty?
 
-    [false, remove_duplicates(m[1].strip.split(/\b(?:YES|NO)\s*:?\s*/i).first.strip)]
+    [false, remove_duplicates(m[1].strip)]
   end
 
   def parse_yes_res(n)
-    m = n.match(/\bYES\b\s*:?\s*(.*)/m)
+    m = n.match(/^\s*YES\b\s*:?\s*(.*)$/i)
     return [true, 'Passed'] unless m && !m[1].strip.empty?
 
     [true, m[1].strip]
