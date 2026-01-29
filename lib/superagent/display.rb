@@ -259,11 +259,11 @@ class Display
 
     def failure_reason_message(output, reason)
       if output.nil? || output.to_s.strip.empty?
-        'no response (retryable, will retry up to 3 times)'
+        'no response (retryable, will retry up to 5 times)'
       elsif reason == :unrecoverable
         'backend error (not retryable)'
       elsif reason == :recoverable
-        'connection/network error (retryable, will retry up to 3 times)'
+        'connection/network error (retryable, will retry up to 5 times)'
       else
         first_line = output.to_s.strip.lines.first&.strip
         first_line && first_line.length <= 80 ? first_line : 'see output below'
