@@ -252,13 +252,13 @@ class Superagent
 
 
   def handle_success(desc, context = '')
-    @display.display_verification_result(true, desc, context)
-    @display.display_total_runtime(@start_time)
     @display.display_git_diff
-    @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
-    @display.display_passes_recap(@pass_timings)
     @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
+    @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
+    @display.display_passes_recap(@pass_timings)
+    @display.display_verification_result(true, desc, context)
+    @display.display_total_runtime(@start_time)
   end
 
   def handle_final_success(previous_req = nil)
@@ -329,11 +329,11 @@ class Superagent
 
   def handle_final_failure
     ensure_pending_input_stopped
-    @display.display_all_attempts_failed
-    @display.display_total_runtime(@start_time)
-    @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
+    @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
+    @display.display_all_attempts_failed
+    @display.display_total_runtime(@start_time)
     save_current_session(@current_request) if @current_request
     CompletionNotifier.notify_completion(success: false)
     update_terminal_title(false)
