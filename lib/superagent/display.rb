@@ -61,7 +61,7 @@ class Display
     end
 
     def print_word(text, stream_id: nil)
-      return if text.nil? || text.empty?
+      return if text.nil? || text.to_s.empty?
 
       clear_thinking_indicator
 
@@ -75,7 +75,7 @@ class Display
         $stdout.puts '' unless @text_buffer.empty?
       end
 
-      @text_buffer += text
+      @text_buffer += text.to_s
       process_complete_lines(is_new_stream: is_new_stream)
 
       if @text_buffer.length > 200 && !@text_buffer.include?("\n")
@@ -97,7 +97,7 @@ class Display
       @text_buffer = @text_buffer.sub(/\n{2,}\z/, "\n")
       process_complete_lines
 
-      unless @text_buffer.strip.empty?
+      unless @text_buffer.to_s.strip.empty?
         ensure_timestamp if @at_start_of_line
         $stdout.print body(@text_buffer)
         $stdout.puts '' unless @text_buffer.end_with?("\n")
@@ -159,7 +159,7 @@ class Display
     end
 
     def display_session_description(description)
-      return unless description && !description.strip.empty?
+      return unless description && !description.to_s.strip.empty?
 
       $stdout.puts ''
       puts "Session: #{description}".cyan
@@ -243,7 +243,7 @@ class Display
     def display_agent_failure(output = nil, reason = nil)
       msg = failure_reason_message(output, reason)
       puts "Agent failed: #{msg}. Next...".yellow
-      if output && !output.strip.empty?
+      if output && !output.to_s.strip.empty?
         $stdout.puts ''
         $stdout.puts 'Agent output:'.yellow
         output.each_line { |line| $stdout.puts body("  #{line.chomp}") }
@@ -259,7 +259,7 @@ class Display
       elsif reason == :recoverable
         'connection/network error (retryable)'
       else
-        first_line = output.strip.lines.first&.strip
+        first_line = output.to_s.strip.lines.first&.strip
         first_line && first_line.length <= 80 ? first_line : 'see output below'
       end
     end
@@ -268,7 +268,7 @@ class Display
       puts 'All attempts failed.'.red
       return if original_request.to_s.strip.empty?
 
-      preview = original_request.strip.lines.first(5).join.rstrip
+      preview = original_request.to_s.strip.lines.first(5).join.rstrip
       puts "Original query: #{preview}".yellow
     end
 
@@ -400,7 +400,7 @@ class Display
       system("git fetch > #{File::NULL} 2>&1")
       status_output = `git status 2>&1`
       if $?.success?
-        status_output.strip.each_line { |line| $stdout.puts body(line.chomp) }
+        status_output.to_s.strip.each_line { |line| $stdout.puts body(line.chomp) }
       else
         puts 'Warning: Failed to get git status'.yellow
       end

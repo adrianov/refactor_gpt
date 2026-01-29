@@ -31,7 +31,7 @@ class VerificationHandler
   end
 
   def parse_res(res)
-    return [false, res] if res.nil? || res.strip.empty?
+    return [false, res] if res.nil? || res.to_s.strip.empty?
 
     line = extract_final_verdict_line(res)
     return [false, res] unless line
@@ -49,23 +49,23 @@ class VerificationHandler
       match = line.match(/^\s*(YES|NO)\b\s*:?\s*(.*)$/i)
       next unless match
 
-      last_match = { verdict: match[1].casecmp('no').zero? ? :no : :yes, text: line.strip }
+      last_match = { verdict: match[1].casecmp('no').zero? ? :no : :yes, text: line.to_s.strip }
     end
     last_match
   end
 
   def parse_no_res(n)
     m = n.match(/^\s*NO\b\s*:?\s*(.*)$/i)
-    return [false, 'Failed'] unless m && !m[1].strip.empty?
+    return [false, 'Failed'] unless m && !m[1].to_s.strip.empty?
 
-    [false, remove_duplicates(m[1].strip)]
+    [false, remove_duplicates(m[1].to_s.strip)]
   end
 
   def parse_yes_res(n)
     m = n.match(/^\s*YES\b\s*:?\s*(.*)$/i)
-    return [true, 'Passed'] unless m && !m[1].strip.empty?
+    return [true, 'Passed'] unless m && !m[1].to_s.strip.empty?
 
-    [true, m[1].strip]
+    [true, m[1].to_s.strip]
   end
 
   def remove_duplicates(text)
@@ -83,7 +83,7 @@ class VerificationHandler
   def check_and_strip(text, first, second)
     return text if second.length < 10
 
-    duplicate_detected?(first, second) ? text[0, text.length / 2].strip : text
+    duplicate_detected?(first, second) ? text.to_s[0, text.length / 2].strip : text
   end
 
   def duplicate_detected?(first, second)
@@ -127,8 +127,8 @@ class VerificationHandler
     prev_utf8 = to_utf8(previous_agent_response)
     content_parts = []
     content_parts << "Current user request: #{req_utf8}#{to_utf8(format_previous_requests)}\n\n"
-    if prev_utf8 && !prev_utf8.strip.empty?
-      content_parts << "Final response from previous agent run:\n#{prev_utf8.strip}\n"
+    if prev_utf8 && !prev_utf8.to_s.strip.empty?
+      content_parts << "Final response from previous agent run:\n#{prev_utf8.to_s.strip}\n"
     end
     content_parts.map { |p| to_utf8(p) }.join("\n")
   end
@@ -149,7 +149,7 @@ class VerificationHandler
       return [false, desc, duration, true, reason == :recoverable]
     end
 
-    verified, desc = parse_res(output.strip)
+    verified, desc = parse_res(output.to_s.strip)
     [verified, desc || 'Failed', duration, false, false]
   end
 

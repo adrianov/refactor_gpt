@@ -46,14 +46,14 @@ class RequestReader
         lines << line
       end
       result = lines.join("\n")
-      result.strip.empty? ? nil : result
+      result.to_s.strip.empty? ? nil : result
     end
 
     def read_interactive_line(lines)
       line = Reline.readline(lines.empty? ? '> ' : '  ', true)
       return nil if line.nil?
 
-      line = line.strip
+      line = line.to_s.strip
       return :done if line.empty? && !lines.empty?
       return :continue if line.empty?
 
@@ -69,12 +69,12 @@ class RequestReader
 
     def read
       piped = read_from_stdin
-      return piped if piped && !piped.strip.empty?
+      return piped if piped && !piped.to_s.strip.empty?
       read_from_argv || read_interactive
     end
 
     def validate(req)
-      return true if req && !req.strip.empty?
+      return true if req && !req.to_s.strip.empty?
 
       exit 0
     end

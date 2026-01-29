@@ -61,7 +61,7 @@ class SessionTracker
 
   def run_continuation_query(client, prompt, title, new_request, previous_session)
     response = query_ask_client(client, prompt, title: title)
-    @display.puts response.light_black if response && !response.strip.empty?
+    @display.puts response.light_black if response && !response.to_s.strip.empty?
     result = parse_continuation_and_description_response(response, previous_session)
     result[:description] = description_or_default(result[:description], new_request)
     result
@@ -285,7 +285,7 @@ class SessionTracker
       continuation = continuation_match && continuation_match[1].upcase == "YES"
     end
     tags_match = response.match(/TAGS:\s*(.+?)(?:\n|$)/i)
-    tags_text = tags_match ? tags_match[1].strip : ""
+    tags_text = tags_match ? tags_match[1].to_s.strip : ""
     tags = extract_tags(tags_text)
     description = extract_description_from_response(response)
 
@@ -296,7 +296,7 @@ class SessionTracker
     desc_match = response.match(/DESCRIPTION:\s*(.+?)(?:\n\s*\n|\z)/im)
     return nil unless desc_match
 
-    extract_description("Description: #{desc_match[1].strip}")
+    extract_description("Description: #{desc_match[1].to_s.strip}")
   end
 
   def extract_tags(tags_text)
@@ -308,11 +308,11 @@ class SessionTracker
   def extract_description(response)
     return nil unless response
 
-    description = response.strip
+    description = response.to_s.strip
     description = description.gsub(/^(Description:|Session:)\s*/i, '')
     description = description.split("\n").first
     description = description[0..99] if description && description.length > 100
-    description&.strip
+    description&.to_s&.strip
   end
 
   def cleanup_old_sessions

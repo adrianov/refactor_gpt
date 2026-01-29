@@ -13,8 +13,8 @@ class PendingRequestQueue
     return if request.to_s.strip.empty?
 
     @mutex.synchronize do
-      @queue << request.strip
-      preview = request.strip.lines.first&.chomp
+      @queue << request.to_s.strip
+      preview = request.to_s.strip.lines.first&.chomp
       preview = preview[0..60] + '...' if preview && preview.length > 60
       @display.puts "Queued (#{@queue.size}): #{preview}".light_blue
     end

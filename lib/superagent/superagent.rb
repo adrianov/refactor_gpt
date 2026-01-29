@@ -181,7 +181,7 @@ class Superagent
 
     @current_implementation_time = elapsed
     @current_agent_output = output
-    save_agent_summary(output) if output&.strip && !output.strip.empty?
+    save_agent_summary(output) if output && !output.to_s.strip.empty?
 
     result = process_verification_and_fix(model, req)
     record_attempt_failure(model) if result != :success
@@ -428,7 +428,7 @@ class Superagent
   end
 
   def save_agent_summary(summary)
-    save_current_session(@current_request, summary) if summary&.strip && !summary.strip.empty? && @current_request
+    save_current_session(@current_request, summary) if summary && !summary.to_s.strip.empty? && @current_request
   end
 
   def sanitize_request(req)

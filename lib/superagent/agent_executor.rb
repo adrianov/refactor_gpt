@@ -62,7 +62,7 @@ class AgentExecutor
   end
 
   def line_matches_runner?(line, runner)
-    return false if line.strip.empty?
+    return false if line.to_s.strip.empty?
 
     comm, args = line.split(nil, 2)
     return false if args.nil? || !%w[ruby node python].include?(comm)
@@ -99,7 +99,7 @@ class AgentExecutor
 
   def process_matches_runner?(pid, runner)
     # Check if the command line of the process contains the runner name
-    cmdline = `ps -p #{pid} -o args= 2>/dev/null`.strip
+    cmdline = `ps -p #{pid} -o args= 2>/dev/null`.to_s.strip
     cmdline.include?(runner)
   end
 
@@ -141,7 +141,7 @@ class AgentExecutor
 
   def git_diff_section(new_session)
     return nil unless new_session
-    out = `git diff 2>#{File::NULL}`.strip
+    out = `git diff 2>#{File::NULL}`.to_s.strip
     return nil if out.empty?
     lines = out.split("\n", -1)
     truncated = lines.size > CONTEXT_MAX_LINES
@@ -152,7 +152,7 @@ class AgentExecutor
 
   def working_tree_section(new_session)
     return nil unless new_session
-    out = `bfs --nohidden 2>#{File::NULL}`.strip
+    out = `bfs --nohidden 2>#{File::NULL}`.to_s.strip
     return nil if out.empty?
     lines = out.split("\n", -1)
     truncated = lines.size > CONTEXT_MAX_LINES
@@ -163,13 +163,13 @@ class AgentExecutor
 
   def guidelines_section(always_include: false)
     content = load_agents_content
-    if content.nil? || content.strip.empty?
-      content = "Project guidelines (default refactoring instructions):\n#{DEFAULT_USER_INSTRUCTION.strip}"
+    if content.nil? || content.to_s.strip.empty?
+      content = "Project guidelines (default refactoring instructions):\n#{DEFAULT_USER_INSTRUCTION.to_s.strip}"
     elsif always_include
-      content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.strip}\n\n" \
-                "General coding rules:\n#{DEFAULT_USER_INSTRUCTION.strip}"
+      content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.to_s.strip}\n\n" \
+                "General coding rules:\n#{DEFAULT_USER_INSTRUCTION.to_s.strip}"
     else
-      content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.strip}"
+      content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.to_s.strip}"
     end
 
     "\n\n#{content}"
@@ -177,9 +177,9 @@ class AgentExecutor
 
   def summary_section
     summary = @session_tracker&.get_last_agent_summary
-    return nil if summary.nil? || summary.strip.empty?
+    return nil if summary.nil? || summary.to_s.strip.empty?
 
-    "\n\nFinal summary from previous agent run:\n#{summary.strip}"
+    "\n\nFinal summary from previous agent run:\n#{summary.to_s.strip}"
   end
 
   def history_section
@@ -201,15 +201,15 @@ class AgentExecutor
     project_root = Dir.pwd
     parts = []
     agents_rb = File.join(project_root, 'AGENTS.rb')
-    parts << "--- AGENTS.rb ---\n#{File.read(agents_rb).strip}" if File.exist?(agents_rb)
+    parts << "--- AGENTS.rb ---\n#{File.read(agents_rb).to_s.strip}" if File.exist?(agents_rb)
     file_content = load_agents_file(project_root)
-    parts << file_content if file_content && !file_content.strip.empty?
+    parts << file_content if file_content && !file_content.to_s.strip.empty?
     parts.empty? ? '' : parts.join("\n\n")
   end
 
   def parse_json_stream_line(line)
     return [nil] * 5 if line.nil?
-    stripped = line.strip
+    stripped = line.to_s.strip
     return [nil] * 5 if stripped.empty?
 
     json_obj = Oj.load(stripped)
@@ -239,7 +239,7 @@ class AgentExecutor
         text_content = content.find { |c| c['type'] == 'text' }
         text = text_content ? text_content['text'] : nil
         return text if text && !text.to_s.strip.empty?
-      elsif content.is_a?(String) && !content.strip.empty?
+      elsif content.is_a?(String) && !content.to_s.strip.empty?
         return content
       end
       json_obj.dig('message', 'text') || json_obj['text']
@@ -300,7 +300,7 @@ class AgentExecutor
     patterns.each do |pattern|
       match = text.match(pattern)
       if match && match[1]
-        cmd = match[1].strip
+        cmd = match[1].to_s.strip
         # Only return if it looks like an actual command
         # Commands typically have: executable names, paths, flags, or are short common commands
         return cmd if looks_like_command?(cmd)
@@ -376,7 +376,7 @@ class AgentExecutor
     return false if cmd.length < 4 || cmd.length > 500
     return false unless cmd.match?(/^[a-zA-Z0-9_\-\.\/\s\:\;\,\|\&\<\>\(\)\"\']+$/)
     # Reject single-word fragments that are not paths or flags (e.g. "run", "and a")
-    return false if cmd.strip !~ /\s/ && !cmd.include?('/') && !cmd.match?(/^\-+\w/)
+    return false if cmd.to_s.strip !~ /\s/ && !cmd.include?('/') && !cmd.match?(/^\-+\w/)
 
     cmd.match?(/\b(rspec|rake|make|npm|yarn|bundle|ruby|python|node|go| cargo|test|spec|build|run)\b/i) ||
       cmd.match?(/[\/\-]/) ||
@@ -440,7 +440,7 @@ class AgentExecutor
   def unrecoverable_error?(output)
     return false if output.to_s.empty?
 
-    n = output.downcase
+    n = output.to_s.downcase
     UNRECOVERABLE_PHRASES.any? { |p| n.include?(p) } ||
       (n.include?('rate limit') && n.include?('exceeded')) ||
       n.include?('cannot use this model') ||
@@ -452,7 +452,7 @@ class AgentExecutor
   def usage_unrecoverable?(output)
     return false if output.to_s.empty?
 
-    n = output.downcase
+    n = output.to_s.downcase
     (n.include?('rate limit') && n.include?('exceeded')) ||
       n.include?('usage limit') ||
       n.include?('this error is unrecoverable')
@@ -508,8 +508,8 @@ start: nil }
       stdout, _, status, timeout_reason = run_with_timeout_monitoring(model, wrapped,
         verification_mode: verification_mode)
       @model_call_finished_since_compact = true
-      output = stdout || ''
-      return [true, output, nil] if status&.success? || (verification_mode && output.strip.length > 0)
+      output = (stdout || '').to_s
+      return [true, output, nil] if status&.success? || (verification_mode && output.to_s.strip.length > 0)
 
       reason = if output.to_s.strip.empty?
                  :recoverable
@@ -530,7 +530,7 @@ start: nil }
         sleep(delay)
         next
       end
-      return [false, output, reason]
+      return [false, output.to_s, reason]
     end
   rescue StandardError => e
     @display.puts "❌ Agent execution error: #{e.message}".red
@@ -554,7 +554,7 @@ start: nil }
   end
 
   def process_json_stream_line(line, final)
-    type, text, stream_id, command, tool = parse_json_stream_line(line.strip)
+    type, text, stream_id, command, tool = parse_json_stream_line(line.to_s.strip)
     unless @passthrough
       if tool
         @display.display_tool_call(tool)
@@ -680,7 +680,7 @@ start: nil }
   def process_buffer(buffer, final)
     while (idx = buffer.index("\n"))
       line_with_newline = buffer[0..idx]
-      line = line_with_newline.strip
+      line = line_with_newline.to_s.strip
       buffer = buffer[(idx + 1)..-1] || ''
       $stdout.write(line_with_newline) && $stdout.flush if @passthrough
       final = process_json_stream_line(line, final)
@@ -691,7 +691,8 @@ start: nil }
   def finalize_execution(raw, final, wait_thr)
     status = wait_thr.value rescue Struct.new(:success?).new(false)
     status = Struct.new(:success?).new(false) if @state && @state[:timed_out]
-    out = final.empty? ? raw : final
+    out = (final.respond_to?(:empty?) && final.empty?) ? raw : final
+    out = out.to_s
     success_for_display = status.success? || (@verification_mode && out.to_s.strip.length > 0)
     unless @passthrough
       @display.flush_word_buffer
