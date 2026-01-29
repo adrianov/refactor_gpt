@@ -68,7 +68,9 @@ class RequestReader
     end
 
     def read
-      read_from_argv || read_from_stdin || read_interactive
+      piped = read_from_stdin
+      return piped if piped && !piped.strip.empty?
+      read_from_argv || read_interactive
     end
 
     def validate(req)
