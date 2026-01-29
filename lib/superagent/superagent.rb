@@ -155,7 +155,6 @@ class Superagent
     attempt_number = (@attempt_count_per_model[model] || 0) + 1
     update_terminal_title("Attempting: #{model} (attempt #{attempt_number}/#{ATTEMPTS_PER_MODEL})")
     @display.display_attempt_header(model, idx, MODELS.size)
-    show_queue_reminder_if_tty
 
     start = Time.now
     success, output, = @agent_executor.run(model, req, new_session: !@session_continuation)
@@ -171,6 +170,7 @@ class Superagent
     save_agent_summary(output) if output&.strip && !output.strip.empty?
 
     result = process_verification_and_fix(model, req)
+    show_queue_reminder_if_tty if result != :success
     record_attempt_failure(model) if result != :success
     result
   end

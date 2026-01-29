@@ -173,15 +173,22 @@ class Display
 
     def display_pending_hint
       $stdout.puts ''
-      puts '--- Interactive Queue (type below, Enter twice to add) ---'.cyan
-      puts 'Requests are collected and sent together to the next run.'.light_black
+      puts "╭──────────────────────────────────────────────────────────╮".cyan
+      puts "│ 📥 Interactive Queue (type below, Enter twice to add)    │".cyan
+      puts "│ Requests are collected and sent together to next run.    │".light_black
+      puts "╰──────────────────────────────────────────────────────────╯".cyan
       $stdout.puts ''
     end
 
     def display_pending_queue_reminder(queue_size)
       return if queue_size.to_i.zero?
 
-      puts "📥 Queue (#{queue_size} queued): type request, Enter twice to add.".cyan
+      # Use a more TUI-like status line that doesn't scroll away as easily
+      # by printing it with a distinct background or separator if possible,
+      # but sticking to current style:
+      puts "╭──────────────────────────────────────────────────────────╮".cyan
+      puts "│ 📥 Queue (#{queue_size} queued): type request, Enter twice to add. │".cyan
+      puts "╰──────────────────────────────────────────────────────────╯".cyan
       $stdout.puts ''
     end
 
