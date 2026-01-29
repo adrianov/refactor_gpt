@@ -10,6 +10,28 @@ class SessionTracker
   SESSION_DIR = File.join(Dir.tmpdir, 'refactor_gpt_sessions')
   MAX_SESSION_AGE = 86400 # 24 hours
 
+  TAGS_LIST = <<~TAGS.strip
+    - #bug: Fixing a defect or error in the code
+    - #regression: Fixing a bug that was previously resolved but has been reintroduced
+    - #hotfix: Urgent bug fix requiring immediate deployment
+    - #feature: Adding new functionality or capabilities
+    - #improvement: Enhancing existing functionality without adding new features
+    - #refactoring: Restructuring code without changing behavior
+    - #performance: Optimizing speed, memory usage, or resource consumption
+    - #security: Addressing security vulnerabilities or hardening defenses
+    - #test: Writing, updating, or fixing tests
+    - #docs: Creating or updating documentation
+    - #plan: Planning, designing, or discussing implementation approach
+    - #debug: Investigating and diagnosing issues
+    - #investigation: Analyzing problems or exploring solutions
+    - #chore: Maintenance tasks, dependency updates, or housekeeping
+    - #api: Changes to API interfaces or contracts
+    - #ui: User interface modifications
+    - #ux: User experience improvements
+    - #config: Configuration or environment changes
+    - #migration: Database or system migration tasks
+  TAGS
+
   def initialize(display)
     @display = display
     ensure_session_dir
@@ -25,50 +47,38 @@ class SessionTracker
     session_data
   end
 
-  def classify_request(request)
+  def analyze_continuation_and_description(new_request, previous_session)
     client = create_ask_client
-    return {tags: []} unless client
+    default = {continuation: false, tags: [], description: default_description(new_request)}
+    return default unless client
 
-    prompt = build_classification_prompt(request)
-    response = query_ask_client(client, prompt, title: "Classifying request")
-    @display.puts "Tags: #{response}".light_black if response && !response.strip.empty?
-    tags = parse_classification_response(response)
-    {tags: tags}
+    prompt, title = continuation_prompt_and_title(new_request, previous_session)
+    run_continuation_query(client, prompt, title, new_request, previous_session)
   rescue StandardError => e
-    @display.puts "Warning: Failed to classify request: #{e.message}".yellow
-    {tags: []}
+    @display.puts "Warning: Failed to analyze: #{e.message}".yellow
+    default
   end
 
-  def analyze_continuation(new_request, previous_session)
-    return {continuation: false, tags: []} unless previous_session
-
-    client = create_ask_client
-    return {continuation: false, tags: []} unless client
-
-    response = query_ask_client(client,
-      build_continuation_analysis_prompt(new_request, previous_session[:request]),
-      title: "Analyzing continuation")
-    @display.puts "Continuation: #{response}".light_black if response && !response.strip.empty?
-    parse_continuation_response(response)
-  rescue StandardError => e
-    @display.puts "Warning: Failed to analyze continuation: #{e.message}".yellow
-    {continuation: false, tags: []}
+  def run_continuation_query(client, prompt, title, new_request, previous_session)
+    response = query_ask_client(client, prompt, title: title)
+    @display.puts response.light_black if response && !response.strip.empty?
+    result = parse_continuation_and_description_response(response, previous_session)
+    result[:description] = description_or_default(result[:description], new_request)
+    result
   end
 
-  def generate_session_description(request, tags = [])
-    client = create_ask_client
-    return default_description(request) unless client
-
-    response = query_ask_client(client, build_description_prompt(request, tags), title: "Generating description")
-    @display.puts "Description: #{response}".light_black if response && !response.strip.empty?
-    extract_description(response) || default_description(request)
-  rescue StandardError => e
-    @display.puts "Warning: Failed to generate description: #{e.message}".yellow
-    default_description(request)
+  def continuation_prompt_and_title(new_request, previous_session)
+    prompt = build_analysis_and_description_prompt(new_request, previous_session)
+    title = previous_session ? "Analyzing continuation" : "Classifying request"
+    [prompt, title]
   end
 
   def default_description(request)
     "Session: #{request[0..100]}..."
+  end
+
+  def description_or_default(description, request)
+    description.to_s.strip.empty? ? default_description(request) : description
   end
 
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided, agent_session_id: nil)
@@ -176,25 +186,7 @@ class SessionTracker
       #{request}
 
       Identify applicable tags from the following list:
-      - #bug: Fixing a defect or error in the code
-      - #regression: Fixing a bug that was previously resolved but has been reintroduced
-      - #hotfix: Urgent bug fix requiring immediate deployment
-      - #feature: Adding new functionality or capabilities
-      - #improvement: Enhancing existing functionality without adding new features
-      - #refactoring: Restructuring code without changing behavior
-      - #performance: Optimizing speed, memory usage, or resource consumption
-      - #security: Addressing security vulnerabilities or hardening defenses
-      - #test: Writing, updating, or fixing tests
-      - #docs: Creating or updating documentation
-      - #plan: Planning, designing, or discussing implementation approach
-      - #debug: Investigating and diagnosing issues
-      - #investigation: Analyzing problems or exploring solutions
-      - #chore: Maintenance tasks, dependency updates, or housekeeping
-      - #api: Changes to API interfaces or contracts
-      - #ui: User interface modifications
-      - #ux: User experience improvements
-      - #config: Configuration or environment changes
-      - #migration: Database or system migration tasks
+      #{TAGS_LIST}
 
       Response format (required):
       TAGS: comma-separated tags (e.g., #bug, #improvement) or NONE
@@ -225,25 +217,7 @@ class SessionTracker
       Tasks:
       1. Determine if the new request continues the previous work (YES) or starts a new session (NO)
       2. Identify applicable tags from the following list:
-         - #bug: Fixing a defect or error in the code
-         - #regression: Fixing a bug that was previously resolved but has been reintroduced
-         - #hotfix: Urgent bug fix requiring immediate deployment
-         - #feature: Adding new functionality or capabilities
-         - #improvement: Enhancing existing functionality without adding new features
-         - #refactoring: Restructuring code without changing behavior
-         - #performance: Optimizing speed, memory usage, or resource consumption
-         - #security: Addressing security vulnerabilities or hardening defenses
-         - #test: Writing, updating, or fixing tests
-         - #docs: Creating or updating documentation
-         - #plan: Planning, designing, or discussing implementation approach
-         - #debug: Investigating and diagnosing issues
-         - #investigation: Analyzing problems or exploring solutions
-         - #chore: Maintenance tasks, dependency updates, or housekeeping
-         - #api: Changes to API interfaces or contracts
-         - #ui: User interface modifications
-         - #ux: User experience improvements
-         - #config: Configuration or environment changes
-         - #migration: Database or system migration tasks
+         #{TAGS_LIST.gsub("\n", "\n         ")}
 
       Response format (required):
       CONTINUATION: YES or NO
@@ -261,19 +235,31 @@ class SessionTracker
     HEREDOC
   end
 
-  def build_description_prompt(request, tags)
-    tags_text = tags.empty? ? '' : " Tags: #{tags.join(', ')}"
+  def append_description_task(base_prompt, step_number, format_lines)
     <<~HEREDOC
-      Generate a concise one-sentence description of this session request.
+      #{base_prompt}
 
-      Request: #{request}#{tags_text}
+      #{step_number}. Generate a concise one-sentence description of this session request (under 100 characters).
 
-      Provide only the description, no prefix or formatting. Keep it under 100 characters.
-      Examples:
-      - "Add user authentication with email validation"
-      - "Fix memory leak in data processing module"
-      - "Refactor API endpoints for better error handling"
+      Response format (required):
+      #{format_lines}
     HEREDOC
+  end
+
+  def build_analysis_and_description_prompt(new_request, previous_session)
+    if previous_session
+      append_description_task(
+        build_continuation_analysis_prompt(new_request, previous_session[:request]).strip,
+        3,
+        "CONTINUATION: YES or NO\nTAGS: comma-separated tags or NONE\nDESCRIPTION: one sentence summary"
+      )
+    else
+      append_description_task(
+        build_classification_prompt(new_request).strip,
+        2,
+        "TAGS: comma-separated tags or NONE\nDESCRIPTION: one sentence summary"
+      )
+    end
   end
 
   def query_ask_client(client, prompt, title: nil)
@@ -289,25 +275,28 @@ class SessionTracker
     end
   end
 
-  def parse_classification_response(response)
-    return [] unless response
+  def parse_continuation_and_description_response(response, previous_session)
+    default = {continuation: false, tags: [], description: nil}
+    return default unless response
 
+    continuation = false
+    if previous_session
+      continuation_match = response.match(/CONTINUATION:\s*(YES|NO)/i)
+      continuation = continuation_match && continuation_match[1].upcase == "YES"
+    end
     tags_match = response.match(/TAGS:\s*(.+?)(?:\n|$)/i)
-    tags_text = tags_match ? tags_match[1].strip : ""
-    extract_tags(tags_text)
-  end
-
-  def parse_continuation_response(response)
-    return {continuation: false, tags: []} unless response
-
-    continuation_match = response.match(/CONTINUATION:\s*(YES|NO)/i)
-    tags_match = response.match(/TAGS:\s*(.+?)(?:\n|$)/i)
-
-    continuation = continuation_match && continuation_match[1].upcase == "YES"
     tags_text = tags_match ? tags_match[1].strip : ""
     tags = extract_tags(tags_text)
+    description = extract_description_from_response(response)
 
-    {continuation: continuation, tags: tags}
+    {continuation: continuation, tags: tags, description: description}
+  end
+
+  def extract_description_from_response(response)
+    desc_match = response.match(/DESCRIPTION:\s*(.+?)(?:\n\s*\n|\z)/im)
+    return nil unless desc_match
+
+    extract_description("Description: #{desc_match[1].strip}")
   end
 
   def extract_tags(tags_text)

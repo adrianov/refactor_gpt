@@ -6,6 +6,7 @@ require_relative "agent_executor"
 require_relative "verification_handler"
 require_relative "session_tracker"
 require_relative "pending_request_queue"
+require_relative "auto_only_lock"
 require_relative "../completion_notifier"
 require_relative "../instance_lock"
 require_relative "../../ask_gpt"
@@ -29,13 +30,15 @@ class Superagent
     claude-4.5-sonnet
     claude-4.5-opus
   ].freeze
+  MODELS_AUTO_ONLY = %w[auto auto auto].freeze
 
   def initialize(
     display: Display.new,
     request_reader: nil,
     agent_executor: nil,
     verification_handler: nil,
-    session_tracker: nil
+    session_tracker: nil,
+    auto_only: false
   )
     @display = display
     @session_tracker = session_tracker || SessionTracker.new(@display)
@@ -63,6 +66,7 @@ class Superagent
     @pending_queue = PendingRequestQueue.new(@display)
     @input_thread = nil
     @input_wakeup_writer = nil
+    @auto_only = auto_only
   end
 
   def run(start_model_index: 0, request: nil)
@@ -99,12 +103,12 @@ class Superagent
     @display.puts 'Running in plan mode...'.cyan
     $stdout.puts ''
 
-    MODELS[start_index..-1].each_with_index do |model, relative_idx|
+    models[start_index..-1].each_with_index do |model, relative_idx|
       idx = start_index + relative_idx
       @current_pass = idx + 1
       @current_model = model
       update_terminal_title("Planning: #{model}")
-      @display.display_attempt_header(model, idx, MODELS.size)
+      @display.display_attempt_header(model, idx, models.size)
 
       success, output = @agent_executor.run_plan_mode(model, req, new_session: !@session_continuation)
       return handle_plan_success if success
@@ -116,6 +120,10 @@ class Superagent
   end
 
   private
+
+  def models
+    @auto_only ? MODELS_AUTO_ONLY : MODELS
+  end
 
   def determine_start_index(model_index_from_request, start_model_index)
     if @session_continuation
@@ -140,7 +148,7 @@ class Superagent
     @current_model_index = start_index
     @attempt_count_per_model = {} unless @session_continuation
     highest_index_reached = start_index
-    MODELS[@current_model_index..-1].each_with_index do |model, relative_idx|
+    models[@current_model_index..-1].each_with_index do |model, relative_idx|
       idx = @current_model_index + relative_idx
       @current_pass = idx + 1
       @current_model = model
@@ -155,7 +163,7 @@ class Superagent
   def run_model_attempt(model, idx, req)
     attempt_number = (@attempt_count_per_model[model] || 0) + 1
     update_terminal_title("Attempting: #{model} (attempt #{attempt_number}/#{ATTEMPTS_PER_MODEL})")
-    @display.display_attempt_header(model, idx, MODELS.size)
+    @display.display_attempt_header(model, idx, models.size)
 
     start = Time.now
     success, output, reason = @agent_executor.run(model, req, new_session: !@session_continuation)
@@ -176,6 +184,7 @@ class Superagent
   end
 
   def record_network_failure(model, output, implementation_time, reason = nil)
+    AutoOnlyLock.create if reason == :unrecoverable && @agent_executor.usage_unrecoverable?(output)
     @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
     @display.display_agent_failure(output, reason)
     pass_timing = {
@@ -328,13 +337,14 @@ class Superagent
   end
 
   def execute_new_request(new_req, previous_req, model_index)
-    analysis = @session_tracker.analyze_continuation(new_req, previous_req ? {request: previous_req} : nil)
+    previous_session = previous_req ? {request: previous_req} : nil
+    analysis = @session_tracker.analyze_continuation_and_description(new_req, previous_session)
     if analysis[:continuation] && user_disagrees_with_verification?(analysis[:tags])
       record_attempt_failure(@current_model)
     end
     
     start_index = analysis[:continuation] ? [model_index || 0, @current_model_index].max : (model_index || 0)
-    start_index = [[start_index, 0].max, MODELS.size - 1].min
+    start_index = [[start_index, 0].max, models.size - 1].min
 
     display_continuation_message(analysis, start_index)
     @request_reader = RequestReader.new(@display)
@@ -345,7 +355,7 @@ class Superagent
   def display_continuation_message(analysis, start_index)
     continuation_text = analysis[:continuation] ? 'continuation' : 'new request'
     tags_text = analysis[:tags].empty? ? '' : " [#{analysis[:tags].join(', ')}]"
-    @display.puts "\nStarting #{continuation_text}#{tags_text} from #{MODELS[start_index]}...\n\n".yellow
+    @display.puts "\nStarting #{continuation_text}#{tags_text} from #{models[start_index]}...\n\n".yellow
   end
 
   def handle_plan_success
@@ -391,21 +401,14 @@ class Superagent
 
   def analyze_session_continuation(req)
     previous_session = @session_tracker.load_previous_session
+    analysis = @session_tracker.analyze_continuation_and_description(req, previous_session)
 
-    if previous_session
-      analysis = @session_tracker.analyze_continuation(req, previous_session)
-      @session_continuation = analysis[:continuation]
-      @session_tags = analysis[:tags]
-      if @session_continuation && previous_session[:agent_session_id]
-        @agent_executor.resume_with_session_id(previous_session[:agent_session_id])
-      end
-    else
-      @session_continuation = false
-      classification = @session_tracker.classify_request(req)
-      @session_tags = classification[:tags]
+    @session_continuation = analysis[:continuation]
+    @session_tags = analysis[:tags]
+    @session_description = analysis[:description]
+    if @session_continuation && previous_session && previous_session[:agent_session_id]
+      @agent_executor.resume_with_session_id(previous_session[:agent_session_id])
     end
-
-    @session_description = @session_tracker.generate_session_description(req, @session_tags)
   end
 
   def save_current_session(req, summary = :not_provided)
@@ -429,7 +432,7 @@ class Superagent
     return nil if req.nil?
 
     req.scan(/@(\S+)/).flatten.each do |mention|
-      model_index = MODELS.index(mention)
+      model_index = models.index(mention)
       return model_index if model_index
     end
     nil
@@ -439,7 +442,7 @@ class Superagent
     return req if req.nil?
 
     cleaned = req.gsub(/@(\S+)/) do |match|
-      MODELS.include?($1) ? '' : match
+      models.include?($1) ? '' : match
     end
     cleaned.gsub(/\s+/, ' ').strip
   end
