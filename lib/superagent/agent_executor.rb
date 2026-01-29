@@ -7,6 +7,7 @@ require 'rbconfig'
 require 'timeout'
 require_relative '../agents_file_handler'
 require_relative '../refactor_instructions'
+require_relative 'code_indexer'
 
 # Handles agent command execution with retry logic
 class AgentExecutor
@@ -109,10 +110,20 @@ class AgentExecutor
     parts << user_context_section
     parts << git_diff_section(new_session)
     parts << working_tree_section(new_session)
+    parts << code_context_section(p, new_session)
     parts << summary_section
     parts << history_section
     parts << non_interactive_notice
     p + parts.compact.join
+  end
+
+  def code_context_section(query, new_session)
+    return nil unless new_session
+    return nil if query.to_s.strip.empty?
+
+    indexer = CodeIndexer.new(Dir.pwd)
+    indexer.build_index
+    indexer.collect_code(query, max_lines: CodeIndexer::CODE_CONTEXT_MAX_LINES)
   end
 
   def user_context_section
