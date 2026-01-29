@@ -2,17 +2,12 @@
 
 require_relative "../agents_file_handler"
 
-# Handles verification prompts and response parsing
+# Handles verification prompts and response parsing. After run_verification or retry_with_fix,
+# callers read the last outcome via verified, desc, review_time, call_failed, retryable, raw_output, fix_output.
 class VerificationHandler
   include AgentsFileHandler
 
-  # keyword_init: true means .new() takes named arguments (e.g. VerificationResult.new(verified: true, desc: 'OK'))
-  # instead of positional args, so call sites stay readable.
-  VerificationResult = Struct.new(
-    :verified, :desc, :review_time, :call_failed, :retryable, :raw_output, keyword_init: true
-  )
-  ParsedVerdict = Struct.new(:verified, :desc, keyword_init: true)
-  RetryWithFixResult = Struct.new(:verified, :desc, :review_time, :fix_output, keyword_init: true)
+  attr_reader :verified, :desc, :review_time, :call_failed, :retryable, :raw_output, :fix_output
 
   def initialize(display, agent_executor, session_tracker: nil)
     @display = display
@@ -39,10 +34,10 @@ class VerificationHandler
   end
 
   def parse_res(res)
-    return ParsedVerdict.new(verified: false, desc: res) if res.nil? || res.to_s.strip.empty?
+    return [false, res] if res.nil? || res.to_s.strip.empty?
 
     line = extract_final_verdict_line(res)
-    return ParsedVerdict.new(verified: false, desc: res) unless line
+    return [false, res] unless line
 
     line[:verdict] == :no ? parse_no_res(line[:text]) : parse_yes_res(line[:text])
   end
@@ -60,16 +55,16 @@ class VerificationHandler
 
   def parse_no_res(n)
     m = n.match(/^\s*NO\b\s*:?\s*(.*)$/i)
-    return ParsedVerdict.new(verified: false, desc: 'Failed') unless m && !m[1].to_s.strip.empty?
+    return [false, 'Failed'] unless m && !m[1].to_s.strip.empty?
 
-    ParsedVerdict.new(verified: false, desc: remove_duplicates(m[1].to_s.strip))
+    [false, remove_duplicates(m[1].to_s.strip)]
   end
 
   def parse_yes_res(n)
     m = n.match(/^\s*YES\b\s*:?\s*(.*)$/i)
-    return ParsedVerdict.new(verified: true, desc: 'Passed') unless m && !m[1].to_s.strip.empty?
+    return [true, 'Passed'] unless m && !m[1].to_s.strip.empty?
 
-    ParsedVerdict.new(verified: true, desc: m[1].to_s.strip)
+    [true, m[1].to_s.strip]
   end
 
   def remove_duplicates(text)
@@ -147,16 +142,41 @@ class VerificationHandler
     verification_prompt = build_verification_prompt(req, previous_agent_response)
     start_time = Time.now
     success, output, reason = @agent_executor.run(model, verification_prompt, verification_mode: true)
-    duration = Time.now - start_time
+    @review_time = Time.now - start_time
     unless success
-      desc = output.to_s.strip.empty? ? 'Verification call failed (no response)' : output.lines.first.to_s.strip
-      return VerificationResult.new(verified: false, desc: desc, review_time: duration, call_failed: true,
-                                    retryable: reason == :recoverable, raw_output: output.to_s)
+      set_verification_failure(output, reason)
+      return
     end
+    set_verification_success(parse_res(output.to_s.strip))
+  end
 
-    parsed = parse_res(output.to_s.strip)
-    VerificationResult.new(verified: parsed.verified, desc: parsed.desc || 'Failed', review_time: duration,
-                           call_failed: false, retryable: false, raw_output: nil)
+  def set_verification_failure(output, reason)
+    @verified = false
+    @desc = output.to_s.strip.empty? ? 'Verification call failed (no response)' : output.lines.first.to_s.strip
+    @call_failed = true
+    @retryable = reason == :recoverable
+    @raw_output = output.to_s
+    @fix_output = nil
+  end
+
+  def set_verification_success(parsed)
+    parsed_verified, parsed_desc = parsed
+    @verified = parsed_verified
+    @desc = parsed_desc || 'Failed'
+    @call_failed = false
+    @retryable = false
+    @raw_output = nil
+    @fix_output = nil
+  end
+
+  def finalize_call_failed(verified, desc, review_time, raw_output)
+    @verified = verified
+    @desc = desc
+    @review_time = review_time
+    @raw_output = raw_output
+    @call_failed = true
+    @retryable = false
+    @fix_output = nil
   end
 
   def retry_with_fix(model, req)
@@ -164,11 +184,17 @@ class VerificationHandler
     @display.puts "Retrying #{model} with fix...".blue
     $stdout.puts ''
 
-    success, fix_output = @agent_executor.run(model, fix_prompt)
-    return RetryWithFixResult.new(verified: false, desc: nil, review_time: 0, fix_output: nil) unless success
+    success, fix_out = @agent_executor.run(model, fix_prompt)
+    unless success
+      @verified = false
+      @desc = nil
+      @review_time = 0
+      @fix_output = nil
+      return
+    end
 
-    res = run_verification(model, req, fix_output)
-    RetryWithFixResult.new(verified: res.verified, desc: res.desc, review_time: res.review_time, fix_output: fix_output)
+    run_verification(model, req, fix_out)
+    @fix_output = fix_out
   end
 
   def to_utf8(str)

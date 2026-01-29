@@ -235,18 +235,19 @@ class Superagent
     }
 
     update_terminal_title("Verifying: #{model}")
-    res = run_verification_with_retries(model, req)
-    pass_timing[:review_time] = res.review_time
+    run_verification_with_retries(model, req)
+    h = @verification_handler
+    pass_timing[:review_time] = h.review_time
     $stdout.puts ''
 
-    if res.call_failed
+    if h.call_failed
       record_attempt_failure(model)
-      usage_output = (res.raw_output && !res.raw_output.empty?) ? res.raw_output : res.desc
+      usage_output = (h.raw_output && !h.raw_output.empty?) ? h.raw_output : h.desc
       if @agent_executor.usage_unrecoverable?(usage_output)
         AutoOnlyLock.create
         @auto_only = true
       end
-      @display.display_verification_result(false, res.desc, '', call_failed: true)
+      @display.display_verification_result(false, h.desc, '', call_failed: true)
       $stdout.puts ''
       pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
       @pass_timings << pass_timing
@@ -255,12 +256,12 @@ class Superagent
       return :continue
     end
 
-    if res.verified
-      finalize_success(pass_timing, pass_start, res.desc, req)
+    if h.verified
+      finalize_success(pass_timing, pass_start, h.desc, req)
       return :success
     end
 
-    @display.display_verification_result(false, res.desc)
+    @display.display_verification_result(false, h.desc)
     $stdout.puts ''
     retry_verification_with_fix(model, req, pass_timing, pass_start)
   end
@@ -268,37 +269,40 @@ class Superagent
   VERIFICATION_CALL_RETRIES = 2
 
   def run_verification_with_retries(model, req)
-    result_class = VerificationHandler::VerificationResult
-    last = nil
+    exhausted = true
     (VERIFICATION_CALL_RETRIES + 1).times do |attempt|
-      res = @verification_handler.run_verification(model, req, @current_agent_output)
-      last = res
-      return res unless res.call_failed && res.retryable
+      @verification_handler.run_verification(model, req, @current_agent_output)
+      h = @verification_handler
+      unless h.call_failed && h.retryable
+        exhausted = false
+        break
+      end
       break if attempt >= VERIFICATION_CALL_RETRIES
 
       @display.puts 'Connection/network error during verification (retrying up to 3 times)...'.yellow
       $stdout.puts ''
     end
-    result_class.new(verified: last&.verified, desc: last&.desc, review_time: last&.review_time,
-                     call_failed: true, retryable: false, raw_output: last&.raw_output)
+    h = @verification_handler
+    @verification_handler.finalize_call_failed(h.verified, h.desc, h.review_time, h.raw_output) if exhausted
   end
 
   def retry_verification_with_fix(model, req, pass_timing, pass_start)
     update_terminal_title("Retrying: #{model}")
     fix_start = Time.now
-    ret = @verification_handler.retry_with_fix(model, req)
-    pass_timing[:fix_time] = Time.now - fix_start - (ret.review_time || 0)
-    pass_timing[:review_time] += (ret.review_time || 0)
+    @verification_handler.retry_with_fix(model, req)
+    h = @verification_handler
+    pass_timing[:fix_time] = Time.now - fix_start - (h.review_time || 0)
+    pass_timing[:review_time] += (h.review_time || 0)
     $stdout.puts ''
-    save_agent_summary(ret.fix_output) if ret.fix_output
+    save_agent_summary(h.fix_output) if h.fix_output
 
-    if ret.verified
-      finalize_success(pass_timing, pass_start, ret.desc, req, 'after retry')
+    if h.verified
+      finalize_success(pass_timing, pass_start, h.desc, req, 'after retry')
       return :success
     end
 
     @last_attempt_success = false
-    @display.display_verification_result(false, ret.desc, 'after retry')
+    @display.display_verification_result(false, h.desc, 'after retry')
     $stdout.puts ''
     pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
     @pass_timings << pass_timing
