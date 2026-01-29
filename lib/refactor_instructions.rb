@@ -27,8 +27,8 @@ module RefactorInstructions
        - Inline variables that are used only once when it improves clarity.
 
     5. Style & Consistency
-       - Follow idiomatic Ruby style (Ruby community conventions).
-       - Keep formatting consistent with the surrounding code.
+       - Follow idiomatic [LANGUAGE] style and community conventions.
+       - Maintain consistent formatting with the surrounding codebase.
 
     6. Comments & Documentation
        - Preserve all existing comments verbatim unless they refer to code you
