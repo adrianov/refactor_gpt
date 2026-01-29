@@ -128,6 +128,11 @@ module CompletionNotifier
   def self.set_terminal_title(title)
     return unless title
 
+    # Prepend terminal title with short pwd
+    project_root = find_project_root || Dir.pwd
+    project_name = File.basename(project_root)
+    title = "#{project_name}: #{title}"
+
     # Use ANSI escape sequence to set terminal title
     # \033]0; sets both icon and window title
     print "\033]0;#{title}\007"

@@ -349,6 +349,11 @@ class Superagent
             when false then '❌ Error'
             else phase.to_s
             end
+
+    # Prepend terminal title with short pwd
+    project_name = File.basename(Dir.pwd)
+    title = "#{project_name}: #{title}"
+
     sequence = "\033]0;#{title}\007"
     $stderr.print sequence if $stderr.tty?
     $stderr.flush if $stderr.tty?
