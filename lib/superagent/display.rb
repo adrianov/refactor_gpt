@@ -1,10 +1,15 @@
 # frozen_string_literal: true
 
+require 'tty-box'
+require 'tty-cursor'
+
 # Handles all output formatting and display operations for superagent.
 # Color gamma: timestamps muted, body text soft (avoids straining white).
+# Uses tty-box for queue banner and tty-cursor for line overwrites.
 class Display
-    TIMESTAMP_COLOR = :light_blue
-    BODY_COLOR = :light_black
+  TIMESTAMP_COLOR = :light_blue
+  BODY_COLOR = :light_black
+  CURSOR = TTY::Cursor
 
     def puts(*args)
       @at_start_of_line = true
@@ -25,7 +30,6 @@ class Display
       @thinking_indicator_count = 0
       @last_thinking_indicator_time = nil
       @tool_line_in_progress = false
-      @last_tool_line_length = nil
       @skip_midnight_check = skip_midnight_check
     end
 
@@ -111,7 +115,6 @@ class Display
       @thinking_indicator_count = 0
       @last_thinking_indicator_time = nil
       @tool_line_in_progress = false
-      @last_tool_line_length = nil
     end
 
     def print_thinking_indicator
@@ -132,7 +135,7 @@ class Display
 
     def clear_thinking_indicator
       return unless @thinking_indicator_count && @thinking_indicator_count > 0
-      $stdout.print "\r#{' ' * 20}\r"
+      $stdout.print CURSOR.clear_line
       @thinking_indicator_count = 0
       @last_thinking_indicator_time = nil
     end
@@ -173,22 +176,14 @@ class Display
 
     def display_pending_hint
       $stdout.puts ''
-      puts "╭──────────────────────────────────────────────────────────╮".cyan
-      puts "│ 📥 Interactive Queue (type below, Enter twice to add)    │".cyan
-      puts "│ Requests are collected and sent together to next run.    │".light_black
-      puts "╰──────────────────────────────────────────────────────────╯".cyan
-      $stdout.puts ''
-    end
-
-    def display_pending_queue_reminder(queue_size)
-      return if queue_size.to_i.zero?
-
-      # Use a more TUI-like status line that doesn't scroll away as easily
-      # by printing it with a distinct background or separator if possible,
-      # but sticking to current style:
-      puts "╭──────────────────────────────────────────────────────────╮".cyan
-      puts "│ 📥 Queue (#{queue_size} queued): type request, Enter twice to add. │".cyan
-      puts "╰──────────────────────────────────────────────────────────╯".cyan
+      box = TTY::Box.frame(
+        "📥 Interactive Queue is active while agent runs.",
+        'Type request below, press Enter twice to queue.',
+        width: 58,
+        padding: [0, 1],
+        border: :light
+      )
+      $stdout.print box
       $stdout.puts ''
     end
 
@@ -540,24 +535,17 @@ class Display
         @at_start_of_line = true
       end
       line = "#{timestamp_str}#{body(text)}"
-      @last_tool_line_length = strip_ansi(line).length
       $stdout.print line
       @at_start_of_line = false
       $stdout.flush
     end
 
     def overwrite_line_with_timestamp(text)
-      clear_len = @last_tool_line_length || 0
-      $stdout.print "\r#{' ' * clear_len}\r"
-      line = "#{timestamp_str}#{body(text)}"
-      @last_tool_line_length = strip_ansi(line).length
-      $stdout.print line
+      $stdout.print "\r#{CURSOR.clear_line}"
+      $stdout.print "#{timestamp_str}#{body(text)}"
       $stdout.puts ''
       @at_start_of_line = true
       $stdout.flush
     end
 
-    def strip_ansi(text)
-      text.to_s.gsub(/\e\[[\d;]*m/, '')
-    end
   end
