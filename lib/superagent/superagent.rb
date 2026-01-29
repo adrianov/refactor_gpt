@@ -79,6 +79,7 @@ class Superagent
     
     start_index = determine_start_index(model_index_from_request, start_model_index)
     @display.display_start_message(req, @session_continuation, @session_tags)
+    update_terminal_title(@session_continuation ? '↻ Continuing session' : 'Running...')
 
     return run_plan_mode(req, start_index) if @request_reader.plan_mode
 

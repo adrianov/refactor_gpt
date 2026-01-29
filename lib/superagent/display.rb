@@ -199,6 +199,7 @@ class Display
       if continuation
         tag_display = tags.empty? ? '' : " [#{tags.join(', ')}]"
         puts "↻ Continuing previous session#{tag_display}".light_blue
+        puts 'Step: Resuming previous session'.cyan
         $stdout.puts ''
       elsif tags.any?
         puts "🆕 New session [#{tags.join(', ')}]".light_blue
@@ -223,6 +224,13 @@ class Display
       else
         puts "#{prefix}#{suffix}! #{context.empty? ? 'Retrying...' : 'Next...'}".send(:yellow)
       end
+    end
+
+    def display_agent_call_result(success, tools_count = 0)
+      prefix = success ? '✔ Agent call' : '✗ Agent call'
+      suffix = success ? ": success (#{tools_count} tools)" : ': failed'
+      puts "#{prefix}#{suffix}".send(success ? :green : :yellow)
+      $stdout.puts ''
     end
 
     def display_total_runtime(start_time)
