@@ -366,6 +366,12 @@ class AgentExecutor
     func_args
   end
 
+  def tool_command_completed?(tool)
+    tool[:name]&.match?(/^(run|execute|command)/i) &&
+      tool[:subtype] == 'completed' &&
+      tool[:result].to_s.strip != ''
+  end
+
   def looks_like_command?(cmd)
     cmd = cmd.to_s
     return false if cmd.length < 4 || cmd.length > 500
@@ -428,7 +434,7 @@ class AgentExecutor
     @display.puts '--- End prompt ---'.light_black
   end
 
-  def display_command(cmd, prompt, new_session: false, verification_mode: false)
+  def display_command(cmd, prompt, new_session: false, _verification_mode: false)
     print_full_prompt(prompt, new_session: new_session)
     if new_session && @full_prompt_buffer
       @display.puts '--- Full prompt ---'.light_black
@@ -612,7 +618,7 @@ class AgentExecutor
         if tool[:name] == 'ask' && tool[:subtype] == 'completed'
           @display.puts "Ask output:".cyan
           tool[:result].to_s.each_line { |l| @display.puts "  #{l.chomp}".light_black }
-        elsif tool[:name]&.match?(/^(run|execute|command)/i) && tool[:subtype] == 'completed' && tool[:result].to_s.strip != ''
+        elsif tool_command_completed?(tool)
           @display.puts "Command output:".cyan
           tool[:result].to_s.each_line { |l| @display.puts "  #{l.chomp}".light_black }
         end
