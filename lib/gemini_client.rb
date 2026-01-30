@@ -753,8 +753,4 @@ class GeminiClient
     ].join("\n")
   end
 
-  def load_env_vars
-    # This method is now provided by AgentsFileHandler
-    super
-  end
 end

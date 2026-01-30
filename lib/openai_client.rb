@@ -690,7 +690,4 @@ class OpenAiClient
     end
   end
 
-  def load_env_vars
-    super
-  end
 end

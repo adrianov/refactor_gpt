@@ -29,12 +29,7 @@ module CompletionNotifier
     base = success ? SUCCESS_BASE : ERROR_BASE
     sound_path = find_sound_file(base)
 
-    if sound_path
-      spawn_sound(play_cmd, sound_path)
-    elsif darwin?
-      system_sound = success ? "/System/Library/Sounds/Glass.aiff" : "/System/Library/Sounds/Basso.aiff"
-      spawn_sound(play_cmd, system_sound) if File.exist?(system_sound)
-    end
+    spawn_sound(play_cmd, sound_path) if sound_path
   rescue StandardError => e
     warn "Warning: Sound playback failed: #{e.message}" if ENV["DEBUG"]
   end
@@ -83,7 +78,7 @@ module CompletionNotifier
   def self.find_sound_file(base_name)
     script_dir = @script_dir || find_project_root
     sounds_dir = File.join(script_dir, 'sounds')
-    exts = darwin? ? %w[.aiff .wav] : %w[.wav .aiff]
+    exts = %w[.wav]
     exts.each do |ext|
       path = File.join(sounds_dir, "#{base_name}#{ext}")
       return path if File.exist?(path)
