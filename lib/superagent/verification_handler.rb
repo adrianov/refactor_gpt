@@ -17,7 +17,7 @@ class VerificationHandler
 
   def build_fix_prompt(req)
     <<~HEREDOC
-      Original request: #{to_utf8(req)}#{to_utf8(format_previous_requests)}
+      Original request: #{to_utf8(req)}#{to_utf8(format_previous_requests(exclude_equal: req))}
 
       The previous attempt failed. Please fix the implementation.
 
@@ -25,8 +25,8 @@ class VerificationHandler
     HEREDOC
   end
 
-  def format_previous_requests
-    previous_requests = @session_tracker&.get_session_request_history || []
+  def format_previous_requests(exclude_equal: nil)
+    previous_requests = @session_tracker&.get_session_request_history(exclude_equal: exclude_equal) || []
     return '' unless previous_requests.any?
 
     "\n\nPrevious requests in this session:\n" +
@@ -125,7 +125,8 @@ class VerificationHandler
     req_utf8 = to_utf8(user_request)
     prev_utf8 = to_utf8(previous_agent_response)
     content_parts = []
-    content_parts << "Current user request: #{req_utf8}#{to_utf8(format_previous_requests)}\n\n"
+    prev_reqs = format_previous_requests(exclude_equal: user_request)
+    content_parts << "Current user request: #{req_utf8}#{to_utf8(prev_reqs)}\n\n"
     if prev_utf8 && !prev_utf8.to_s.strip.empty?
       content_parts << "Final response from previous agent run:\n#{prev_utf8.to_s.strip}\n"
     end

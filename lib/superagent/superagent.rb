@@ -163,6 +163,7 @@ class Superagent
     @current_model_index = start_index
     @attempt_count_per_model = {} unless @session_continuation
     highest_index_reached = start_index
+    early_exit = nil
     models[@current_model_index..-1].each_with_index do |model, relative_idx|
       idx = @current_model_index + relative_idx
       @current_pass = idx + 1
@@ -175,9 +176,12 @@ class Superagent
       if result == :switch_to_auto_only
         @display.puts 'Usage limit reached; switching to auto-only model queue.'.yellow
         execute_attempts(0, req)
-        return
+        early_exit = true
+        break
       end
     end
+    return if early_exit
+
     @current_model_index = highest_index_reached
   end
 
@@ -221,7 +225,8 @@ class Superagent
     }
     @pass_timings << pass_timing
     @display.display_pass_timing(pass_timing)
-    (@auto_only && reason == :unrecoverable && @agent_executor.usage_unrecoverable?(output)) ? :switch_to_auto_only : nil
+    switch = @auto_only && reason == :unrecoverable && @agent_executor.usage_unrecoverable?(output)
+    switch ? :switch_to_auto_only : nil
   end
 
   def process_verification_and_fix(model, req)
@@ -344,7 +349,6 @@ class Superagent
 
 
   def handle_success(desc, context = '')
-    @display.display_git_diff
     @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
@@ -529,14 +533,15 @@ class Superagent
 
     reader, @input_wakeup_writer = IO.pipe
     queue = @pending_queue
-    @input_thread = Thread.new { run_pending_input_loop(reader, queue) }
+    current_request = @current_request
+    @input_thread = Thread.new { run_pending_input_loop(reader, queue, current_request) }
   end
 
-  def run_pending_input_loop(reader, queue)
+  def run_pending_input_loop(reader, queue, current_request)
     buffer = []
     input_io = nil
     input_io = open_controlling_tty
-    run_pending_input_loop_cooked(reader, queue, buffer, input_io)
+    run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io)
   rescue StandardError
     # Silently ignore input errors in background thread
   ensure
@@ -552,15 +557,16 @@ class Superagent
 
   ENTER_SIGNAL_DELAY = 0.5
 
-  def run_pending_input_loop_cooked(reader, queue, buffer, input_io)
+  def run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io)
     return unless input_io
 
     thread_start = Time.now
     read_ios = [reader, input_io].compact
     loop do
+      drain_pending_file(queue, current_request)
       ready = IO.select(read_ios, nil, nil, 0.5)
       next if ready.nil?
-      break flush_and_close(reader, buffer, queue) if ready[0].include?(reader)
+      break flush_and_close(reader, buffer, queue, current_request) if ready[0].include?(reader)
       next unless ready[0].include?(input_io)
 
       line = input_io.gets
@@ -570,8 +576,24 @@ class Superagent
         handle_queue_request_in_thread(queue, input_io)
         next
       end
-      buffer = process_pending_line(line.chomp, buffer, queue)
+      buffer = process_pending_line(line.chomp, buffer, queue, current_request)
     end
+  end
+
+  def drain_pending_file(queue, current_request)
+    return unless InstanceLock.current_lock_path
+    path = InstanceLock.pending_file_path
+    return unless File.exist?(path)
+
+    content = nil
+    File.open(path, "r+") do |f|
+      f.flock(File::LOCK_EX)
+      content = f.read
+      f.rewind
+      f.truncate(0)
+    end
+    requests = content.to_s.split(InstanceLock::PENDING_DELIMITER).map(&:strip).reject(&:empty?)
+    requests.each { |r| queue.add(r, current_request: current_request) }
   end
 
   def single_enter?(line, buffer)
@@ -582,44 +604,55 @@ class Superagent
     @display.set_output_paused(true)
     $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
     $stdout.flush
-    
+
     lines = []
     saw_empty = false
+    last_time = Time.now
     loop do
       line = input_io.gets
       break if line.nil?
-      
+
+      now = Time.now
+      elapsed = now - last_time
+      last_time = now
+
       line_stripped = line.to_s.strip
-      if line_stripped.empty? && !lines.empty?
-        break
-      elsif line_stripped.empty?
-        break if saw_empty
-        saw_empty = true
-        next
+      action = pending_empty_action(line_stripped, lines.empty?, elapsed, saw_empty)
+      case action
+      when :break then break
+      when :add_empty then lines << ''; next
+      when :set_saw_empty then saw_empty = true; next
+      else saw_empty = false; lines << line_stripped
       end
-      
-      saw_empty = false
-      lines << line_stripped
     end
-    
+
     @display.set_output_paused(false)
     @display.flush_paused_output
-    
+
     result = lines.join("\n")
-    add_and_show_queue(queue, result)
+    add_and_show_queue(queue, result, @current_request)
   end
 
-  def add_and_show_queue(queue, raw_new)
+  def pending_empty_action(line_stripped, lines_empty, elapsed, saw_empty)
+    return :content unless line_stripped.empty?
+
+    return :add_empty if elapsed < RequestReader::PASTE_THRESHOLD
+    return :break if !lines_empty || saw_empty
+
+    :set_saw_empty
+  end
+
+  def add_and_show_queue(queue, raw_new, current_request = nil)
     return if raw_new.to_s.strip.empty?
 
-    queue.add(raw_new.to_s.strip)
+    queue.add(raw_new.to_s.strip, current_request: current_request)
     list = queue.snapshot
-    @display.display_pending_list(list) unless list.empty?
+    @display.display_pending_list(list, current_request: current_request) unless list.empty?
   end
 
-  def process_pending_line(line, buffer, queue)
+  def process_pending_line(line, buffer, queue, current_request)
     if line.empty? && buffer.any?
-      queue.add(buffer.join("\n"))
+      queue.add(buffer.join("\n"), current_request: current_request)
       return []
     end
     return buffer << line unless line.empty?
@@ -627,8 +660,8 @@ class Superagent
     buffer
   end
 
-  def flush_and_close(_reader, buffer, queue)
-    queue.add(buffer.join("\n")) if buffer.any?
+  def flush_and_close(_reader, buffer, queue, current_request)
+    queue.add(buffer.join("\n"), current_request: current_request) if buffer.any?
   end
 
   def ensure_pending_input_stopped

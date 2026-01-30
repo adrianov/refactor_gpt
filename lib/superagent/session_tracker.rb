@@ -83,7 +83,7 @@ class SessionTracker
 
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided, agent_session_id: nil)
     previous_session = load_previous_session
-    request_history = build_request_history(continuation, previous_session)
+    request_history = build_request_history(continuation, previous_session, current_request: request)
     agent_summary = determine_agent_summary(continuation, previous_session, last_agent_summary)
     stored_session_id = agent_session_id || previous_session&.dig(:agent_session_id)
 
@@ -104,10 +104,15 @@ class SessionTracker
     cleanup_old_sessions
   end
 
-  def build_request_history(continuation, previous_session)
-    return [] unless continuation && previous_session && previous_session[:request_history]
+  def build_request_history(continuation, previous_session, current_request: nil)
+    return [] unless continuation && previous_session
 
-    previous_session[:request_history] + [previous_session[:request]]
+    base = previous_session[:request_history] || []
+    prev_req = previous_session[:request]
+    return base if prev_req.nil?
+    return base if current_request && prev_req.to_s.strip == current_request.to_s.strip
+
+    base + [prev_req]
   end
 
   def determine_agent_summary(continuation, previous_session, last_agent_summary)
@@ -119,13 +124,17 @@ class SessionTracker
     previous_session[:last_agent_summary]
   end
 
-  def get_session_request_history
+  def get_session_request_history(exclude_equal: nil)
     session_data = load_previous_session
     return [] unless session_data
 
     history = session_data[:request_history] || []
     previous_request = session_data[:request]
-    history + (previous_request ? [previous_request] : [])
+    list = history + (previous_request ? [previous_request] : [])
+    return list if exclude_equal.nil? || exclude_equal.to_s.strip.empty?
+
+    exclude = exclude_equal.to_s.strip
+    list.reject { |req| req.to_s.strip == exclude }
   end
 
   def get_last_agent_summary
