@@ -34,6 +34,7 @@ When working with this codebase, follow these refactoring principles:
 - **Consistency**: Follow idiomatic Ruby style and existing patterns
 - **Behavior Preservation**: Never change functionality unless fixing bugs or explicitly requested
 - **Refactor when it helps**: Do not hesitate to refactor when it improves code quality; apply the guidelines above even if it means broader changes.
+- **Review comments**: When correcting review comments, make minimal changes; use `git diff master... path/to/file` to see current changes for the file and keep the diff small.
 
 ### LLM Instruction Optimization
 When modifying LLM prompts or system instructions in AI-driven applications:
@@ -96,6 +97,8 @@ When modifying LLM prompts or system instructions in AI-driven applications:
 - Preserve existing comments unless they refer to code that has been changed or removed
 - Do not add new comments unless explicitly requested
 - Use comments only to explain complex business logic that cannot be made clear through code structure
+- **Changed classes**: Add a short description comment above each class that you modify (one line describing the class purpose)
+- **High ABC (assignment, branch, comparison) complexity**: When a class or method has a high ABC score or triggers complexity metrics (e.g. `Metrics/AbcSize`), add brief comments that explain the business logic for that class or method and for the most complex sections inside it. Prefer refactoring to reduce complexity; when complexity cannot be reduced further, document intent with comments so behavior remains understandable.
 
 ### Code Optimization
 - **Inline single-use variables**: After each modification, inline variables that are used only once to improve readability and reduce unnecessary assignments
@@ -124,6 +127,7 @@ When refactoring code, systematically identify and remove unused and dead code w
 - Use `File::NULL` for discarding command output when redirecting to /dev/null
 
 ### Linting and Code Quality
+- **Treat linter warnings seriously**: For any file or module you change, fix all Rubocop offenses reported in that file. Do not leave new or existing linter warnings in modified code.
 - Always run `rubocop -a` to auto-correct Ruby style issues before committing changes
 - Ensure syntax is valid with `ruby -c` after modifications
 - Follow Ruby style guides and existing code conventions
@@ -139,3 +143,44 @@ When refactoring code, systematically identify and remove unused and dead code w
   - Ensure extracted methods have descriptive names that explain their purpose
   - Splitting large files into smaller, focused modules/classes when approaching 400-line limit
   - **Never disable Metrics/AbcSize inline**; adjust code or configuration instead.
+  - When complexity remains high after refactoring (e.g. ABC score near the limit), add business-logic comments per the **High ABC complexity** rule under Comments.
+
+## General coding rules
+
+1. **Correctness & Robustness**
+   - Identify and fix bugs or obvious mistakes.
+   - Improve error handling where it is clearly insufficient or unsafe.
+   - Prefer failing fast with clear messages over silent failures.
+
+2. **Readability & Naming**
+   - Use clear, descriptive names for variables, methods, and classes.
+   - Avoid unnecessary abbreviations unless they are domain-standard.
+
+3. **Structure & Size**
+   - Prefer small, focused methods.
+   - Where it improves clarity, extract helper methods instead of enforcing an arbitrary line limit.
+   - Keep lines reasonably short (aim for <= 100 characters), but do not harm readability just to satisfy a strict width.
+
+4. **Simplicity**
+   - Simplify complex conditionals and branching where possible.
+   - Remove dead code and unnecessary indirection.
+   - Inline variables that are used only once when it improves clarity.
+
+5. **Style & Consistency**
+   - Follow idiomatic Ruby style and community conventions.
+   - Maintain consistent formatting with the surrounding codebase.
+
+6. **Comments & Documentation**
+   - Preserve all existing comments verbatim unless they refer to code you significantly change or a TODO you implement.
+   - Do not add new comments unless the user explicitly asks for them.
+
+7. **Behavior Preservation**
+   - Preserve existing business logic and external behavior unless there is a clear bug or the user explicitly requests a change.
+   - When you must change behavior to fix a bug, keep the change as small and local as possible.
+
+8. **TODOs**
+   - Implement TODOs only if they are fully specified and safe to complete without guessing about missing requirements.
+   - If a TODO is ambiguous, leave it in place and do not invent behavior.
+
+9. **Default Behavior**
+   - Do not change code behavior unless the user specifically asks for it or a change is required to fix a clear bug.
