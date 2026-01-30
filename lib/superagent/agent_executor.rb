@@ -7,7 +7,6 @@ require 'rbconfig'
 require 'timeout'
 require_relative '../agents_file_handler'
 require_relative '../refactor_instructions'
-require_relative 'code_indexer'
 
 # Handles agent command execution with retry logic
 class AgentExecutor
@@ -28,6 +27,7 @@ class AgentExecutor
     @agent_session_id = nil
     @compact_pass_run = false
     @model_call_finished_since_compact = false
+    @full_prompt_buffer = nil
   end
 
   def reset_agent_session
@@ -110,44 +110,20 @@ class AgentExecutor
     parts << user_context_section
     parts << git_diff_section(new_session)
     parts << working_tree_section(new_session)
-    parts << code_context_section(p, new_session)
     parts << summary_section
     parts << history_section
     parts << non_interactive_notice
     p + parts.compact.join
   end
 
-  def code_context_section(query, new_session)
-    return nil unless new_session
-    return nil if query.to_s.strip.empty?
-
-    indexer = CodeIndexer.new(Dir.pwd)
-    indexer.build_index
-    indexer.collect_code(query, max_lines: CodeIndexer::CODE_CONTEXT_MAX_LINES)
-  end
-
   def user_context_section
     parts = []
-    # Friendly date time in user timezone
     parts << "Current time: #{Time.now.strftime("%A, %B %d, %Y at %I:%M %p %Z")}"
-    
-    # Environment info
     parts << "OS: #{RbConfig::CONFIG['host_os']}"
     parts << "Shell: #{ENV['SHELL']}"
     parts << "User: #{ENV['USER'] || ENV['USERNAME']}"
     parts << "Project root: #{Dir.pwd}"
-    
-    parts.concat(user_preferences_from_env)
     "\n\n" + parts.join("\n")
-  end
-
-  def user_preferences_from_env
-    env_vars = load_env_vars
-    # Filter out tokens, keys, and URLs which are usually not "preferences"
-    prefs = env_vars.reject { |k, _| k.match?(/TOKEN|KEY|URL|SECRET|PASSWORD|AUTH/i) }
-    return [] if prefs.empty?
-
-    ["User preferences from environment:"] + prefs.map { |k, v| "  #{k}=#{v}" }
   end
 
   def git_diff_section(new_session)
@@ -428,7 +404,34 @@ class AgentExecutor
     @display.puts 'Compact pass timed out; continuing with main run.'.yellow
   end
 
-  def display_command(cmd, prompt)
+  def debug_prompt?
+    ENV['DEBUG'] != '0'
+  end
+
+  def clear_full_prompt_buffer
+    @full_prompt_buffer = nil
+  end
+
+  def print_full_prompt(prompt, new_session: false)
+    return unless debug_prompt?
+
+    if new_session
+      @full_prompt_buffer = prompt.to_s
+      return
+    end
+    @display.puts '--- Full prompt ---'.light_black
+    $stdout.puts prompt.to_s
+    @display.puts '--- End prompt ---'.light_black
+  end
+
+  def display_command(cmd, prompt, new_session: false)
+    print_full_prompt(prompt, new_session: new_session)
+    if new_session && @full_prompt_buffer
+      @display.puts '--- Full prompt ---'.light_black
+      $stdout.puts @full_prompt_buffer
+      @display.puts '--- End prompt ---'.light_black
+      @full_prompt_buffer = nil
+    end
     @display.puts "Running: #{cmd.join(' ')}".green
     preview = prompt.to_s.strip
     if preview.length > 60 || preview.include?("\n")
@@ -477,12 +480,12 @@ class AgentExecutor
       n.include?('this error is unrecoverable')
   end
 
-  def run_with_timeout_monitoring(model, wrapped, verification_mode: false,
+  def run_with_timeout_monitoring(model, wrapped, verification_mode: false, new_session: false,
                                   prompt_request_reader: nil, on_prompt_request: nil)
     @tools_used = []
     @verification_mode = verification_mode
     @passthrough = test_runner_running?
-    return run_without_timeout(model, wrapped, verification_mode) if @passthrough
+    return run_without_timeout(model, wrapped, verification_mode, new_session: new_session) if @passthrough
 
     @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil,
                start: nil }
@@ -491,6 +494,7 @@ class AgentExecutor
 
     begin
       execute_agent_process(model, wrapped, verification_mode,
+                            new_session: new_session,
                             prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request)
     ensure
       @state[:complete] = true
@@ -500,10 +504,11 @@ class AgentExecutor
   end
 
   def run_plan_mode(model, p, new_session: false)
+    clear_full_prompt_buffer if new_session
     @tools_used = []
     wrapped = wrap_prompt(p, new_session: new_session)
     run_compact_pass_if_needed(model)
-    cmd = setup_subprocess_run(model, wrapped, plan_mode: true)
+    cmd = setup_subprocess_run(model, wrapped, plan_mode: true, new_session: new_session)
 
     begin
       out = Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
@@ -523,12 +528,13 @@ class AgentExecutor
 
   def run(model, p, base_delay: 1, verification_mode: false, new_session: false,
           prompt_request_reader: nil, on_prompt_request: nil)
+    clear_full_prompt_buffer if new_session
     wrapped = wrap_prompt(p, new_session: new_session)
     run_compact_pass_if_needed(model)
     retries = 0
     loop do
       stdout, _, status, timeout_reason = run_with_timeout_monitoring(model, wrapped,
-        verification_mode: verification_mode,
+        verification_mode: verification_mode, new_session: new_session,
         prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request)
       @model_call_finished_since_compact = true
       output = (stdout || '').to_s
@@ -572,9 +578,9 @@ class AgentExecutor
     [false, "Execution error: #{e.message}", :unrecoverable]
   end
 
-  def run_without_timeout(model, wrapped, _verification_mode = false)
+  def run_without_timeout(model, wrapped, _verification_mode = false, new_session: false)
     @tools_used = []
-    cmd = setup_subprocess_run(model, wrapped)
+    cmd = setup_subprocess_run(model, wrapped, new_session: new_session)
     begin
       Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
         @state = { timed_out: false }
@@ -676,9 +682,9 @@ class AgentExecutor
     end
   end
 
-  def execute_agent_process(model, wrapped, _verification_mode = false,
+  def execute_agent_process(model, wrapped, _verification_mode = false, new_session: false,
                             prompt_request_reader: nil, on_prompt_request: nil)
-    cmd = setup_subprocess_run(model, wrapped)
+    cmd = setup_subprocess_run(model, wrapped, new_session: new_session)
     Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
       @state[:pid] = wait_thr.pid
       @state[:start] = @state[:last_chunk] = Time.now
@@ -689,11 +695,11 @@ class AgentExecutor
     end
   end
 
-  def setup_subprocess_run(model, wrapped, plan_mode: false)
+  def setup_subprocess_run(model, wrapped, plan_mode: false, new_session: false)
     @passthrough = false
     @display.reset_stream_tracking unless @passthrough
     cmd = build_command(model: model, plan_mode: plan_mode)
-    display_command(cmd, wrapped) unless @passthrough
+    display_command(cmd, wrapped, new_session: new_session) unless @passthrough
     cmd
   end
 
