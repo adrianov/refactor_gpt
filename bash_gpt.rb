@@ -1,9 +1,11 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require_relative "lib/signal_handler"
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
 require_relative "lib/completion_notifier"
+require_relative "lib/prompt_reader"
 require "shellwords"
 require "rbconfig"
 require "colorize"
@@ -256,7 +258,7 @@ ai = OpenAi.new(debug: debug_mode)
     system(bash_command)
   else
     puts "Do you want to run this command? (y/N)".white
-    answer = $stdin.gets.chomp.downcase
+    answer = PromptReader.read_line("", downcase: true)
 
     if answer == "y"
       puts "Running: #{bash_command}".green

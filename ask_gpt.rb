@@ -1,11 +1,13 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require_relative "lib/signal_handler"
 SCRIPT_DIR = File.expand_path(File.dirname(__FILE__)).freeze
 
 require_relative "lib/openai_client"
 require_relative "lib/gemini_client"
 require_relative "lib/completion_notifier"
+require_relative "lib/prompt_reader"
 require "ruby-progressbar"
 require "rbconfig"
 require "reline"
@@ -588,7 +590,7 @@ def get_interactive_question
   lines = []
 
   loop do
-    line = Reline.readline(lines.empty? ? "> " : "  ", true)
+    line = Reline.readline(PromptReader.multiline_prompt(lines.empty?), true)
     return nil if line.nil?
 
     line = line.strip

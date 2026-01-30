@@ -1,8 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require_relative "lib/signal_handler"
 require_relative "lib/openai_client"
 require_relative "lib/completion_notifier"
+require_relative "lib/prompt_reader"
 require "shellwords"
 
 # Class to interact with OpenAI API
@@ -166,7 +168,7 @@ bash_command = openai.bash_command(user_instruction)
     "y"
   else
     puts "Do you want to run this command? (y/n)"
-    $stdin.gets.to_s.chomp.downcase
+    PromptReader.read_line("", downcase: true)
   end
 
   if answer == "y"
@@ -175,7 +177,7 @@ bash_command = openai.bash_command(user_instruction)
 
     unless `#{bash_command}`.strip.empty?
       puts "\nInterpret results with OpenAI? (y/N)"
-      interpret_answer = $stdin.gets&.chomp&.downcase
+      interpret_answer = PromptReader.read_line("", downcase: true)
 
       if interpret_answer == "y"
         puts "\nInterpreting results with OpenAI..."

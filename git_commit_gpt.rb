@@ -1,11 +1,13 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require_relative "lib/signal_handler"
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
 require_relative "lib/diff_processor"
 require_relative "lib/diff_compactor"
 require_relative "lib/completion_notifier"
+require_relative "lib/prompt_reader"
 require "shellwords"
 require "ruby-progressbar"
 require "colorize"
@@ -332,12 +334,14 @@ def fix_json_truncation_in_commits(commits, status_filenames)
   commits
 end
 
-# Main execution
+WATCH_INTERVAL = 30
+
 def parse_arguments(args)
   debug_mode = args.include?("--debug")
-  cli_hint_parts = args.reject { |arg| arg == "--debug" || arg == "--print" }
+  watch_mode = args.include?("--watch")
+  cli_hint_parts = args.reject { |arg| arg == "--debug" || arg == "--print" || arg == "--watch" }
 
-  [debug_mode, cli_hint_parts.join(" ").to_s.strip]
+  [debug_mode, cli_hint_parts.join(" ").to_s.strip, watch_mode]
 end
 
 def get_recent_commands
@@ -418,11 +422,15 @@ def run_git_commit(message)
   system(commit_cmd)
 end
 
-def display_commits_and_ask(commits, warnings, quality_assessment = nil, excluded_files = [])
+def display_commits_result(commits, warnings, quality_assessment = nil, excluded_files = [])
   display_warnings(warnings)
   display_excluded_files(excluded_files)
   display_quality_assessment(quality_assessment) if quality_assessment
   display_planned_commits(commits)
+end
+
+def display_commits_and_ask(commits, warnings, quality_assessment = nil, excluded_files = [])
+  display_commits_result(commits, warnings, quality_assessment, excluded_files)
   get_user_confirmation
 end
 
@@ -713,7 +721,7 @@ def get_warning_selection(warnings)
   return [] if warnings.empty?
 
   display_warning_selection_prompt
-  input = $stdin.gets.to_s.chomp.strip.downcase
+  input = PromptReader.read_line("", downcase: true)
   parse_selection_input(input, warnings.size)
 end
 
@@ -777,7 +785,7 @@ end
 
 def should_fix_warning?
   puts "Fix this warning? (y/N/skip)".white
-  answer = $stdin.gets.to_s.chomp.downcase
+  answer = PromptReader.read_line("", downcase: true)
   return :skip if answer == "skip"
   return :yes if answer == "y"
 
@@ -834,7 +842,7 @@ end
 
 def get_user_confirmation
   puts "Do you want to run these git add/commit commands? (y/N)".white
-  answer = $stdin.gets.to_s.chomp.downcase
+  answer = PromptReader.read_line("", downcase: true)
 
   unless answer == "y"
     puts "Commands not executed.".yellow
@@ -914,7 +922,7 @@ def extract_plan_results(plan, status_output)
   }
 end
 
-def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
+def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: false)
   status_output = run_cmd("git status --porcelain --branch")
   return nil unless check_for_changes(status_output)
 
@@ -922,13 +930,36 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
   show_git_diff_if_needed(show_diff, recent_commands)
   diff_output = get_diff_output
   plan = call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
-  extract_plan_results(plan, status_output)
+  result = extract_plan_results(plan, status_output)
+  result["status_output"] = status_output
+  result
+end
+
+def watch_loop(debug_mode, cli_hint, recent_commits, last_status)
+  loop do
+    sleep WATCH_INTERVAL
+    new_status = run_cmd("git status --porcelain --branch")
+    next if new_status == last_status
+
+    plan_result = plan_commits(debug_mode, cli_hint, recent_commits, get_recent_commands, show_diff: false)
+    last_status = plan_result ? plan_result["status_output"] : new_status
+    next if plan_result.nil?
+
+    CompletionNotifier.notify_completion(success: true, title: "✓ Commit Planning Done")
+    display_commits_result(
+      plan_result["commits"],
+      plan_result["warnings"],
+      plan_result["quality_assessment"],
+      plan_result["excluded_files"]
+    )
+    puts "Watching for file changes (every #{WATCH_INTERVAL}s). Ctrl+C to exit.".yellow
+  end
 end
 
 # Entry point
 CompletionNotifier.setup_exit_hook
 
-debug_mode, cli_hint = parse_arguments(ARGV)
+debug_mode, cli_hint, watch_mode = parse_arguments(ARGV)
 
 # Change to git root directory to ensure consistent path handling
 git_root = get_git_root
@@ -955,10 +986,18 @@ loop do
   end
 
   CompletionNotifier.notify_completion(success: true, title: "✓ Commit Planning Done")
-  display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
-  execute_commits(commits)
+  if watch_mode
+    display_commits_result(commits, warnings, quality_assessment, excluded_files)
+    puts "Watching for file changes (every #{WATCH_INTERVAL}s). Ctrl+C to exit.".yellow
+    watch_loop(debug_mode, cli_hint, recent_commits, plan_result["status_output"])
+  else
+    display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
+    execute_commits(commits)
+  end
   break
 end
+
+exit 0 if watch_mode
 
 # Check if there's a remote before asking to push
 remote_output = `git remote 2>/dev/null`.strip
@@ -966,7 +1005,7 @@ has_remote = !remote_output.empty?
 
 if has_remote
   puts "Do you want to push? (y/N)".white
-  push_answer = $stdin.gets.to_s.chomp.downcase
+  push_answer = PromptReader.read_line("", downcase: true)
 
   if push_answer == "y"
     puts "Running: git push".green
