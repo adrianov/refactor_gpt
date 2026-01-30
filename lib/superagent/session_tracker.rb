@@ -3,11 +3,12 @@
 require 'oj'
 require 'digest'
 require 'fileutils'
+require_relative 'config_path'
 require_relative '../../ask_gpt'
 
 # Tracks session information and detects continuation
 class SessionTracker
-  SESSION_DIR = File.join(Dir.tmpdir, 'refactor_gpt_sessions')
+  SESSION_DIR = SuperagentConfig::CONFIG_DIR
   MAX_SESSION_AGE = 86400 # 24 hours
 
   TAGS_LIST = <<~TAGS.strip
@@ -110,10 +111,8 @@ class SessionTracker
     previous_session[:request_history].to_a
   end
 
-  def determine_agent_summary(continuation, previous_session, last_agent_summary)
+  def determine_agent_summary(_continuation, previous_session, last_agent_summary)
     return last_agent_summary unless last_agent_summary == :not_provided
-
-    return nil unless continuation
     return nil unless previous_session && previous_session[:last_agent_summary]
 
     previous_session[:last_agent_summary]

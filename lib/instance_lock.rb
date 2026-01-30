@@ -14,13 +14,26 @@ module InstanceLock
   STALE_LOCK_TIMEOUT = 3600 # 1 hour - consider lock stale if older than this
 
   @current_lock_path = nil
+  @lock_dir_override = nil
 
   PENDING_DELIMITER = "\n__NEXT__\n"
+
+  def self.lock_dir_override=(path)
+    @lock_dir_override = path
+  end
+
+  def self.lock_dir_override
+    @lock_dir_override
+  end
+
+  def self.effective_lock_dir
+    @lock_dir_override || LOCK_DIR
+  end
 
   def self.lock_file_path
     cwd = Dir.pwd
     lock_name = Digest::SHA256.hexdigest(cwd)
-    File.join(LOCK_DIR, "#{lock_name}.lock")
+    File.join(effective_lock_dir, "#{lock_name}.lock")
   end
 
   def self.pending_file_path
@@ -45,47 +58,41 @@ module InstanceLock
   end
 
   def self.ensure_lock_dir
-    parent_dir = File.dirname(LOCK_DIR)
+    parent_dir = File.dirname(effective_lock_dir)
     if File.exist?(parent_dir) && !File.directory?(parent_dir)
       backup_path = "#{parent_dir}.backup.#{Time.now.to_i}"
       FileUtils.mv(parent_dir, backup_path)
       warn "Warning: #{parent_dir} was a file, moved to #{backup_path}"
     end
-    FileUtils.mkdir_p(LOCK_DIR)
+    FileUtils.mkdir_p(effective_lock_dir)
   end
 
-  def self.acquire_lock(waiting_message: nil)
+  def self.acquire_lock(waiting_message: nil, &block)
     ensure_lock_dir
     lock_path = lock_file_path
-
-    # Wait for lock to be released if another instance is running
-    waiting_message_shown = false
-    while File.exist?(lock_path)
-      # Check if the lock is stale (process no longer running or too old)
-      if stale_lock?(lock_path)
-        File.delete(lock_path) rescue nil
-        break
-      end
-
-      unless waiting_message_shown
-        waiting_message_shown = true
-        if waiting_message
-          warn waiting_message
-        elsif block_given?
-          yield
-        end
-      end
-
-      sleep LOCK_CHECK_INTERVAL
-    end
-
-    # Create lock file with current PID and setup cleanup handlers
+    wait_for_lock_release(lock_path, waiting_message: waiting_message, &block)
     File.write(lock_path, Process.pid.to_s)
     setup_cleanup_handlers(lock_path)
     lock_path
   rescue StandardError => e
     warn "Warning: Failed to acquire lock: #{e.message}"
     nil
+  end
+
+  def self.wait_for_lock_release(lock_path, waiting_message: nil)
+    shown = false
+    while File.exist?(lock_path)
+      if stale_lock?(lock_path)
+        File.delete(lock_path) rescue nil
+        break
+      end
+      unless shown
+        shown = true
+        warn waiting_message if waiting_message
+        yield if block_given?
+      end
+      sleep LOCK_CHECK_INTERVAL
+    end
   end
 
   def self.stale_lock?(lock_path)

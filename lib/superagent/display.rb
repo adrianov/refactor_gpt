@@ -481,36 +481,52 @@ class Display
       out_puts ''
     end
 
+    # Returns true if a git repo was initialized in this run, false otherwise.
     def suggest_git_init
-      return if git_repo?
+      return false if git_repo?
 
+      do_init = $stdin.tty? ? ask_user_to_init_git : (puts 'Running: git init'.green; true)
+      return false unless do_init
+
+      run_git_init
+    end
+
+    def ask_user_to_init_git
       out_puts ''
       puts '💡 Suggestion: Initialize a git repository for better tracking and verification.'.yellow
       out_puts ''
-      puts 'Advantages:'.cyan
-      out_puts body('  • Automatic change tracking - see exactly what was modified')
-      out_puts body('  • Faster verification - uses git diff instead of reading all files')
-      out_puts body('  • Better context for AI - only changed code is analyzed')
-      out_puts body('  • Easy rollback - revert changes if needed')
-      out_puts body('  • Version history - track your code evolution')
-      out_puts ''
-
+      print_git_init_advantages
       puts 'Initialize git repository? (y/N)'.colorize(BODY_COLOR)
       answer = PromptReader.read_line('', downcase: true)
+      return true if answer == 'y'
 
-      if answer == 'y'
-        puts 'Running: git init'.green
-        success = system('git init')
-        if success
-          puts 'Git repository initialized successfully.'.green
-        else
-          puts 'Failed to initialize git repository.'.yellow
-        end
+      puts 'Skipping git initialization.'.yellow
+      out_puts ''
+      false
+    end
+
+    def print_git_init_advantages
+      puts 'Advantages:'.cyan
+      %w[
+        Automatic\ change\ tracking\ -\ see\ exactly\ what\ was\ modified
+        Faster\ verification\ -\ uses\ git\ diff\ instead\ of\ reading\ all\ files
+        Better\ context\ for\ AI\ -\ only\ changed\ code\ is\ analyzed
+        Easy\ rollback\ -\ revert\ changes\ if\ needed
+        Version\ history\ -\ track\ your\ code\ evolution
+      ].each { |line| out_puts body("  • #{line}") }
+      out_puts ''
+    end
+
+    def run_git_init
+      success = system('git init')
+      if success
+        puts 'Git repository initialized successfully.'.green
         out_puts ''
       else
-        puts 'Skipping git initialization.'.yellow
+        puts 'Failed to initialize git repository.'.yellow
         out_puts ''
       end
+      success
     end
 
     def display_pass_timing(pass_timing)

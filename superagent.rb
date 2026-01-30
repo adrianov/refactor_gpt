@@ -10,6 +10,7 @@
 # automatically verifying results and retrying with fix instructions when verification fails.
 
 require_relative "lib/signal_handler"
+require_relative "lib/superagent/config_path"
 require 'colorize'
 require_relative "lib/superagent/display"
 require_relative "lib/superagent/request_reader"
@@ -19,8 +20,22 @@ require_relative "lib/superagent/superagent"
 require_relative "lib/superagent/auto_only_lock"
 require_relative "lib/completion_notifier"
 require_relative "lib/instance_lock"
+InstanceLock.lock_dir_override = SuperagentConfig::CONFIG_DIR
 
 if __FILE__ == $PROGRAM_NAME
+  if ARGV.include?('--help') || ARGV.include?('-h')
+    puts <<~HELP
+      Usage: #{File.basename($PROGRAM_NAME)} [options] [request]
+      Runs the agent; request can be given as an argument or entered interactively.
+      Options:
+        -h, --help           Show this help
+        --resume             Resume from previous session
+        --show-prompt        Show the system prompt
+        --skip-midnight, --no-midnight   Skip midnight-rollover check
+    HELP
+    exit 0
+  end
+
   CompletionNotifier.setup_exit_hook
   skip_midnight_check = ARGV.include?('--skip-midnight') || ARGV.include?('--no-midnight')
   ARGV.delete('--skip-midnight')

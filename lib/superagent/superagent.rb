@@ -32,6 +32,8 @@ class Superagent
   ].freeze
   MODELS_AUTO_ONLY = %w[auto auto auto].freeze
 
+  GITIGNORE_PREPEND = 'Ensure .gitignore excludes build artifacts, dependencies, and other unneeded files and folders. '
+
   def initialize(
     display: Display.new,
     request_reader: nil,
@@ -76,6 +78,7 @@ class Superagent
     @input_wakeup_writer = nil
     @auto_only = auto_only
     @resume_enabled = resume_enabled
+    @git_initialized_this_run = false
   end
 
   def run(start_model_index: 0, request: nil, continuation_analysis: nil)
@@ -83,6 +86,7 @@ class Superagent
     initialize_run(request)
     @waiting_start = Time.now if request.nil?
     raw_req = request || @request_reader.read
+    raw_req = prepend_gitignore_instruction(raw_req) if request.nil? && @git_initialized_this_run
     if @waiting_start
       @waiting_elapsed += Time.now - @waiting_start
       @waiting_start = nil
@@ -158,7 +162,7 @@ class Superagent
     update_terminal_title('Initializing...')
     @display.check_late_night_reminder
     @start_time = Time.now unless request
-    @display.suggest_git_init unless request
+    @git_initialized_this_run = @display.suggest_git_init if request.nil?
     @display.update_git_status unless request
   end
 
@@ -508,6 +512,11 @@ class Superagent
 
   def save_agent_summary(summary)
     save_current_session(@current_request, summary) if summary && !summary.to_s.strip.empty? && @current_request
+  end
+
+  def prepend_gitignore_instruction(raw_req)
+    base = raw_req.to_s.strip
+    base.empty? ? GITIGNORE_PREPEND.strip : "#{GITIGNORE_PREPEND}#{raw_req}"
   end
 
   def sanitize_request(req)

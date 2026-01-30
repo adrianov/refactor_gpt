@@ -1,14 +1,17 @@
 # frozen_string_literal: true
 
+require 'digest'
+require 'fileutils'
 require 'reline'
+require_relative 'config_path'
 require_relative '../signal_handler'
 require_relative '../prompt_reader'
 
-# Handles reading user requests from argv, stdin, or interactive input.
+# Handles reading user requests from argv, stdin, or interactive input. History is per-directory.
 class RequestReader
   REQUEST_PROMPT = 'Enter request (press Enter twice to submit):'
   PASTE_THRESHOLD = 0.2
-  HISTORY_FILE = File.join(Dir.home, '.superagent_history')
+  HISTORY_DIR = SuperagentConfig::CONFIG_DIR
   HISTORY_SEP = "\n---\n"
   MAX_HISTORY = 100
 
@@ -44,9 +47,10 @@ class RequestReader
 
   def load_request_history
     return unless Reline::HISTORY.empty?
-    return unless File.exist?(HISTORY_FILE)
+    path = history_file_path
+    return unless File.exist?(path)
 
-    content = File.read(HISTORY_FILE)
+    content = File.read(path)
     return if content.strip.empty?
 
     content.split(HISTORY_SEP).reverse_each { |req| Reline::HISTORY << req.strip unless req.strip.empty? }
@@ -56,17 +60,20 @@ class RequestReader
     return if request.to_s.strip.empty?
 
     Reline::HISTORY << request
-    File.open(HISTORY_FILE, 'a') { |f| f.write(request + HISTORY_SEP) }
+    path = history_file_path
+    FileUtils.mkdir_p(File.dirname(path))
+    File.open(path, 'a') { |f| f.write(request + HISTORY_SEP) }
     trim_history_file
   end
 
   def trim_history_file
-    return unless File.exist?(HISTORY_FILE)
+    path = history_file_path
+    return unless File.exist?(path)
 
-    entries = File.read(HISTORY_FILE).split(HISTORY_SEP).reject(&:empty?)
+    entries = File.read(path).split(HISTORY_SEP).reject(&:empty?)
     return if entries.size <= MAX_HISTORY
 
-    File.write(HISTORY_FILE, entries.last(MAX_HISTORY).join(HISTORY_SEP) + HISTORY_SEP)
+    File.write(path, entries.last(MAX_HISTORY).join(HISTORY_SEP) + HISTORY_SEP)
   end
 
   def read_interactive_silent
@@ -159,5 +166,12 @@ class RequestReader
     return true if req && !req.to_s.strip.empty?
 
     exit 0
+  end
+
+  private
+
+  def history_file_path
+    cwd_hash = Digest::SHA256.hexdigest(Dir.pwd)
+    File.join(HISTORY_DIR, "#{cwd_hash}_history")
   end
 end
