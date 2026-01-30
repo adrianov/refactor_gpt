@@ -195,9 +195,10 @@ Features:
 An assistant for planning and creating structured git commits based on your current working tree.
 
 Usage:
-./git_commit_gpt.rb
+./git_commit_gpt.rb [--watch] [--debug]
 
 Features:
+- `--watch`: monitor analyzed files for changes and re-run planning every 30s when changes are detected
 - Reads `git status --porcelain` and `git diff` for the current repository
 - Groups changed files into a small number of coherent commits (by feature, refactor, docs, tests, etc.)
 - Generates conventional-style one-line commit messages
