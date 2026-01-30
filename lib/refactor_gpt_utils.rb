@@ -5,7 +5,9 @@ require "shellwords"
 
 # Helper class to parse OpenAI response
 class ResponseParser
-  FILE_REPLACE_PATTERN = %r{<full_file_contents_to_replace filename="([^"]+)">\r?\n?(.*?)\r?\n?</full_file_contents_to_replace>}m
+  FILE_REPLACE_PATTERN = %r{
+    <full_file_contents_to_replace\s+filename="([^"]+)">\r?\n?(.*?)\r?\n?</full_file_contents_to_replace>
+  }mx
 
   def self.parse_files_from_response(response, expected_paths, exit_on_error: true)
     result = parse_text_response(response, expected_paths)

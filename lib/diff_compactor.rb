@@ -254,7 +254,7 @@ class DiffCompactor
     end
   end
 
-  def finalize_hunk_context(state, max_context)
+  def finalize_hunk_context(state, _max_context)
     unless state[:in_changes]
       state[:result].concat(state[:leading_boundaries])
       state[:result].concat(state[:leading_context])
