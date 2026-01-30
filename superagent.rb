@@ -24,14 +24,18 @@ if __FILE__ == $PROGRAM_NAME
   skip_midnight_check = ARGV.include?('--skip-midnight') || ARGV.include?('--no-midnight')
   ARGV.delete('--skip-midnight')
   ARGV.delete('--no-midnight')
-  
+  resume_enabled = ARGV.include?('--resume')
+  ARGV.delete('--resume')
+
   display = Display.new(skip_midnight_check: skip_midnight_check)
   auto_only = AutoOnlyLock.exist?
   display.puts 'Auto-only lock file is set; running in auto-only mode.'.yellow if auto_only
+  suggestion = CompletionNotifier.sound_install_suggestion
+  display.puts suggestion.yellow if suggestion
   lock_path = nil
   request_reader = RequestReader.new(display)
   pre_read_request = nil
-  
+
   begin
     if InstanceLock.lock_exists?
       $stdout.puts ''
@@ -52,8 +56,9 @@ if __FILE__ == $PROGRAM_NAME
       exit 1
     end
     
-    Superagent.new(display: display, request_reader: request_reader, auto_only: auto_only)
-      .run(request: pre_read_request)
+    Superagent.new(
+      display: display, request_reader: request_reader, auto_only: auto_only, resume_enabled: resume_enabled
+    ).run(request: pre_read_request)
   ensure
     InstanceLock.release_lock(lock_path) if lock_path
   end

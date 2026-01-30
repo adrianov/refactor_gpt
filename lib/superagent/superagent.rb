@@ -38,7 +38,8 @@ class Superagent
     agent_executor: nil,
     verification_handler: nil,
     session_tracker: nil,
-    auto_only: false
+    auto_only: false,
+    resume_enabled: false
   )
     @display = display
     @session_tracker = session_tracker || SessionTracker.new(@display)
@@ -71,6 +72,7 @@ class Superagent
     @input_thread = nil
     @input_wakeup_writer = nil
     @auto_only = auto_only
+    @resume_enabled = resume_enabled
   end
 
   def run(start_model_index: 0, request: nil, continuation_analysis: nil)
@@ -88,7 +90,7 @@ class Superagent
 
     if continuation_analysis
       apply_continuation_analysis(continuation_analysis)
-    else
+    elsif @resume_enabled
       analyze_session_continuation(req)
     end
     @agent_executor.reset_agent_session unless @session_continuation
@@ -401,12 +403,16 @@ class Superagent
   end
 
   def execute_new_request(new_req, previous_req, model_index)
-    previous_session = previous_req ? {request: previous_req} : nil
-    analysis = @session_tracker.analyze_continuation_and_description(new_req, previous_session)
+    analysis = if @resume_enabled
+                 previous_session = previous_req ? {request: previous_req} : nil
+                 @session_tracker.analyze_continuation_and_description(new_req, previous_session)
+               else
+                 {continuation: false, tags: [], description: nil}
+               end
     if analysis[:continuation] && user_disagrees_with_verification?(analysis[:tags])
       record_attempt_failure(@current_model)
     end
-    
+
     start_index = analysis[:continuation] ? [model_index || 0, @current_model_index].max : (model_index || 0)
     start_index = [[start_index, 0].max, models.size - 1].min
 
