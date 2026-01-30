@@ -5,12 +5,10 @@ require 'json'
 require 'oj'
 require 'rbconfig'
 require 'timeout'
-require_relative '../agents_file_handler'
 require_relative '../refactor_instructions'
 
 # Handles agent command execution with retry logic
 class AgentExecutor
-  include AgentsFileHandler
   include RefactorInstructions
   EXECUTION_TIMEOUT = 60
   MAX_EXECUTION_TIMEOUT = 600
@@ -20,7 +18,7 @@ class AgentExecutor
 
   attr_reader :agent_session_id
 
-  def initialize(display, session_tracker: nil)
+  def initialize(display, session_tracker: nil, show_prompt: false)
     @display = display
     @tools_used = []
     @session_tracker = session_tracker
@@ -28,6 +26,7 @@ class AgentExecutor
     @compact_pass_run = false
     @model_call_finished_since_compact = false
     @full_prompt_buffer = nil
+    @show_prompt = show_prompt
   end
 
   def reset_agent_session
@@ -104,16 +103,20 @@ class AgentExecutor
     cmdline.include?(runner)
   end
 
-  def wrap_prompt(p, new_session: false)
+  def wrap_prompt(p, new_session: false, verification_mode: false)
     parts = []
-    parts << non_interactive_notice
-    parts << guidelines_section(always_include: new_session)
+    if new_session
+      parts << non_interactive_notice
+      parts << guidelines_section(always_include: true)
+    end
     parts << user_context_section
+    parts << git_status_section(new_session)
     parts << git_diff_section(new_session)
     parts << working_tree_section(new_session)
-    parts << summary_section
-    parts << history_section(current_request: p)
-    p + parts.compact.join
+    rest = parts.compact.join
+    history = verification_mode ? nil : history_section
+    summary = summary_section
+    p + (history.to_s + summary.to_s + rest)
   end
 
   def user_context_section
@@ -124,6 +127,13 @@ class AgentExecutor
     parts << "User: #{ENV['USER'] || ENV['USERNAME']}"
     parts << "Project root: #{Dir.pwd}"
     "\n\n" + parts.join("\n")
+  end
+
+  def git_status_section(new_session)
+    return nil unless new_session
+    out = `git status 2>#{File::NULL}`.to_s.strip
+    return nil if out.empty?
+    "\n\nGit status:\n#{out}"
   end
 
   def git_diff_section(new_session)
@@ -149,16 +159,13 @@ class AgentExecutor
   end
 
   def guidelines_section(always_include: false)
-    content = load_agents_content
-    if content.nil? || content.to_s.strip.empty?
-      content = "Project guidelines (default refactoring instructions):\n#{DEFAULT_USER_INSTRUCTION.to_s.strip}"
-    elsif always_include
-      content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.to_s.strip}\n\n" \
-                "#{DEFAULT_USER_INSTRUCTION.to_s.strip}"
-    else
-      content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.to_s.strip}"
-    end
-
+    raw = read_agents_files.to_s.strip
+    content = if raw.empty?
+                "Project guidelines (default refactoring instructions):\n#{DEFAULT_USER_INSTRUCTION.to_s.strip}"
+              else
+                suffix = always_include ? "\n\n#{DEFAULT_USER_INSTRUCTION.to_s.strip}" : ''
+                "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{raw}#{suffix}"
+              end
     "\n\n#{content}"
   end
 
@@ -173,8 +180,9 @@ class AgentExecutor
     history = @session_tracker&.get_session_request_history(exclude_equal: current_request) || []
     return nil if history.empty?
 
-    "\n\nPrevious requests in this session:\n" +
-      history.map.with_index(1) { |req, idx| "#{idx}. #{req}" }.join("\n")
+    width = [2, history.size.to_s.length].max
+    lines = history.reverse.map.with_index(1) { |req, idx| "#{idx.to_s.rjust(width)}. #{req}" }
+    "\n\nPrevious requests in this session:\n" + lines.join("\n")
   end
 
   def non_interactive_notice
@@ -184,14 +192,14 @@ class AgentExecutor
     "Proceed with implementation based on the available context and your best judgment."
   end
 
-  def load_agents_content
-    project_root = Dir.pwd
-    parts = []
-    agents_rb = File.join(project_root, 'AGENTS.rb')
-    parts << "--- AGENTS.rb ---\n#{File.read(agents_rb).to_s.strip}" if File.exist?(agents_rb)
-    file_content = load_agents_file(project_root)
-    parts << file_content if file_content && !file_content.to_s.strip.empty?
-    parts.empty? ? '' : parts.join("\n\n")
+  def read_agents_files
+    root = Dir.pwd
+    %w[AGENTS.rb AGENTS.md .cursorrules].filter_map do |name|
+      path = File.join(root, name)
+      next unless File.exist?(path)
+
+      "--- #{name} ---\n#{File.read(path).strip}"
+    end.join("\n\n")
   end
 
   def parse_json_stream_line(line)
@@ -370,7 +378,7 @@ class AgentExecutor
       cmd.match?(/^[a-z]+\s+[a-z]/i)
   end
 
-  def build_command(model:, plan_mode: false)
+  def build_command(model:, plan_mode: false, verification_mode: false)
     cmd = %w[
       agent
       --print
@@ -379,7 +387,7 @@ class AgentExecutor
       --force
     ]
     cmd << '--plan' if plan_mode
-    cmd.concat(['--resume', @agent_session_id]) if @agent_session_id
+    cmd.concat(['--resume', @agent_session_id]) if @agent_session_id && !verification_mode
     cmd.concat(['--model', model])
     cmd
   end
@@ -404,16 +412,12 @@ class AgentExecutor
     @display.puts 'Compact pass timed out; continuing with main run.'.yellow
   end
 
-  def debug_prompt?
-    ENV['DEBUG'] != '0'
-  end
-
   def clear_full_prompt_buffer
     @full_prompt_buffer = nil
   end
 
   def print_full_prompt(prompt, new_session: false)
-    return unless debug_prompt?
+    return unless @show_prompt
 
     if new_session
       @full_prompt_buffer = prompt.to_s
@@ -424,9 +428,7 @@ class AgentExecutor
     @display.puts '--- End prompt ---'.light_black
   end
 
-  # Shows full prompt when requested, then running command and a short excerpt of the prompt.
-  # Excerpt preserves newlines (first 5 lines, each truncated) so code snippets stay readable.
-  def display_command(cmd, prompt, new_session: false)
+  def display_command(cmd, prompt, new_session: false, verification_mode: false)
     print_full_prompt(prompt, new_session: new_session)
     if new_session && @full_prompt_buffer
       @display.puts '--- Full prompt ---'.light_black
@@ -501,7 +503,7 @@ class AgentExecutor
     timeout_thread = start_timeout_thread
 
     begin
-      execute_agent_process(model, wrapped, verification_mode,
+      execute_agent_process(model, wrapped, verification_mode: verification_mode,
                             new_session: new_session,
                             prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request)
     ensure
@@ -537,7 +539,7 @@ class AgentExecutor
   def run(model, p, base_delay: 1, verification_mode: false, new_session: false,
           prompt_request_reader: nil, on_prompt_request: nil)
     clear_full_prompt_buffer if new_session
-    wrapped = verification_mode ? p : wrap_prompt(p, new_session: new_session)
+    wrapped = wrap_prompt(p, new_session: new_session, verification_mode: verification_mode)
     run_compact_pass_if_needed(model)
     retries = 0
     loop do
@@ -693,9 +695,10 @@ class AgentExecutor
     end
   end
 
-  def execute_agent_process(model, wrapped, _verification_mode = false, new_session: false,
+  def execute_agent_process(model, wrapped, verification_mode: false, new_session: false,
                             prompt_request_reader: nil, on_prompt_request: nil)
-    cmd = setup_subprocess_run(model, wrapped, new_session: new_session)
+    cmd = setup_subprocess_run(model, wrapped, new_session: new_session,
+                               verification_mode: verification_mode)
     Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
       @state[:pid] = wait_thr.pid
       @state[:start] = @state[:last_chunk] = Time.now
@@ -706,11 +709,11 @@ class AgentExecutor
     end
   end
 
-  def setup_subprocess_run(model, wrapped, plan_mode: false, new_session: false)
+  def setup_subprocess_run(model, wrapped, plan_mode: false, new_session: false, verification_mode: false)
     @passthrough = false
     @display.reset_stream_tracking unless @passthrough
-    cmd = build_command(model: model, plan_mode: plan_mode)
-    display_command(cmd, wrapped, new_session: new_session) unless @passthrough
+    cmd = build_command(model: model, plan_mode: plan_mode, verification_mode: verification_mode)
+    display_command(cmd, wrapped, new_session: new_session, verification_mode: verification_mode) unless @passthrough
     cmd
   end
 

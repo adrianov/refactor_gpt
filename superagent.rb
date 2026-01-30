@@ -27,10 +27,15 @@ if __FILE__ == $PROGRAM_NAME
   ARGV.delete('--no-midnight')
   resume_enabled = ARGV.include?('--resume')
   ARGV.delete('--resume')
+  show_prompt = ARGV.include?('--show-prompt')
+  ARGV.delete('--show-prompt')
 
   display = Display.new(skip_midnight_check: skip_midnight_check)
   auto_only = AutoOnlyLock.exist?
-  display.puts 'Auto-only lock file is set; running in auto-only mode.'.yellow if auto_only
+  if auto_only
+    display.puts 'Auto-only lock file is set; running in auto-only mode.'.yellow
+    display.puts "Remove it manually when you want to exit: rm #{AutoOnlyLock.path}".yellow
+  end
   suggestion = CompletionNotifier.sound_install_suggestion
   display.puts suggestion.yellow if suggestion
   lock_path = nil
@@ -57,7 +62,8 @@ if __FILE__ == $PROGRAM_NAME
     end
 
     Superagent.new(
-      display: display, request_reader: request_reader, auto_only: auto_only, resume_enabled: resume_enabled
+      display: display, request_reader: request_reader, auto_only: auto_only, resume_enabled: resume_enabled,
+      show_prompt: show_prompt
     ).run
   ensure
     InstanceLock.release_lock(lock_path) if lock_path

@@ -17,20 +17,12 @@ class VerificationHandler
 
   def build_fix_prompt(req)
     <<~HEREDOC
-      Original request: #{to_utf8(req)}#{to_utf8(format_previous_requests(exclude_equal: req))}
+      Original request: #{to_utf8(req)}
 
       The previous attempt failed. Please fix the implementation.
 
       Review the codebase and make the necessary corrections.
     HEREDOC
-  end
-
-  def format_previous_requests(exclude_equal: nil)
-    previous_requests = @session_tracker&.get_session_request_history(exclude_equal: exclude_equal) || []
-    return '' unless previous_requests.any?
-
-    "\n\nPrevious requests in this session:\n" +
-      previous_requests.map.with_index(1) { |prev_req, idx| "#{idx}. #{to_utf8(prev_req)}" }.join("\n")
   end
 
   def parse_res(res)
@@ -98,8 +90,7 @@ class VerificationHandler
 
       Available information:
       - Current user request
-      - Previous user requests in this session
-      - Final response from the previous agent run that attempted to implement the feature
+      - Final summary/response from the previous agent run that attempted to implement the feature
 
       Verification approach:
       - Review the previous agent's response to understand what was implemented
@@ -126,8 +117,7 @@ class VerificationHandler
     req_utf8 = to_utf8(user_request)
     prev_utf8 = to_utf8(previous_agent_response)
     content_parts = []
-    prev_reqs = format_previous_requests(exclude_equal: user_request)
-    content_parts << "Current user request: #{req_utf8}#{to_utf8(prev_reqs)}\n\n"
+    content_parts << "Current user request: #{req_utf8}\n\n"
     if prev_utf8 && !prev_utf8.to_s.strip.empty?
       content_parts << "Final response from previous agent run:\n#{prev_utf8.to_s.strip}\n"
     end
@@ -136,8 +126,9 @@ class VerificationHandler
 
   def build_verification_prompt(req, previous_agent_response = nil)
     user_content = build_verification_user_content(req, previous_agent_response)
+    notice = @agent_executor.non_interactive_notice
     guidelines = @agent_executor.guidelines_section(always_include: true)
-    "#{build_verification_system_instruction}\n\n---\n\n#{guidelines}\n\n---\n\n#{user_content}"
+    "#{build_verification_system_instruction}\n\n---\n\n#{notice}\n\n#{guidelines}\n\n---\n\n#{user_content}"
   end
 
   def run_verification(model, req, previous_agent_response = nil)

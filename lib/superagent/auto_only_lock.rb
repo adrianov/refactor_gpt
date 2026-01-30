@@ -2,6 +2,7 @@
 
 # Lock file in user home: when present, superagent runs with model queue [auto, auto, auto] only.
 # Created when a usage-related unrecoverable error is detected.
+# Never expires; user must remove the file manually to exit auto-only mode.
 module AutoOnlyLock
   LOCK_FILENAME = '.superagent_auto_only'
 

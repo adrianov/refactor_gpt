@@ -30,13 +30,25 @@ class Verify
 
 
   def assess_feature(user_request, status_output, diff_output)
-    ask([
+    prompts = [
       {role: "system", content: system_instruction},
       {role: "user", content: build_user_content(user_request, status_output, diff_output)}
-    ])
+    ]
+    print_full_prompt(prompts) if @debug
+    ask(prompts)
   end
 
   private
+
+  def print_full_prompt(prompts)
+    warn '--- Full prompt ---'.light_black
+    prompts.each do |msg|
+      warn "[#{msg[:role].upcase}]".light_black
+      warn msg[:content]
+      warn ''
+    end
+    warn '--- End full prompt ---'.light_black
+  end
 
   def handle_gemini_fallback(prompts, error)
     return handle_final_error(error) unless gemini_configured?
@@ -74,20 +86,29 @@ class Verify
       You are a tool that verifies whether code changes fully implement a requested feature.
 
       Task:
-      Verify that the changes fully solve the user's request and introduce no new bugs or regressions.
+      Verify that the code changes fully implement the user's request without introducing bugs or regressions.
 
-      You may use any verification method you find appropriate, such as:
-      - Reviewing git diff (run `git diff` to see changes)
-      - Running tests or linting tools
-      - Checking file contents
-      - Any other verification approach you deem suitable
+      Available information:
+      - Current user request
+      - Final summary/response from the previous agent run that attempted to implement the feature
 
-      After verification, respond with:
-      - "YES: [short description of what was verified]" if the changes fully solve the request with no issues
-      - "NO: [short description of what is wrong]" if there are issues
+      Verification approach:
+      - Review the previous agent's response to understand what was implemented
+      - You may check git diff (using 'git diff') or read relevant files to verify the changes
+      - Check if the changes address the user's request
+      - Look for potential bugs, regressions, or missing functionality
+      - Verify code quality and adherence to project guidelines
 
-      CRITICAL: Your response MUST start with either "YES" or "NO" as the first word. This is required for automated parsing.
-      Always include a brief description after the YES/NO. Keep it specific and concise.
+      Response format:
+      - Start your response with "YES: " followed by a brief description if verification passes
+      - Start your response with "NO: " followed by a brief description if verification fails
+
+      CRITICAL requirements:
+      - Your response MUST start with either "YES" or "NO" as the first word
+      - Use minimal formatting only - avoid excessive markdown or formatting
+      - Keep your response short and concise - one sentence is sufficient
+      - The description after YES/NO should be brief and specific
+      - DO NOT use thinking blocks or any other output format. Just the YES/NO response.
     HEREDOC
   end
 end
