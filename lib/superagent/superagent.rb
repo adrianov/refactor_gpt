@@ -114,7 +114,7 @@ class Superagent
     @active_start = Time.now
     update_terminal_title('Planning...')
     @display.puts 'Running in plan mode...'.cyan
-    $stdout.puts ''
+    @display.out_puts ''
 
     models[start_index..-1].each_with_index do |model, relative_idx|
       idx = start_index + relative_idx
@@ -185,7 +185,8 @@ class Superagent
     @display.display_attempt_header(model, idx, models.size)
 
     start = Time.now
-    success, output, reason = @agent_executor.run(model, req, new_session: !@session_continuation)
+    run_opts = { new_session: !@session_continuation }
+    success, output, reason = @agent_executor.run(model, req, **run_opts)
     elapsed = Time.now - start
 
     unless success
@@ -236,7 +237,7 @@ class Superagent
     run_verification_with_retries(model, req)
     h = @verification_handler
     pass_timing[:review_time] = h.review_time
-    $stdout.puts ''
+    @display.out_puts ''
 
     if h.call_failed
       record_attempt_failure(model)
@@ -246,7 +247,7 @@ class Superagent
         @auto_only = true
       end
       @display.display_verification_result(false, h.desc, '', call_failed: true)
-      $stdout.puts ''
+      @display.out_puts ''
       pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
       @pass_timings << pass_timing
       @display.display_pass_timing(pass_timing)
@@ -260,7 +261,7 @@ class Superagent
     end
 
     @display.display_verification_result(false, h.desc)
-    $stdout.puts ''
+    @display.out_puts ''
     retry_verification_with_fix(model, req, pass_timing, pass_start)
   end
 
@@ -278,7 +279,7 @@ class Superagent
       break if attempt >= VERIFICATION_CALL_RETRIES
 
       @display.puts 'Connection/network error during verification (retrying up to 3 times)...'.yellow
-      $stdout.puts ''
+      @display.out_puts ''
     end
     h = @verification_handler
     @verification_handler.finalize_call_failed(h.verified, h.desc, h.review_time, h.raw_output) if exhausted
@@ -291,7 +292,7 @@ class Superagent
     h = @verification_handler
     pass_timing[:fix_time] = Time.now - fix_start - (h.review_time || 0)
     pass_timing[:review_time] += (h.review_time || 0)
-    $stdout.puts ''
+    @display.out_puts ''
     save_agent_summary(h.fix_output) if h.fix_output
 
     if h.verified
@@ -301,7 +302,7 @@ class Superagent
 
     @last_attempt_success = false
     @display.display_verification_result(false, h.desc, 'after retry')
-    $stdout.puts ''
+    @display.out_puts ''
     pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
     @pass_timings << pass_timing
     @display.display_pass_timing(pass_timing)
@@ -373,9 +374,14 @@ class Superagent
     end
   end
 
+  def show_request_prompt
+    $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
+    $stdout.flush
+  end
+
   def prompt_for_new_request(previous_req)
     update_terminal_title('✅ Passed')
-    $stdout.puts "\nEnter the new request:\n(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)\n\n"
+    show_request_prompt
 
     @waiting_start = Time.now
     raw_new_req = @request_reader.read_interactive_silent
@@ -384,7 +390,7 @@ class Superagent
       @waiting_start = nil
     end
     @active_start = Time.now
-    return if raw_new_req.to_s.strip.empty?
+    exit 0 if raw_new_req.to_s.strip.empty?
 
     model_index = extract_model_index(raw_new_req)
     new_req = sanitize_request(raw_new_req)
@@ -522,21 +528,87 @@ class Superagent
 
   def run_pending_input_loop(reader, queue)
     buffer = []
-    loop do
-      ready = IO.select([$stdin, reader], nil, nil, 0.5)
-      break if ready.nil?
-      break flush_and_close(reader, buffer, queue) if ready[0].include?(reader)
-      next unless ready[0].include?($stdin)
-
-      line = $stdin.gets
-      break if line.nil?
-
-      buffer = process_pending_line(line.chomp, buffer, queue)
-    end
+    input_io = nil
+    input_io = open_controlling_tty
+    run_pending_input_loop_cooked(reader, queue, buffer, input_io)
   rescue StandardError
     # Silently ignore input errors in background thread
   ensure
+    input_io&.close if input_io && input_io != $stdin
     reader.close rescue nil
+  end
+
+  def open_controlling_tty
+    File.open('/dev/tty', 'r')
+  rescue StandardError
+    $stdin
+  end
+
+  ENTER_SIGNAL_DELAY = 0.5
+
+  def run_pending_input_loop_cooked(reader, queue, buffer, input_io)
+    return unless input_io
+
+    thread_start = Time.now
+    read_ios = [reader, input_io].compact
+    loop do
+      ready = IO.select(read_ios, nil, nil, 0.5)
+      next if ready.nil?
+      break flush_and_close(reader, buffer, queue) if ready[0].include?(reader)
+      next unless ready[0].include?(input_io)
+
+      line = input_io.gets
+      break if line.nil?
+
+      if single_enter?(line, buffer) && (Time.now - thread_start) >= ENTER_SIGNAL_DELAY
+        handle_queue_request_in_thread(queue, input_io)
+        next
+      end
+      buffer = process_pending_line(line.chomp, buffer, queue)
+    end
+  end
+
+  def single_enter?(line, buffer)
+    line.chomp.empty? && buffer.empty?
+  end
+
+  def handle_queue_request_in_thread(queue, input_io)
+    @display.set_output_paused(true)
+    $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
+    $stdout.flush
+    
+    lines = []
+    saw_empty = false
+    loop do
+      line = input_io.gets
+      break if line.nil?
+      
+      line_stripped = line.to_s.strip
+      if line_stripped.empty? && !lines.empty?
+        break
+      elsif line_stripped.empty?
+        break if saw_empty
+        saw_empty = true
+        next
+      end
+      
+      saw_empty = false
+      lines << line_stripped
+    end
+    
+    @display.set_output_paused(false)
+    @display.flush_paused_output
+    
+    result = lines.join("\n")
+    add_and_show_queue(queue, result)
+  end
+
+  def add_and_show_queue(queue, raw_new)
+    return if raw_new.to_s.strip.empty?
+
+    queue.add(raw_new.to_s.strip)
+    list = queue.snapshot
+    @display.display_pending_list(list) unless list.empty?
   end
 
   def process_pending_line(line, buffer, queue)

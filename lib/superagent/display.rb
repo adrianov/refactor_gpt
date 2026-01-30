@@ -31,7 +31,24 @@ class Display
       @last_thinking_indicator_time = nil
       @tool_line_in_progress = false
       @skip_midnight_check = skip_midnight_check
+      @output_paused = false
+      @output_buffer = []
+      @output_buffer_mutex = Mutex.new
     end
+
+  def set_output_paused(paused)
+    @output_paused = paused
+  end
+
+  def flush_paused_output
+    to_print = @output_buffer_mutex.synchronize do
+      buf = @output_buffer.join
+      @output_buffer.clear
+      buf
+    end
+    $stdout.print to_print
+    $stdout.flush
+  end
 
     def check_late_night_reminder
       return if @skip_midnight_check
@@ -178,7 +195,7 @@ class Display
       out_puts ''
       box = TTY::Box.frame(
         "📥 Interactive Queue is active while agent runs.",
-        'Type request below, press Enter twice to queue.',
+        'Press Enter to add a new request.',
         width: 58,
         padding: [0, 1],
         border: :light
@@ -527,11 +544,20 @@ class Display
     end
 
     def out_print(str)
+      if @output_paused
+        @output_buffer_mutex.synchronize { @output_buffer << str.to_s }
+        return
+      end
       $stdout.print str
     end
 
     def out_puts(str = '')
-      out_print(str.to_s.end_with?("\n") ? str : "#{str}\n")
+      s = str.to_s.end_with?("\n") ? str.to_s : "#{str}\n"
+      if @output_paused
+        @output_buffer_mutex.synchronize { @output_buffer << s }
+        return
+      end
+      $stdout.print s
     end
 
     private

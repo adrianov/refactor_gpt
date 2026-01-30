@@ -4,7 +4,9 @@ require 'reline'
 
 # Handles reading user requests from argv, stdin, or interactive input.
 class RequestReader
-    def initialize(display)
+  REQUEST_PROMPT = 'Enter request (press Enter twice to submit):'
+
+  def initialize(display)
       @display = display
       @plan_mode = false
     end
@@ -27,37 +29,43 @@ class RequestReader
       $stdin.read.strip
     end
 
-    def read_interactive
-      @display.puts 'Enter request:'.cyan
-      @display.puts '(Press Enter twice, Ctrl+D, or Ctrl+C to submit/exit)'
-      $stdout.puts ''
+  def read_interactive
+    @display.puts REQUEST_PROMPT.cyan
+    $stdout.puts ''
 
-      read_interactive_silent
-    end
+    read_interactive_silent
+  end
 
-    def read_interactive_silent
-      lines = []
-      loop do
-        line = read_interactive_line(lines)
-        return nil if line.nil?
-        break if line == :done
-        next if line == :continue
-
-        lines << line
-      end
-      result = lines.join("\n")
-      result.to_s.strip.empty? ? nil : result
-    end
-
-    def read_interactive_line(lines)
-      line = Reline.readline(lines.empty? ? '> ' : '  ', true)
+  def read_interactive_silent
+    lines = []
+    saw_empty = false
+    loop do
+      line = read_interactive_line(lines)
       return nil if line.nil?
+      break if line == :done
+      if line == :empty_line
+        return nil if saw_empty
 
-      line = line.to_s.strip
-      return :done if line.empty? && !lines.empty?
-      return :continue if line.empty?
+        saw_empty = true
+        next
+      end
 
-      line
+      saw_empty = false
+      lines << line
+    end
+    result = lines.join("\n")
+    result.to_s.strip.empty? ? nil : result
+  end
+
+  def read_interactive_line(lines)
+    line = Reline.readline(lines.empty? ? '> ' : '  ', true)
+    return nil if line.nil?
+
+    line = line.to_s.strip
+    return :done if line.empty? && !lines.empty?
+    return :empty_line if line.empty?
+
+    line
     rescue Interrupt
       $stdout.puts ''
       @display.puts 'Interrupted. Exiting.'.yellow

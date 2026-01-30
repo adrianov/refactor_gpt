@@ -477,19 +477,21 @@ class AgentExecutor
       n.include?('this error is unrecoverable')
   end
 
-  def run_with_timeout_monitoring(model, wrapped, verification_mode: false)
+  def run_with_timeout_monitoring(model, wrapped, verification_mode: false,
+                                  prompt_request_reader: nil, on_prompt_request: nil)
     @tools_used = []
     @verification_mode = verification_mode
     @passthrough = test_runner_running?
-    return run_without_timeout(model, wrapped, verification_mode: verification_mode) if @passthrough
+    return run_without_timeout(model, wrapped, verification_mode) if @passthrough
 
-    @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil, 
-start: nil }
+    @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil,
+               start: nil }
     monitor_thread = start_monitor_thread
     timeout_thread = start_timeout_thread
 
     begin
-      execute_agent_process(model, wrapped, verification_mode: verification_mode)
+      execute_agent_process(model, wrapped, verification_mode,
+                            prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request)
     ensure
       @state[:complete] = true
       monitor_thread&.kill
@@ -519,13 +521,15 @@ start: nil }
     end
   end
 
-  def run(model, p, base_delay: 1, verification_mode: false, new_session: false)
+  def run(model, p, base_delay: 1, verification_mode: false, new_session: false,
+          prompt_request_reader: nil, on_prompt_request: nil)
     wrapped = wrap_prompt(p, new_session: new_session)
     run_compact_pass_if_needed(model)
     retries = 0
     loop do
       stdout, _, status, timeout_reason = run_with_timeout_monitoring(model, wrapped,
-        verification_mode: verification_mode)
+        verification_mode: verification_mode,
+        prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request)
       @model_call_finished_since_compact = true
       output = (stdout || '').to_s
       if output.to_s.strip.empty?
@@ -614,6 +618,17 @@ start: nil }
 
   private
 
+  def drain_prompt_pipe(pipe)
+    return unless pipe
+
+    loop do
+      ready = IO.select([pipe], nil, nil, 0)
+      break unless ready && ready[0].include?(pipe)
+
+      pipe.read(1024) rescue break
+    end
+  end
+
   def start_monitor_thread
     Thread.new do
       loop do
@@ -652,19 +667,25 @@ start: nil }
     @state[:timed_out] = true
     @display.puts "❌ Agent timed out after #{reason}".red
     return unless @state[:pid]
-    Process.kill('TERM', @state[:pid])
-    sleep 2
-    Process.kill('KILL', @state[:pid]) unless @state[:complete]
+    begin
+      Process.kill('TERM', @state[:pid])
+      sleep 2
+      Process.kill('KILL', @state[:pid]) unless @state[:complete]
+    rescue Errno::ESRCH
+      # Process already exited
+    end
   end
 
-  def execute_agent_process(model, wrapped, _verification_mode = false)
+  def execute_agent_process(model, wrapped, _verification_mode = false,
+                            prompt_request_reader: nil, on_prompt_request: nil)
     cmd = setup_subprocess_run(model, wrapped)
     Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
       @state[:pid] = wait_thr.pid
       @state[:start] = @state[:last_chunk] = Time.now
       stdin.write(wrapped)
       stdin.close
-      process_agent_output(stdout_stderr, wait_thr)
+      process_agent_output(stdout_stderr, wait_thr,
+                          prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request)
     end
   end
 
@@ -676,11 +697,25 @@ start: nil }
     cmd
   end
 
-  def process_agent_output(stdout_stderr, wait_thr)
+  def process_agent_output(stdout_stderr, wait_thr, prompt_request_reader: nil, on_prompt_request: nil)
     raw, final, buffer = '', '', ''
+    read_ios = [stdout_stderr]
+    read_ios << prompt_request_reader if prompt_request_reader && on_prompt_request
     loop do
       break if @state[:timed_out]
-      if IO.select([stdout_stderr], nil, nil, 0.5)
+      ready = IO.select(read_ios, nil, nil, 0.5)
+      if prompt_request_reader && ready && ready[0].include?(prompt_request_reader)
+        next if @state[:start] && (Time.now - @state[:start]) < 0.5
+        data = prompt_request_reader.read(1024) rescue nil
+        if data.nil? || data.empty?
+          read_ios.delete(prompt_request_reader)
+          next
+        end
+        on_prompt_request.call
+        drain_prompt_pipe(prompt_request_reader)
+        next
+      end
+      if ready && ready[0].include?(stdout_stderr)
         begin
           chunk = stdout_stderr.readpartial(4096)
           @state[:last_chunk] = Time.now
@@ -689,7 +724,10 @@ start: nil }
           buffer, final = process_buffer(buffer, final)
         rescue EOFError then break
         end
-      elsif !wait_thr.alive?
+        next
+      end
+      next if ready
+      if !wait_thr.alive?
         raw, final, buffer = process_remaining_output(stdout_stderr, raw, final, buffer)
         break
       end
@@ -735,13 +773,13 @@ start: nil }
   def display_tools_summary
     return if @tools_used.empty?
 
-    $stdout.puts ''
+    @display.out_puts ''
     @display.puts "Tools applied (#{@tools_used.size}):".cyan
     @tools_used.each do |tool|
       args_str = @display.format_tool_call_args(tool[:arguments])
       display_text = args_str ? "  • #{tool[:name]}(#{args_str})" : "  • #{tool[:name]}"
-      $stdout.puts display_text.colorize(:light_blue)
+      @display.out_puts display_text.colorize(:light_blue)
     end
-    $stdout.puts ''
+    @display.out_puts ''
   end
 end

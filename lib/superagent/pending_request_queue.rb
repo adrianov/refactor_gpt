@@ -24,6 +24,10 @@ class PendingRequestQueue
     @mutex.synchronize { @queue.size }
   end
 
+  def snapshot
+    @mutex.synchronize { @queue.dup }
+  end
+
   def take_all
     @mutex.synchronize do
       out = @queue.dup
