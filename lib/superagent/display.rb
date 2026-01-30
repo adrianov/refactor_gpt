@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative '../prompt_reader'
 require 'tty-box'
 require 'tty-cursor'
 
@@ -168,13 +169,6 @@ class Display
       out_puts ''
     end
 
-    def display_git_diff
-      return unless git_repo?
-
-      system("git diff")
-      out_puts ''
-    end
-
     def display_session_description(description)
       return unless description && !description.to_s.strip.empty?
 
@@ -183,6 +177,7 @@ class Display
       out_puts ''
     end
 
+    # Shows session start: "Superagent:", session type (continuation/new + tags), full request text, then git status.
     def display_start_message(req, continuation = false, tags = [])
       puts "\nSuperagent:".cyan
       display_session_type(continuation, tags)
@@ -204,7 +199,11 @@ class Display
       out_puts ''
     end
 
-    def display_pending_list(requests)
+    # Lists queued requests; shows running request preview if any.
+    def display_pending_list(requests, current_request: nil)
+      unless current_request.to_s.strip.empty?
+        puts "Running: #{pending_request_preview(current_request)}".cyan
+      end
       return if requests.nil? || requests.empty?
 
       puts "Using #{requests.size} queued request(s):".cyan
@@ -212,6 +211,14 @@ class Display
       out_puts ''
     end
 
+    # Single-line preview for queue/running: first line of text, truncated to 60 chars.
+    def pending_request_preview(text)
+      preview = text.to_s.strip.lines.first&.chomp
+      preview = preview[0..60] + '...' if preview && preview.length > 60
+      preview || ''
+    end
+
+    # Shows "↻ Continuing..." or "🆕 New session [tags]" and optional step line.
     def display_session_type(continuation, tags)
       if continuation
         tag_display = tags.empty? ? '' : " [#{tags.join(', ')}]"
@@ -464,7 +471,7 @@ class Display
       out_puts ''
 
       puts 'Initialize git repository? (y/N)'.colorize(BODY_COLOR)
-      answer = $stdin.gets.to_s.chomp.downcase
+      answer = PromptReader.read_line('', downcase: true)
 
       if answer == 'y'
         puts 'Running: git init'.green
@@ -521,6 +528,10 @@ class Display
     def display_passes_recap(pass_timings)
       return unless pass_timings && !pass_timings.empty?
 
+      out_puts ''
+      fix_count = pass_timings.count { |p| (p[:fix_time] || 0) > 0 }
+      runs = pass_timings.size + fix_count
+      puts "This request: #{runs} runs, #{fix_count} fixes".cyan
       out_puts ''
       puts "Models used and timings:".cyan
       pass_timings.each { |pass| display_single_pass_recap(pass) }
