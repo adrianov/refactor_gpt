@@ -83,7 +83,7 @@ class SessionTracker
 
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided, agent_session_id: nil)
     previous_session = load_previous_session
-    request_history = build_request_history(continuation, previous_session, current_request: request)
+    request_history = build_request_history(continuation, previous_session) + expand_combined(request)
     agent_summary = determine_agent_summary(continuation, previous_session, last_agent_summary)
     stored_session_id = agent_session_id || previous_session&.dig(:agent_session_id)
 
@@ -104,15 +104,10 @@ class SessionTracker
     cleanup_old_sessions
   end
 
-  def build_request_history(continuation, previous_session, current_request: nil)
+  def build_request_history(continuation, previous_session)
     return [] unless continuation && previous_session
 
-    base = previous_session[:request_history] || []
-    prev_req = previous_session[:request]
-    return base if prev_req.nil?
-    return base if current_request && prev_req.to_s.strip == current_request.to_s.strip
-
-    base + [prev_req]
+    previous_session[:request_history].to_a
   end
 
   def determine_agent_summary(continuation, previous_session, last_agent_summary)
@@ -128,9 +123,7 @@ class SessionTracker
     session_data = load_previous_session
     return [] unless session_data
 
-    history = session_data[:request_history] || []
-    previous_request = session_data[:request]
-    list = history + (previous_request ? [previous_request] : [])
+    list = session_data[:request_history] || []
     return list if exclude_equal.nil? || exclude_equal.to_s.strip.empty?
 
     exclude = exclude_equal.to_s.strip
@@ -145,6 +138,16 @@ class SessionTracker
   end
 
   private
+
+  def expand_combined(request)
+    return [] if request.nil? || request.to_s.strip.empty?
+
+    segments = request.to_s.split(/\n\n+/)
+    return [request.to_s] if segments.size < 2
+    return [request.to_s] unless segments.all? { |seg| seg.match?(/\A\d+\.\s/) }
+
+    segments.map { |seg| seg.sub(/\A\d+\.\s+/, '') }
+  end
 
   def ensure_session_dir
     FileUtils.mkdir_p(SESSION_DIR)
