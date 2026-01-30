@@ -84,7 +84,7 @@ class SessionTracker
 
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided, agent_session_id: nil)
     previous_session = load_previous_session
-    request_history = build_request_history(continuation, previous_session) + expand_combined(request)
+    request_history = previous_session&.dig(:request_history).to_a + expand_combined(request)
     agent_summary = determine_agent_summary(continuation, previous_session, last_agent_summary)
     stored_session_id = agent_session_id || previous_session&.dig(:agent_session_id)
 
@@ -103,12 +103,6 @@ class SessionTracker
     session_file = session_file_path
     File.write(session_file, Oj.dump(session_data, mode: :compat, indent: 2))
     cleanup_old_sessions
-  end
-
-  def build_request_history(continuation, previous_session)
-    return [] unless continuation && previous_session
-
-    previous_session[:request_history].to_a
   end
 
   def determine_agent_summary(_continuation, previous_session, last_agent_summary)

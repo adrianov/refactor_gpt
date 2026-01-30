@@ -554,6 +554,7 @@ class OpenAiClient
     elapsed_time = Time.now - start_time
     progress = (elapsed_time * progress_speed).round
 
+    # Extend total when needed so percentage can count backwards then forward again
     adjust_progressbar_total(progressbar, progress, total_size)
     progressbar.progress = progress
     true
@@ -566,9 +567,9 @@ class OpenAiClient
   def adjust_progressbar_total(progressbar, progress, total_size)
     return unless progress >= progressbar.total
 
-    # Allow progress to continue beyond 100% by gradually increasing total.
-    # This provides better user experience than holding at 100% when we don't
-    # know the real response speed, giving users continuous visual feedback.
+    # Backwards counting: extend total so the displayed percentage drops (counts
+    # backwards from 100%), then progress continues forward again. Avoids holding
+    # at 100% when we don't know real response size and gives continuous feedback.
     progressbar.total += total_size
     # Rare case: when progress far exceeds total, adding initial size isn't enough
     progressbar.total = progress + 1 if progressbar.total <= progress
