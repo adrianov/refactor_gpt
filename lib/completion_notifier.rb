@@ -1,11 +1,12 @@
 # frozen_string_literal: true
 
+require "rbconfig"
 require "shellwords"
 
 # Utility module for notifying task completion via sound and terminal title
 module CompletionNotifier
-  SUCCESS_SOUND = "success.aiff"
-  ERROR_SOUND = "error.aiff"
+  SUCCESS_BASE = "success"
+  ERROR_BASE = "error"
 
   @exit_status = nil
   @exception_occurred = false
@@ -22,41 +23,75 @@ module CompletionNotifier
   end
 
   def self.play_sound(success)
-    return unless command_exists?("afplay")
+    play_cmd = sound_play_command
+    return unless play_cmd
 
-    sound_file = success ? SUCCESS_SOUND : ERROR_SOUND
-    sound_path = find_sound_file(sound_file)
+    base = success ? SUCCESS_BASE : ERROR_BASE
+    sound_path = find_sound_file(base)
 
     if sound_path
-      pid = Process.spawn("afplay", sound_path, out: File::NULL, err: File::NULL)
-      Process.detach(pid)
-    else
-      # Fallback to system sounds if local files are missing
+      spawn_sound(play_cmd, sound_path)
+    elsif darwin?
       system_sound = success ? "/System/Library/Sounds/Glass.aiff" : "/System/Library/Sounds/Basso.aiff"
-      if File.exist?(system_sound)
-        pid = Process.spawn("afplay", system_sound, out: File::NULL, err: File::NULL)
-        Process.detach(pid)
-      end
+      spawn_sound(play_cmd, system_sound) if File.exist?(system_sound)
     end
   rescue StandardError => e
     warn "Warning: Sound playback failed: #{e.message}" if ENV["DEBUG"]
+  end
+
+  def self.darwin?
+    RbConfig::CONFIG["host_os"].to_s.include?("darwin")
+  end
+
+  def self.sound_play_command
+    if darwin?
+      return ["afplay"] if command_exists?("afplay")
+      return nil
+    end
+
+    [
+      ["paplay"],
+      ["aplay", "-q"],
+      ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]
+    ].find { |cmd| command_exists?(cmd[0]) }
+  end
+
+  def self.sound_player_available?
+    !sound_play_command.nil?
+  end
+
+  def self.sound_install_suggestion
+    return nil if sound_player_available?
+
+    if darwin?
+      'Completion sounds need afplay (usually present on macOS).'
+    else
+      'To enable completion sounds, install paplay (pulseaudio-utils) or aplay (alsa-utils).'
+    end
+  end
+
+  def self.spawn_sound(play_cmd, path)
+    args = play_cmd.size > 1 ? play_cmd[1..] + [path] : [path]
+    pid = Process.spawn(play_cmd[0], *args, out: File::NULL, err: File::NULL)
+    Process.detach(pid)
   end
 
   def self.command_exists?(command)
     system("command -v #{command.shellescape} > #{File::NULL} 2>&1")
   end
 
-  def self.find_sound_file(filename)
-    return File.expand_path(filename) if File.exist?(filename)
-
+  def self.find_sound_file(base_name)
     script_dir = @script_dir || find_project_root
     sounds_dir = File.join(script_dir, 'sounds')
-    sounds_path = File.join(sounds_dir, filename)
-    return sounds_path if File.exist?(sounds_path)
-
-    script_path = File.join(script_dir, filename)
-    return script_path if File.exist?(script_path)
-
+    exts = darwin? ? %w[.aiff .wav] : %w[.wav .aiff]
+    exts.each do |ext|
+      path = File.join(sounds_dir, "#{base_name}#{ext}")
+      return path if File.exist?(path)
+    end
+    exts.each do |ext|
+      path = File.join(script_dir, "#{base_name}#{ext}")
+      return path if File.exist?(path)
+    end
     nil
   end
 
