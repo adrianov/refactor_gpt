@@ -15,10 +15,24 @@ module InstanceLock
 
   @current_lock_path = nil
 
+  PENDING_DELIMITER = "\n__NEXT__\n"
+
   def self.lock_file_path
     cwd = Dir.pwd
     lock_name = Digest::SHA256.hexdigest(cwd)
     File.join(LOCK_DIR, "#{lock_name}.lock")
+  end
+
+  def self.pending_file_path
+    lock_file_path.sub(/\.lock\z/, ".pending")
+  end
+
+  def self.append_pending_request(text)
+    return if text.to_s.strip.empty?
+
+    path = pending_file_path
+    ensure_lock_dir
+    File.open(path, "a") { |f| f.write("#{text.strip}#{PENDING_DELIMITER}") }
   end
 
   def self.lock_exists?

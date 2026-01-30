@@ -106,13 +106,13 @@ class AgentExecutor
 
   def wrap_prompt(p, new_session: false)
     parts = []
+    parts << non_interactive_notice
     parts << guidelines_section(always_include: new_session)
     parts << user_context_section
     parts << git_diff_section(new_session)
     parts << working_tree_section(new_session)
     parts << summary_section
-    parts << history_section
-    parts << non_interactive_notice
+    parts << history_section(current_request: p)
     p + parts.compact.join
   end
 
@@ -154,7 +154,7 @@ class AgentExecutor
       content = "Project guidelines (default refactoring instructions):\n#{DEFAULT_USER_INSTRUCTION.to_s.strip}"
     elsif always_include
       content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.to_s.strip}\n\n" \
-                "General coding rules:\n#{DEFAULT_USER_INSTRUCTION.to_s.strip}"
+                "#{DEFAULT_USER_INSTRUCTION.to_s.strip}"
     else
       content = "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{content.to_s.strip}"
     end
@@ -169,8 +169,8 @@ class AgentExecutor
     "\n\nFinal summary from previous agent run:\n#{summary.to_s.strip}"
   end
 
-  def history_section
-    history = @session_tracker&.get_session_request_history || []
+  def history_section(current_request: nil)
+    history = @session_tracker&.get_session_request_history(exclude_equal: current_request) || []
     return nil if history.empty?
 
     "\n\nPrevious requests in this session:\n" +
@@ -384,7 +384,7 @@ class AgentExecutor
     cmd
   end
 
-  # Resuming with non-auto model: run agent --model auto -- /compact first to reduce context; skips if auto or no session.
+  # Run agent --model auto -- /compact to reduce context when resuming; skips if auto or no session.
   def run_compact_pass_if_needed(model)
     return unless @agent_session_id && model != 'auto'
     return if @compact_pass_run && !@model_call_finished_since_compact
@@ -424,6 +424,8 @@ class AgentExecutor
     @display.puts '--- End prompt ---'.light_black
   end
 
+  # Shows full prompt when requested, then running command and a short excerpt of the prompt.
+  # Excerpt preserves newlines (first 5 lines, each truncated) so code snippets stay readable.
   def display_command(cmd, prompt, new_session: false)
     print_full_prompt(prompt, new_session: new_session)
     if new_session && @full_prompt_buffer
@@ -433,11 +435,17 @@ class AgentExecutor
       @full_prompt_buffer = nil
     end
     @display.puts "Running: #{cmd.join(' ')}".green
-    preview = prompt.to_s.strip
-    if preview.length > 60 || preview.include?("\n")
-      preview = preview.gsub(/\n+/, ' ').strip[0..59] + '...'
-    end
-    @display.puts "  Prompt: #{preview}".light_black unless preview.empty?
+    prompt_excerpt_lines(prompt).each { |line| @display.puts "  #{line}".light_black }
+  end
+
+  # First 5 lines of prompt, each line truncated to 72 chars; newlines preserved for readability.
+  def prompt_excerpt_lines(prompt)
+    stripped = prompt.to_s.strip
+    return [] if stripped.empty?
+
+    lines = stripped.lines.first(5).map(&:chomp)
+    suffix = stripped.lines.size > 5 ? ['...'] : []
+    lines.map { |l| l.size > 72 ? "#{l[0..68]}..." : l } + suffix
   end
 
   RECOVERABLE_NETWORK_RETRIES = 5 # 1 initial + 5 retries = 6 total attempts
@@ -529,7 +537,7 @@ class AgentExecutor
   def run(model, p, base_delay: 1, verification_mode: false, new_session: false,
           prompt_request_reader: nil, on_prompt_request: nil)
     clear_full_prompt_buffer if new_session
-    wrapped = wrap_prompt(p, new_session: new_session)
+    wrapped = verification_mode ? p : wrap_prompt(p, new_session: new_session)
     run_compact_pass_if_needed(model)
     retries = 0
     loop do
@@ -601,6 +609,9 @@ class AgentExecutor
         @display.display_tool_call(tool)
         if tool[:name] == 'ask' && tool[:subtype] == 'completed'
           @display.puts "Ask output:".cyan
+          tool[:result].to_s.each_line { |l| @display.puts "  #{l.chomp}".light_black }
+        elsif tool[:name]&.match?(/^(run|execute|command)/i) && tool[:subtype] == 'completed' && tool[:result].to_s.strip != ''
+          @display.puts "Command output:".cyan
           tool[:result].to_s.each_line { |l| @display.puts "  #{l.chomp}".light_black }
         end
       end
