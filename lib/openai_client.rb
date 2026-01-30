@@ -34,6 +34,7 @@ require_relative "agents_file_handler"
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
   include AgentsFileHandler
+  attr_reader :model
   DEFAULT_MODEL = "glm-4.6"
   REQUEST_TIMEOUT = 300
   DEFAULT_PROGRESS_SPEED = 300

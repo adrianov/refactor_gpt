@@ -123,8 +123,7 @@ class OpenAi
   end
 
   def calculate_payload_size(messages)
-    model = @client.instance_variable_get(:@model)
-    body = {model: model, messages: messages, response_format: {type: "json_object"}}
+    body = {model: @client.model, messages: messages, response_format: {type: "json_object"}}
     json_payload = Oj.dump(body, mode: :compat)
     (json_payload.bytesize / 1024.0).round(2)
   end
@@ -964,6 +963,8 @@ debug_mode, cli_hint, watch_mode = parse_arguments(ARGV)
 # Change to git root directory to ensure consistent path handling
 git_root = get_git_root
 Dir.chdir(git_root)
+
+puts "Model: #{OpenAiClient.new(debug: debug_mode, progress_title: nil).model}".cyan
 
 recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands
