@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require_relative "lib/signal_handler"
 require "colorize"
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
