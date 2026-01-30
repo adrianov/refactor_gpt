@@ -28,35 +28,34 @@ class VerificationHandler
   def parse_res(res)
     return [false, res] if res.nil? || res.to_s.strip.empty?
 
-    line = extract_final_verdict_line(res)
-    return [false, res] unless line
+    line_info = extract_final_verdict_line(res)
+    return [false, res] unless line_info
 
-    line[:verdict] == :no ? parse_no_res(line[:text]) : parse_yes_res(line[:text])
+    line_info[:verdict] == :no ? parse_no_res(res) : parse_yes_res(res)
   end
 
   def extract_final_verdict_line(text)
-    last_match = nil
     text.to_s.each_line do |line|
-      match = line.match(/^\s*(YES|NO)\b\s*:?\s*(.*)$/i)
+      match = line.match(/(?:^|\s)(\**)?(YES|NO)\b(\**)?\s*:?\s*(.*)$/i)
       next unless match
 
-      last_match = { verdict: match[1].casecmp('no').zero? ? :no : :yes, text: line.to_s.strip }
+      return { verdict: match[2].casecmp('no').zero? ? :no : :yes, text: line.to_s.strip }
     end
-    last_match
+    nil
   end
 
   def parse_no_res(n)
-    m = n.match(/^\s*NO\b\s*:?\s*(.*)$/i)
-    return [false, 'Failed'] unless m && !m[1].to_s.strip.empty?
+    m = n.match(/(?:^|\s)(\**)?NO\b(\**)?\s*:?\s*([\s\S]*)$/i)
+    return [false, 'Failed'] unless m && !m[3].to_s.strip.empty?
 
-    [false, remove_duplicates(m[1].to_s.strip)]
+    [false, remove_duplicates(m[3].to_s.strip)]
   end
 
   def parse_yes_res(n)
-    m = n.match(/^\s*YES\b\s*:?\s*(.*)$/i)
-    return [true, 'Passed'] unless m && !m[1].to_s.strip.empty?
+    m = n.match(/(?:^|\s)(\**)?YES\b(\**)?\s*:?\s*([\s\S]*)$/i)
+    return [true, 'Passed'] unless m && !m[3].to_s.strip.empty?
 
-    [true, m[1].to_s.strip]
+    [true, m[3].to_s.strip]
   end
 
   def remove_duplicates(text)
@@ -134,7 +133,8 @@ class VerificationHandler
   def run_verification(model, req, previous_agent_response = nil)
     verification_prompt = build_verification_prompt(req, previous_agent_response)
     start_time = Time.now
-    success, output, reason = @agent_executor.run(model, verification_prompt, verification_mode: true)
+    success, output, reason = @agent_executor.run(model, verification_prompt, verification_mode: true,
+                                                  current_request: req)
     @review_time = Time.now - start_time
     unless success
       set_verification_failure(output, reason)
@@ -177,7 +177,7 @@ class VerificationHandler
     @display.puts "Retrying #{model} with fix...".blue
     $stdout.puts ''
 
-    success, fix_out = @agent_executor.run(model, fix_prompt)
+    success, fix_out = @agent_executor.run(model, fix_prompt, current_request: req)
     unless success
       @verified = false
       @desc = nil

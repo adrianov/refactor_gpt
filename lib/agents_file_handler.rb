@@ -1,15 +1,24 @@
 # frozen_string_literal: true
 
-# Shared module for loading project guidelines from AGENTS.md and .cursorrules
+# Shared module for loading project guidelines: AGENTS.md/.cursorrules from project dir, REFACTOR.md from program dir
 module AgentsFileHandler
   def load_agents_file(project_root = nil)
-    project_root ||= script_directory
-    parts = []
-    agents_md = File.join(project_root, 'AGENTS.md')
-    cursorrules = File.join(project_root, '.cursorrules')
-    parts << "--- AGENTS.md ---\n#{File.read(agents_md).strip}" if File.exist?(agents_md)
-    parts << "--- .cursorrules ---\n#{File.read(cursorrules).strip}" if File.exist?(cursorrules)
+    project_dir = project_root || Dir.pwd
+    program_dir = script_directory
+    parts = %w[AGENTS.md .cursorrules].filter_map do |name|
+      path = File.join(project_dir, name)
+      next unless File.exist?(path)
+
+      "--- #{name} ---\n#{File.read(path).strip}"
+    end
+    refactor_path = File.join(program_dir, 'REFACTOR.md')
+    parts << "--- REFACTOR.md ---\n#{File.read(refactor_path).strip}" if File.exist?(refactor_path)
     parts.empty? ? '' : parts.join("\n\n")
+  end
+
+  def load_refactor_md
+    path = File.join(script_directory, 'REFACTOR.md')
+    File.exist?(path) ? File.read(path).strip : ''
   end
 
   def load_env_vars(project_root = nil)

@@ -5,11 +5,8 @@ require 'json'
 require 'oj'
 require 'rbconfig'
 require 'timeout'
-require_relative '../refactor_instructions'
-
 # Handles agent command execution with retry logic
 class AgentExecutor
-  include RefactorInstructions
   EXECUTION_TIMEOUT = 60
   MAX_EXECUTION_TIMEOUT = 600
   CONTEXT_MAX_LINES = 500
@@ -104,7 +101,7 @@ class AgentExecutor
     cmdline.include?(runner)
   end
 
-  def wrap_prompt(p, new_session: false)
+  def wrap_prompt(p, new_session: false, current_request: nil)
     parts = []
     if new_session
       parts << non_interactive_notice
@@ -115,7 +112,7 @@ class AgentExecutor
     parts << git_diff_section(new_session)
     parts << working_tree_section(new_session)
     rest = parts.compact.join
-    history = @verification_mode ? nil : history_section
+    history = @verification_mode ? nil : history_section(current_request: current_request)
     summary = summary_section
     p + (history.to_s + summary.to_s + rest)
   end
@@ -161,11 +158,13 @@ class AgentExecutor
 
   def guidelines_section(always_include: false)
     raw = read_agents_files.to_s.strip
+    default = default_refactor_instructions.to_s.strip
+    header = 'Project guidelines (project: AGENTS.md, .cursorrules; program: REFACTOR.md):'
     content = if raw.empty?
-                "Project guidelines (default refactoring instructions):\n#{DEFAULT_USER_INSTRUCTION.to_s.strip}"
+                "Project guidelines (default refactoring instructions):\n#{default}"
               else
-                suffix = always_include ? "\n\n#{DEFAULT_USER_INSTRUCTION.to_s.strip}" : ''
-                "Project guidelines (from AGENTS.md, .cursorrules, or AGENTS.rb):\n#{raw}#{suffix}"
+                suffix = always_include && !default.empty? ? "\n\n#{default}" : ''
+                "#{header}\n#{raw}#{suffix}"
               end
     "\n\n#{content}"
   end
@@ -195,12 +194,18 @@ class AgentExecutor
 
   def read_agents_files
     root = Dir.pwd
-    %w[AGENTS.rb AGENTS.md .cursorrules].filter_map do |name|
+    parts = %w[AGENTS.md .cursorrules].filter_map do |name|
       path = File.join(root, name)
       next unless File.exist?(path)
 
       "--- #{name} ---\n#{File.read(path).strip}"
-    end.join("\n\n")
+    end
+    parts.empty? ? '' : parts.join("\n\n")
+  end
+
+  def default_refactor_instructions
+    path = File.expand_path('../../REFACTOR.md', __dir__)
+    File.exist?(path) ? File.read(path).strip : ''
   end
 
   def parse_json_stream_line(line)
@@ -437,12 +442,13 @@ class AgentExecutor
 
   def display_command(cmd, prompt, new_session: false)
     print_full_prompt(prompt, new_session: new_session)
-    if new_session && @full_prompt_buffer
+    unless prompt.to_s.strip.empty?
       @display.puts '--- Full prompt ---'.light_black
-      $stdout.puts @full_prompt_buffer
+      $stdout.puts prompt.to_s
+      $stdout.flush
       @display.puts '--- End prompt ---'.light_black
-      @full_prompt_buffer = nil
     end
+    @full_prompt_buffer = nil if new_session
     @display.puts "Running: #{cmd.join(' ')}".green
     prompt_excerpt_lines(prompt).each { |line| @display.puts "  #{line}".light_black }
   end
@@ -521,7 +527,7 @@ class AgentExecutor
   def run_plan_mode(model, p, new_session: false)
     clear_full_prompt_buffer if new_session
     @tools_used = []
-    wrapped = wrap_prompt(p, new_session: new_session)
+    wrapped = wrap_prompt(p, new_session: new_session, current_request: p)
     run_compact_pass_if_needed(model)
     cmd = setup_subprocess_run(model, wrapped, plan_mode: true, new_session: new_session)
 
@@ -542,10 +548,10 @@ class AgentExecutor
   end
 
   def run(model, p, base_delay: 1, verification_mode: false, new_session: false,
-          prompt_request_reader: nil, on_prompt_request: nil)
+          prompt_request_reader: nil, on_prompt_request: nil, current_request: nil)
     @verification_mode = verification_mode
     clear_full_prompt_buffer if new_session
-    wrapped = wrap_prompt(p, new_session: new_session)
+    wrapped = wrap_prompt(p, new_session: new_session, current_request: current_request || p)
     run_compact_pass_if_needed(model)
     retries = 0
     loop do

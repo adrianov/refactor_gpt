@@ -7,7 +7,6 @@ require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
 require_relative "lib/refactor_gpt_utils"
 require_relative "lib/completion_notifier"
-require_relative "lib/refactor_instructions"
 require "shellwords"
 require "oj"
 require "tempfile"
@@ -15,7 +14,6 @@ require "tempfile"
 # Class to interact with OpenAI API
 class OpenAi
   include AgentsFileHandler
-  include RefactorInstructions
 
   def initialize(model: nil, debug: false)
     @debug = debug
@@ -147,7 +145,7 @@ user_instruction)
   end
 
   def build_assessment_prompt(original_file_codes, current_file_codes, user_instruction)
-    instruction = user_instruction || DEFAULT_USER_INSTRUCTION
+    instruction = user_instruction || load_refactor_md
     prompt = "User Instruction: #{instruction}\n\n"
     prompt += "Review the following changes (in unified diff format) and determine if they fulfill the instruction:\n\n"
 
@@ -304,7 +302,7 @@ user_instruction)
 
   def build_refactor_prompt(file_codes, user_instruction)
     <<~HEREDOC
-      #{user_instruction || DEFAULT_USER_INSTRUCTION}
+      #{user_instruction || load_refactor_md}
 
       Files are provided below using <content> tags. You may use some files only as
       context and leave them unchanged. Only return files you actually modify.

@@ -1,0 +1,5 @@
+# RefactorGPT Tools – Cursor rules
+
+Prompt/guidelines sources (in order): AGENTS.md, .cursorrules, REFACTOR.md.
+
+Project: Ruby CLI tools for refactoring (refactor_gpt.rb), code search (ag_gpt.rb), bash generation (bash_gpt.rb), Q&A (ask_gpt.rb), git commit (git_commit_gpt.rb), superagent TUI (superagent.rb). Shared code in lib/; superagent in lib/superagent/. Tests in test/.

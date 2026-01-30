@@ -220,7 +220,7 @@ class SessionTracker
     <<~HEREDOC
       Analyze the relationship between two requests and classify the new request.
 
-      Previous request:
+      Last request:
       #{previous_req}
 
       New request:
