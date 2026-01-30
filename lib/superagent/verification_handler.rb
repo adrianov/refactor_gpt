@@ -107,6 +107,7 @@ class VerificationHandler
       - Check if the changes address the user's request
       - Look for potential bugs, regressions, or missing functionality
       - Verify code quality and adherence to project guidelines
+      - You MUST respond NO when the edited code has obvious quality issues (e.g. violates DRY, SOLID, or YAGNI)
 
       Response format:
       - Start your response with "YES: " followed by a brief description if verification passes
