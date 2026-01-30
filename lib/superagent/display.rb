@@ -51,6 +51,12 @@ class Display
     $stdout.flush
   end
 
+  def reset_after_pause
+    @text_buffer = ''
+    @at_start_of_line = true
+    reset_stream_tracking
+  end
+
     def check_late_night_reminder
       return if @skip_midnight_check
       
@@ -218,7 +224,26 @@ class Display
       preview || ''
     end
 
-    # Shows "↻ Continuing..." or "🆕 New session [tags]" and optional step line.
+    def display_done_requests_recap(outcomes)
+      return if outcomes.nil? || outcomes.empty?
+
+      print_outcome_section('Completed', :green, outcomes.select { |o| o[:success] }.map { |o| o[:request] })
+      print_outcome_section('Failed', :red, outcomes.reject { |o| o[:success] }.map { |o| o[:request] })
+      out_puts ''
+    end
+
+    def print_outcome_section(label, color, items)
+      return if items.empty?
+
+      puts "#{label} (#{items.size}):".send(color)
+      items.each_with_index { |r, i| out_puts body("  #{i + 1}. #{preview_request(r).sub(/\A\d+\.\s*/, '')}") }
+    end
+
+    def preview_request(request)
+      line = request.to_s.lines.first&.chomp.to_s
+      line.length > 80 ? "#{line[0..80]}..." : line
+    end
+
     def display_session_type(continuation, tags)
       if continuation
         tag_display = tags.empty? ? '' : " [#{tags.join(', ')}]"

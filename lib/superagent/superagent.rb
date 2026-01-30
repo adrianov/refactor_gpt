@@ -39,14 +39,16 @@ class Superagent
     verification_handler: nil,
     session_tracker: nil,
     auto_only: false,
-    resume_enabled: false
+    resume_enabled: false,
+    show_prompt: false
   )
     @display = display
     @session_tracker = session_tracker || SessionTracker.new(@display)
     @request_reader = request_reader || RequestReader.new(@display)
     @agent_executor = agent_executor || AgentExecutor.new(
       @display,
-      session_tracker: @session_tracker
+      session_tracker: @session_tracker,
+      show_prompt: show_prompt
     )
     @verification_handler = verification_handler || VerificationHandler.new(
       @display,
@@ -69,6 +71,7 @@ class Superagent
     @current_request = nil
     @attempt_count_per_model = {}
     @pending_queue = PendingRequestQueue.new(@display)
+    @session_outcomes = []
     @input_thread = nil
     @input_wakeup_writer = nil
     @auto_only = auto_only
@@ -76,6 +79,7 @@ class Superagent
   end
 
   def run(start_model_index: 0, request: nil, continuation_analysis: nil)
+    @session_outcomes ||= []
     initialize_run(request)
     @waiting_start = Time.now if request.nil?
     raw_req = request || @request_reader.read
@@ -360,12 +364,14 @@ class Superagent
 
   def handle_final_success(previous_req = nil)
     update_terminal_title(true)
-    CompletionNotifier.notify_completion(success: true)
     current_req = previous_req || @current_request
+    @session_outcomes << { request: current_req, success: true }
     save_current_session(current_req) if current_req
+    @display.display_done_requests_recap(@session_outcomes) if @session_outcomes.any?
     ensure_pending_input_stopped
 
     pending = @pending_queue.take_all
+    CompletionNotifier.notify_completion(success: true) if pending.empty?
     if pending.any?
       combined = @pending_queue.to_combined_request(pending)
       @display.display_pending_list(pending)
@@ -442,15 +448,18 @@ class Superagent
   end
 
   def handle_final_failure
+    @session_outcomes << { request: @current_request, success: false } if @current_request
     ensure_pending_input_stopped
+    no_queued = @pending_queue.size == 0
     @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_all_attempts_failed(@current_request)
+    @display.display_done_requests_recap(@session_outcomes) if @session_outcomes.any?
     finalize_runtime_before_display
     @display.display_total_runtime(@start_time, active_elapsed: @active_elapsed, waiting_elapsed: @waiting_elapsed)
     save_current_session(@current_request) if @current_request
-    CompletionNotifier.notify_completion(success: false)
+    CompletionNotifier.notify_completion(success: false) if no_queued
     update_terminal_title(false)
     exit 1
   end
@@ -627,7 +636,9 @@ class Superagent
     end
 
     @display.set_output_paused(false)
+    $stdout.puts ''
     @display.flush_paused_output
+    @display.reset_after_pause
 
     result = lines.join("\n")
     add_and_show_queue(queue, result, @current_request)
