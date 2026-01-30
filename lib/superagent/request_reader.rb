@@ -1,42 +1,72 @@
 # frozen_string_literal: true
 
+require 'reline'
 require_relative '../signal_handler'
 require_relative '../prompt_reader'
-require 'reline'
 
 # Handles reading user requests from argv, stdin, or interactive input.
 class RequestReader
   REQUEST_PROMPT = 'Enter request (press Enter twice to submit):'
   PASTE_THRESHOLD = 0.2
+  HISTORY_FILE = File.join(Dir.home, '.superagent_history')
+  HISTORY_SEP = "\n---\n"
+  MAX_HISTORY = 100
 
   def initialize(display)
-      @display = display
-      @plan_mode = false
-    end
+    @display = display
+    @plan_mode = false
+  end
 
   attr_reader :plan_mode
 
-    def read_from_argv
-      return nil if ARGV.empty?
+  def read_from_argv
+    return nil if ARGV.empty?
 
-      args = ARGV.dup
-      if args.include?('--plan')
-        @plan_mode = true
-        args.delete('--plan')
-      end
-      args.delete('--print')
-      args.join(' ') unless args.empty?
+    args = ARGV.dup
+    if args.include?('--plan')
+      @plan_mode = true
+      args.delete('--plan')
     end
+    args.delete('--print')
+    args.join(' ') unless args.empty?
+  end
 
-    def read_from_stdin
-      $stdin.read.strip
-    end
+  def read_from_stdin
+    $stdin.read.strip
+  end
 
   def read_interactive
     @display.puts REQUEST_PROMPT.cyan
     $stdout.puts ''
 
     read_interactive_silent
+  end
+
+  def load_request_history
+    return unless Reline::HISTORY.empty?
+    return unless File.exist?(HISTORY_FILE)
+
+    content = File.read(HISTORY_FILE)
+    return if content.strip.empty?
+
+    content.split(HISTORY_SEP).reverse_each { |req| Reline::HISTORY << req.strip unless req.strip.empty? }
+  end
+
+  def add_to_request_history(request)
+    return if request.to_s.strip.empty?
+
+    Reline::HISTORY << request
+    File.open(HISTORY_FILE, 'a') { |f| f.write(request + HISTORY_SEP) }
+    trim_history_file
+  end
+
+  def trim_history_file
+    return unless File.exist?(HISTORY_FILE)
+
+    entries = File.read(HISTORY_FILE).split(HISTORY_SEP).reject(&:empty?)
+    return if entries.size <= MAX_HISTORY
+
+    File.write(HISTORY_FILE, entries.last(MAX_HISTORY).join(HISTORY_SEP) + HISTORY_SEP)
   end
 
   def read_interactive_silent
@@ -48,6 +78,7 @@ class RequestReader
   end
 
   def collect_interactive_lines
+    load_request_history
     lines = []
     saw_empty = false
     last_time = Time.now
@@ -116,17 +147,17 @@ class RequestReader
     return nil
   end
 
-    def read
-      unless $stdin.tty?
-        piped = read_from_stdin
-        return piped if piped && !piped.to_s.strip.empty?
-      end
-      read_from_argv || read_interactive
+  def read
+    unless $stdin.tty?
+      piped = read_from_stdin
+      return piped if piped && !piped.to_s.strip.empty?
     end
-
-    def validate(req)
-      return true if req && !req.to_s.strip.empty?
-
-      exit 0
-    end
+    read_from_argv || read_interactive
   end
+
+  def validate(req)
+    return true if req && !req.to_s.strip.empty?
+
+    exit 0
+  end
+end

@@ -49,6 +49,7 @@ if __FILE__ == $PROGRAM_NAME
       $stdout.puts ''
       pre_read_request = request_reader.read
       request_reader.validate(pre_read_request)
+      request_reader.add_to_request_history(pre_read_request) unless pre_read_request.to_s.strip.empty?
       InstanceLock.append_pending_request(pre_read_request)
       display.puts 'Request queued.'.green
       exit 0

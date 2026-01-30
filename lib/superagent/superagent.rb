@@ -87,6 +87,7 @@ class Superagent
       @waiting_elapsed += Time.now - @waiting_start
       @waiting_start = nil
     end
+    @request_reader.add_to_request_history(raw_req) if request.nil? && !raw_req.to_s.strip.empty?
     model_index_from_request = extract_model_index(raw_req)
     req = sanitize_request(raw_req)
     @request_reader.validate(req)
@@ -401,6 +402,7 @@ class Superagent
       @waiting_elapsed += Time.now - @waiting_start
       @waiting_start = nil
     end
+    @request_reader.add_to_request_history(raw_new_req) unless raw_new_req.to_s.strip.empty?
     @active_start = Time.now
     exit 0 if raw_new_req.to_s.strip.empty?
 
