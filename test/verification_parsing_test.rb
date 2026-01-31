@@ -1,90 +1,111 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require 'colorize'
+require 'minitest/autorun'
 require_relative '../lib/superagent/verification_handler'
 require_relative '../lib/superagent/display'
 
-# Test verification response parsing
-class VerificationParsingTest
-  def initialize
+class TestVerificationParsing < Minitest::Test
+  def setup
     @handler = VerificationHandler.new(Display.new, nil)
-    @test_cases = []
-    @passed = 0
-    @failed = 0
   end
 
-  def test(description, response, expected_verified, expected_desc_pattern = nil)
-    @test_cases << {
-      description: description,
-      response: response,
-      expected_verified: expected_verified,
-      expected_desc_pattern: expected_desc_pattern
-    }
+  def test_simple_yes_with_description
+    assert_parse('YES: All features implemented correctly', true, /features implemented/)
   end
 
-  def run
-    puts "Testing verification response parsing...\n\n"
+  def test_simple_no_with_description
+    assert_parse('NO: Missing email validation', false, /email validation/)
+  end
 
-    @test_cases.each_with_index do |test_case, idx|
-      verified, desc = @handler.parse_res(test_case[:response])
-      
-      success = verified == test_case[:expected_verified]
-      success &&= desc.match?(test_case[:expected_desc_pattern]) if test_case[:expected_desc_pattern]
+  def test_yes_bold_markdown_not_at_line_start
+    verified, _desc = @handler.parse_res('**YES**: Feature is complete')
+    assert_equal false, verified
+  end
 
-      if success
-        @passed += 1
-        puts "✓ Test #{idx + 1}: #{test_case[:description]}".green
-      else
-        @failed += 1
-        puts "✗ Test #{idx + 1}: #{test_case[:description]}".red
-        puts "  Response: #{test_case[:response]}"
-        puts "  Expected verified: #{test_case[:expected_verified]}, got: #{verified}"
-        puts "  Expected pattern: #{test_case[:expected_desc_pattern]}, got: #{desc}"
-      end
-    end
+  def test_no_italic_not_at_line_start
+    verified, _desc = @handler.parse_res('*NO*: Tests are failing')
+    assert_equal false, verified
+  end
 
-    puts "\n#{@passed} passed, #{@failed} failed"
-    exit(@failed > 0 ? 1 : 0)
+  def test_yes_at_line_start
+    assert_parse('YES: Feature is complete', true, /Feature is complete/)
+  end
+
+  def test_no_at_line_start
+    assert_parse('NO: Tests are failing', false, /Tests are failing/)
+  end
+
+  def test_lowercase_yes
+    assert_parse('yes: everything works', true, /everything works/)
+  end
+
+  def test_uppercase_no
+    assert_parse('NO: BUGS FOUND', false, /BUGS FOUND/)
+  end
+
+  def test_yes_without_colon_at_line_start
+    verified, _desc = @handler.parse_res('YES All tests pass')
+    assert_equal false, verified
+  end
+
+  def test_no_without_colon_at_line_start
+    verified, _desc = @handler.parse_res('NO Implementation incomplete')
+    assert_equal false, verified
+  end
+
+  def test_no_line_then_yes_line
+    assert_parse("NO: Issues found\nYES: but minor", false, /Issues found/)
+  end
+
+  def test_yes_line_then_no_line
+    assert_parse("YES: Works well\nNO: with caveats", true, /Works well/)
+  end
+
+  def test_empty_response
+    verified, _desc = @handler.parse_res('')
+    assert_equal false, verified
+  end
+
+  def test_no_yes_or_no
+    verified, _desc = @handler.parse_res('The code looks good')
+    assert_equal false, verified
+  end
+
+  def test_yes_mid_line_does_not_count
+    verified, _desc = @handler.parse_res('I checked and YES: it works')
+    assert_equal false, verified
+  end
+
+  def test_second_line_yes_counts
+    assert_parse("Preamble text\nYES: it works", true, /it works/)
+  end
+
+  def test_multiline_yes
+    assert_parse("YES: Implementation is complete\nAll tests passing", true, /Implementation is complete/)
+  end
+
+  def test_multiline_no
+    assert_parse("NO: Found several issues\n1. Missing validation\n2. No tests", false, /Found several issues/)
+  end
+
+  def test_yes_with_leading_space
+    assert_parse('  YES:  All good  ', true, /All good/)
+  end
+
+  def test_no_line_then_continuation
+    assert_parse("NO:  \n  Some problems", false, /Failed/)
+  end
+
+  def test_yes_then_text
+    assert_parse('YES: Works correctly YES: Works correctly', true, /Works correctly/)
+  end
+
+  private
+
+  def assert_parse(response, expected_verified, desc_pattern = nil)
+    verified, desc = @handler.parse_res(response)
+    assert_equal expected_verified, verified, "verified mismatch for: #{response.inspect}"
+    assert_match desc_pattern, desc, "desc pattern mismatch for: #{response.inspect}" if desc_pattern
   end
 end
-
-test = VerificationParsingTest.new
-
-# Basic YES/NO tests
-test.test('Simple YES with description', 'YES: All features implemented correctly', true, /features implemented/)
-test.test('Simple NO with description', 'NO: Missing email validation', false, /email validation/)
-
-# Markdown formatting tests
-test.test('YES with bold markdown', '**YES**: Feature is complete', true, /Feature is complete/)
-test.test('NO with italic markdown', '*NO*: Tests are failing', false, /Tests are failing/)
-
-# Case variations
-test.test('Lowercase yes', 'yes: everything works', true, /everything works/)
-test.test('Uppercase NO', 'NO: BUGS FOUND', false, /BUGS FOUND/)
-
-# YES/NO without colon
-test.test('YES without colon', 'YES All tests pass', true, /tests pass/)
-test.test('NO without colon', 'NO Implementation incomplete', false, /Implementation incomplete/)
-
-# Multiple YES/NO (first wins)
-test.test('NO before YES', 'NO: Issues found YES: but minor', false, /Issues found/)
-test.test('YES before NO', 'YES: Works well NO: with caveats', true, /Works well/)
-
-# Edge cases
-test.test('Empty response', '', false)
-test.test('No YES or NO', 'The code looks good', false)
-test.test('YES at end of sentence', 'I checked and YES: it works', true, /it works/)
-
-# Multiline responses
-test.test('Multiline YES', "YES: Implementation is complete\nAll tests passing", true, /Implementation is complete/)
-test.test('Multiline NO', "NO: Found several issues\n1. Missing validation\n2. No tests", false, /Found several issues/)
-
-# Whitespace handling
-test.test('YES with extra whitespace', '  YES:  All good  ', true, /All good/)
-test.test('NO with newlines', "NO:  \n  Some problems", false, /Some problems/)
-
-# Duplicate detection
-test.test('Repeated YES', 'YES: Works correctly YES: Works correctly', true, /Works correctly/)
-
-test.run

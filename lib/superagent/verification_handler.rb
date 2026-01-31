@@ -31,31 +31,34 @@ class VerificationHandler
     line_info = extract_final_verdict_line(res)
     return [false, res] unless line_info
 
-    line_info[:verdict] == :no ? parse_no_res(res) : parse_yes_res(res)
+    line_info[:verdict] == :no ? parse_no_res(line_info[:text]) : parse_yes_res(line_info[:text])
   end
 
+  # Only lines that start with YES: or NO: (after optional whitespace) are treated as the verdict.
   def extract_final_verdict_line(text)
     text.to_s.each_line do |line|
-      match = line.match(/(?:^|\s)(\**)?(YES|NO)\b(\**)?\s*:?\s*(.*)$/i)
+      match = line.match(/\A\s*(YES|NO):\s*(.*)\z/im)
       next unless match
 
-      return { verdict: match[2].casecmp('no').zero? ? :no : :yes, text: line.to_s.strip }
+      return { verdict: match[1].casecmp('no').zero? ? :no : :yes, text: line.to_s.strip }
     end
     nil
   end
 
-  def parse_no_res(n)
-    m = n.match(/(?:^|\s)(\**)?NO\b(\**)?\s*:?\s*([\s\S]*)$/i)
-    return [false, 'Failed'] unless m && !m[3].to_s.strip.empty?
+  def parse_no_res(line)
+    m = line.match(/\A\s*NO:\s*(.*)\z/im)
+    return [false, 'Failed'] unless m
 
-    [false, remove_duplicates(m[3].to_s.strip)]
+    desc = m[1].to_s.strip
+    [false, desc.empty? ? 'Failed' : remove_duplicates(desc)]
   end
 
-  def parse_yes_res(n)
-    m = n.match(/(?:^|\s)(\**)?YES\b(\**)?\s*:?\s*([\s\S]*)$/i)
-    return [true, 'Passed'] unless m && !m[3].to_s.strip.empty?
+  def parse_yes_res(line)
+    m = line.match(/\A\s*YES:\s*(.*)\z/im)
+    return [true, 'Passed'] unless m
 
-    [true, m[3].to_s.strip]
+    desc = m[1].to_s.strip
+    [true, desc.empty? ? 'Passed' : desc]
   end
 
   def remove_duplicates(text)
