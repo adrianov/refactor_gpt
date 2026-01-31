@@ -32,7 +32,7 @@ class Superagent
   ].freeze
   MODELS_AUTO_ONLY = %w[auto auto auto].freeze
 
-  GITIGNORE_PREPEND = 'Ensure .gitignore excludes build artifacts, dependencies, and other unneeded files and folders. '
+  GITIGNORE_PREPEND = "Ensure .gitignore excludes build artifacts, dependencies, and other unneeded files and folders. "
 
   def initialize(
     display: Display.new,
@@ -100,10 +100,10 @@ class Superagent
 
     apply_continuation_analysis(continuation_analysis) if continuation_analysis
     save_current_session(req)
-    
+
     start_index = determine_start_index(model_index_from_request, start_model_index)
     @display.display_start_message(req, @session_continuation, @session_tags)
-    update_terminal_title(@session_continuation ? '↻ Continuing session' : 'Running...')
+    update_terminal_title(@session_continuation ? "↻ Continuing session" : "Running...")
 
     return run_plan_mode(req, start_index) if @request_reader.plan_mode
 
@@ -119,9 +119,9 @@ class Superagent
 
   def run_plan_mode(req, start_index = 0)
     @active_start = Time.now
-    update_terminal_title('Planning...')
-    @display.puts 'Running in plan mode...'.cyan
-    @display.out_puts ''
+    update_terminal_title("Planning...")
+    @display.puts "Running in plan mode...".cyan
+    @display.out_puts ""
 
     models[start_index..-1].each_with_index do |model, relative_idx|
       idx = start_index + relative_idx
@@ -155,7 +155,7 @@ class Superagent
   end
 
   def initialize_run(request)
-    update_terminal_title('Waiting for request...')
+    update_terminal_title("Waiting for request...")
     @display.check_late_night_reminder
     @start_time = Time.now unless request
     @git_initialized_this_run = @display.suggest_git_init if request.nil?
@@ -179,7 +179,7 @@ class Superagent
       result = run_model_attempt(model, idx, req)
       break if result == :success
       if result == :switch_to_auto_only
-        @display.puts 'Usage limit reached; switching to auto-only model queue.'.yellow
+        @display.puts "Usage limit reached; switching to auto-only model queue.".yellow
         execute_attempts(0, req)
         early_exit = true
         break
@@ -197,7 +197,7 @@ class Superagent
     @display.display_attempt_header(model, idx, models.size)
 
     start = Time.now
-    run_opts = { new_session: !@session_continuation, defer_full_prompt: false }
+    run_opts = {new_session: !@session_continuation, defer_full_prompt: false}
     if @prompt_request_reader
       run_opts[:prompt_request_reader] = @prompt_request_reader
       run_opts[:on_prompt_request] = method(:on_prompt_request_callback)
@@ -251,10 +251,10 @@ class Superagent
 
     update_terminal_title("Verifying: #{model}")
     run_verification_with_retries(model, req)
-    @session_tracker.append_to_request_history(verification_history_text(req), type: 'verification')
+    @session_tracker.append_to_request_history(verification_history_text(req), type: "verification")
     h = @verification_handler
     pass_timing[:review_time] = h.review_time
-    @display.out_puts ''
+    @display.out_puts ""
 
     if h.call_failed
       record_attempt_failure(model)
@@ -263,8 +263,8 @@ class Superagent
         AutoOnlyLock.create
         @auto_only = true
       end
-      @display.display_verification_result(false, h.desc, '', call_failed: true)
-      @display.out_puts ''
+      @display.display_verification_result(false, h.desc, "", call_failed: true)
+      @display.out_puts ""
       pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
       @pass_timings << pass_timing
       @display.display_pass_timing(pass_timing)
@@ -278,7 +278,7 @@ class Superagent
     end
 
     @display.display_verification_result(false, h.desc)
-    @display.out_puts ''
+    @display.out_puts ""
     retry_verification_with_fix(model, req, pass_timing, pass_start)
   end
 
@@ -295,39 +295,39 @@ class Superagent
       end
       break if attempt >= VERIFICATION_CALL_RETRIES
 
-      @display.puts 'Connection/network error during verification (retrying up to 3 times)...'.yellow
-      @display.out_puts ''
+      @display.puts "Connection/network error during verification (retrying up to 3 times)...".yellow
+      @display.out_puts ""
     end
     h = @verification_handler
     @verification_handler.finalize_call_failed(h.verified, h.desc, h.review_time, h.raw_output) if exhausted
   end
 
   def retry_verification_with_fix(model, req, pass_timing, pass_start)
-    @session_tracker.append_to_request_history('Fix after verification failure', type: 'fix')
+    @session_tracker.append_to_request_history("Fix after verification failure", type: "fix")
     update_terminal_title("Retrying: #{model}")
     fix_start = Time.now
     with_prompt_request_polling { @verification_handler.retry_with_fix(model, req) }
     h = @verification_handler
     pass_timing[:fix_time] = Time.now - fix_start - (h.review_time || 0)
-    pass_timing[:review_time] += (h.review_time || 0)
-    @display.out_puts ''
+    pass_timing[:review_time] += h.review_time || 0
+    @display.out_puts ""
     save_agent_summary(h.fix_output) if h.fix_output
 
     if h.verified
-      finalize_success(pass_timing, pass_start, h.desc, req, 'after retry')
+      finalize_success(pass_timing, pass_start, h.desc, req, "after retry")
       return :success
     end
 
     @last_attempt_success = false
-    @display.display_verification_result(false, h.desc, 'after retry')
-    @display.out_puts ''
+    @display.display_verification_result(false, h.desc, "after retry")
+    @display.out_puts ""
     pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
     @pass_timings << pass_timing
     @display.display_pass_timing(pass_timing)
     :continue
   end
 
-  def finalize_success(pass_timing, pass_start, desc, req, context = '')
+  def finalize_success(pass_timing, pass_start, desc, req, context = "")
     pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
     @pass_timings << pass_timing
     handle_success(desc, context)
@@ -358,8 +358,7 @@ class Superagent
     add_waiting_segment
   end
 
-
-  def handle_success(desc, context = '')
+  def handle_success(desc, context = "")
     @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
@@ -372,7 +371,7 @@ class Superagent
   def handle_final_success(previous_req = nil)
     update_terminal_title(true)
     current_req = previous_req || @current_request
-    @session_outcomes << { request: current_req, success: true }
+    @session_outcomes << {request: current_req, success: true}
     save_current_session(current_req) if current_req
     @display.display_done_requests_recap(@session_outcomes) if @session_outcomes.any?
     ensure_pending_input_stopped
@@ -405,7 +404,11 @@ class Superagent
     return unless @prompt_request_reader
     return unless IO.select([@prompt_request_reader], nil, nil, 0)
 
-    @prompt_request_reader.read(1024) rescue nil
+    begin
+      @prompt_request_reader.read(1024)
+    rescue
+      nil
+    end
     drain_prompt_request_pipe
     on_prompt_request_callback
   end
@@ -424,7 +427,11 @@ class Superagent
     loop do
       ready = IO.select([@prompt_request_reader], nil, nil, 0)
       break unless ready && ready[0].include?(@prompt_request_reader)
-      @prompt_request_reader.read(1024) rescue break
+      begin
+        @prompt_request_reader.read(1024)
+      rescue
+        break
+      end
     end
   end
 
@@ -432,28 +439,27 @@ class Superagent
     run_request_form_in_main_thread
   end
 
-  # Runs in main thread (executor calls on_prompt_request synchronously). @in_queue_prompt pauses pending input.
-  # Pause output, flush in-flight streaming into buffer, show prompt and read; after queue, ensure flushes.
+  # Handles interactive queue input while agent runs in background.
+  # Called from main thread when user presses Enter (detected by background input thread).
+  #
+  # Flow:
+  # 1. Pause output - agent output collected to buffer instead of printed to stdout
+  # 2. Block background input thread via @in_queue_prompt flag
+  # 3. Flush any partial streaming text to the buffer
+  # 4. Show prompt and read user request via Reline (double-Enter to submit)
+  # 5. Add request to pending queue
+  # 6. Resume output - flush buffered agent output, continue normal printing
   def run_request_form_in_main_thread
     @display.set_output_paused(true)
     @in_queue_prompt = true
     @display.flush_word_buffer
     @agent_executor.emit_full_prompt_to_display if @agent_executor.respond_to?(:emit_full_prompt_to_display)
-    prompt_text = "\n#{RequestReader::REQUEST_PROMPT}\n\n"
-    @display.output_raw(prompt_text)
-    $stdout.puts prompt_text
-    $stdout.flush
-    raw = @request_reader.read_request(skip_prompt: true)
+
+    # read_request prints prompt directly to stdout, then reads via Reline
+    raw = @request_reader.read_request
     return unless raw
-    if RequestReader.discard_command?(raw)
-      @pending_queue.take_all
-      @display.puts 'Queued requests discarded.'.yellow
-      return
-    end
-    unless raw.to_s.strip.empty?
-      save_request_to_histories(raw)
-      add_and_show_queue(@pending_queue, raw.to_s.strip, @current_request)
-    end
+
+    process_queue_input(raw)
   ensure
     @in_queue_prompt = false
     @display.set_output_paused(false)
@@ -461,8 +467,20 @@ class Superagent
     @display.reset_after_pause
   end
 
+  def process_queue_input(raw)
+    if RequestReader.discard_command?(raw)
+      @pending_queue.take_all
+      @display.puts "Queued requests discarded.".yellow
+      return
+    end
+    return if raw.to_s.strip.empty?
+
+    save_request_to_histories(raw)
+    add_and_show_queue(@pending_queue, raw.to_s.strip, @current_request)
+  end
+
   def prompt_for_new_request(previous_req)
-    update_terminal_title('✅ Passed')
+    update_terminal_title("✅ Passed")
     @waiting_start = Time.now
     raw_new_req = @request_reader.read_request
     if @waiting_start
@@ -504,8 +522,8 @@ class Superagent
   end
 
   def display_continuation_message(analysis, start_index)
-    continuation_text = analysis[:continuation] ? 'continuation' : 'new request'
-    tags_text = analysis[:tags].empty? ? '' : " [#{analysis[:tags].join(', ')}]"
+    continuation_text = analysis[:continuation] ? "continuation" : "new request"
+    tags_text = analysis[:tags].empty? ? "" : " [#{analysis[:tags].join(", ")}]"
     @display.puts "\nStarting #{continuation_text}#{tags_text} from #{models[start_index]}...\n\n".yellow
   end
 
@@ -519,7 +537,7 @@ class Superagent
   end
 
   def handle_final_failure
-    @session_outcomes << { request: @current_request, success: false } if @current_request
+    @session_outcomes << {request: @current_request, success: false} if @current_request
     ensure_pending_input_stopped
     no_queued = @pending_queue.size == 0
     @display.display_git_status
@@ -539,15 +557,15 @@ class Superagent
     return unless $stdout.tty? || $stderr.tty?
 
     title = case phase
-            when true then '✅ Done'
-            when false then '❌ Error'
-            else phase.to_s
-            end
+    when true then "✅ Done"
+    when false then "❌ Error"
+    else phase.to_s
+    end
     title = "#{InstanceLock.project_base_name}: #{title}"
     sequence = "\033]0;#{title}\007"
     $stderr.print sequence if $stderr.tty?
     $stderr.flush if $stderr.tty?
-  rescue StandardError
+  rescue
     # Ignore terminal title update errors
   end
 
@@ -574,7 +592,7 @@ class Superagent
 
   def verification_history_text(req)
     s = req.to_s.strip
-    return 'Verification' if s.empty?
+    return "Verification" if s.empty?
     first = s.lines.first&.strip || s
     first = "#{first[0..56]}..." if first.length > 57
     "Verification: #{first}"
@@ -605,7 +623,7 @@ class Superagent
     return req if req.nil?
 
     cleaned = req.gsub(/@(\S+)/) do |match|
-      models.include?($1) ? '' : match
+      models.include?($1) ? "" : match
     end
     cleaned.strip
   end
@@ -632,16 +650,20 @@ class Superagent
     input_io = nil
     input_io = open_controlling_tty
     run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io, prompt_request_writer)
-  rescue StandardError
+  rescue
     # Silently ignore input errors in background thread
   ensure
     input_io&.close if input_io && input_io != $stdin
-    reader.close rescue nil
+    begin
+      reader.close
+    rescue
+      nil
+    end
   end
 
   def open_controlling_tty
-    File.open('/dev/tty', 'r')
-  rescue StandardError
+    File.open("/dev/tty", "r")
+  rescue
     $stdin
   end
 
@@ -661,7 +683,7 @@ class Superagent
       break if line.nil?
 
       if single_enter?(line, buffer)
-        prompt_request_writer&.write('x')
+        prompt_request_writer&.write("x")
         next
       end
       buffer = process_pending_line(line.chomp, buffer, queue, current_request)
@@ -696,7 +718,7 @@ class Superagent
 
   def ensure_pending_input_stopped
     if @input_thread&.alive?
-      @input_wakeup_writer&.write('.')
+      @input_wakeup_writer&.write(".")
       @input_wakeup_writer&.close
       @input_thread.join(2)
       @input_thread.kill if @input_thread.alive?
