@@ -9,6 +9,7 @@ Layout/LineLength:
 
 Metrics/AbcSize:
   Enabled: true
+  Max: 17
 
 Metrics/ClassLength:
   Enabled: true
