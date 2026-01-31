@@ -21,6 +21,7 @@ class AgentExecutor
     @session_tracker = session_tracker
     @agent_session_id = nil
     @compact_pass_run = false
+    @state_mutex = Mutex.new
     @model_call_finished_since_compact = false
     @full_prompt_buffer = nil
     @show_prompt = show_prompt
@@ -159,14 +160,13 @@ class AgentExecutor
   def guidelines_section(always_include: false)
     raw = read_agents_files.to_s.strip
     default = default_refactor_instructions.to_s.strip
-    header = 'Project guidelines (project: AGENTS.md, .cursorrules; program: REFACTOR.md):'
     content = if raw.empty?
-                "Project guidelines (default refactoring instructions):\n#{default}"
+                default.empty? ? '' : "Project guidelines:\n#{default}"
               else
                 suffix = always_include && !default.empty? ? "\n\n#{default}" : ''
-                "#{header}\n#{raw}#{suffix}"
+                "Project guidelines:\n#{raw}#{suffix}"
               end
-    "\n\n#{content}"
+    content.empty? ? '' : "\n\n#{content}"
   end
 
   def summary_section
@@ -198,7 +198,7 @@ class AgentExecutor
       path = File.join(root, name)
       next unless File.exist?(path)
 
-      "--- #{name} ---\n#{File.read(path).strip}"
+      File.read(path).strip
     end
     parts.empty? ? '' : parts.join("\n\n")
   end
@@ -440,14 +440,21 @@ class AgentExecutor
     @display.puts '--- End prompt ---'.light_black
   end
 
-  def display_command(cmd, prompt, new_session: false)
-    print_full_prompt(prompt, new_session: new_session)
-    unless prompt.to_s.strip.empty?
-      @display.puts '--- Full prompt ---'.light_black
-      @display.output_raw(prompt.to_s)
-      @display.puts '--- End prompt ---'.light_black
+  def emit_full_prompt_to_display
+    return if @full_prompt_buffer.to_s.strip.empty?
+
+    @display.puts '--- Full prompt ---'.light_black
+    @display.output_raw(@full_prompt_buffer.to_s)
+    @display.puts '--- End prompt ---'.light_black
+  end
+
+  def display_command(cmd, prompt, new_session: false, defer_full_prompt: false)
+    if defer_full_prompt && @show_prompt && !prompt.to_s.strip.empty?
+      @full_prompt_buffer = prompt.to_s
+    else
+      print_full_prompt(prompt, new_session: new_session)
+      @full_prompt_buffer = nil if new_session
     end
-    @full_prompt_buffer = nil if new_session
     @display.puts "Running: #{cmd.join(' ')}".green
     prompt_excerpt_lines(prompt).each { |line| @display.puts "  #{line}".light_black }
   end
@@ -503,21 +510,25 @@ class AgentExecutor
   end
 
   def run_with_timeout_monitoring(model, wrapped, new_session: false,
-                                  prompt_request_reader: nil, on_prompt_request: nil)
+                                  prompt_request_reader: nil, on_prompt_request: nil,
+                                  queue_wakeup_reader: nil, defer_full_prompt: false)
     @tools_used = []
     @passthrough = test_runner_running?
     return run_without_timeout(model, wrapped, new_session: new_session) if @passthrough
 
-    @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil,
-               start: nil }
+    @state_mutex.synchronize do
+      @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil,
+                 start: nil, abort_for_queue: false }
+    end
     monitor_thread = start_monitor_thread
     timeout_thread = start_timeout_thread
 
     begin
       execute_agent_process(model, wrapped, new_session: new_session,
-                            prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request)
+                            prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request,
+                            queue_wakeup_reader: queue_wakeup_reader, defer_full_prompt: defer_full_prompt)
     ensure
-      @state[:complete] = true
+      @state_mutex.synchronize { @state[:complete] = true }
       monitor_thread&.kill
       timeout_thread&.kill
     end
@@ -532,7 +543,7 @@ class AgentExecutor
 
     begin
       out = Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
-        @state = { timed_out: false }
+        @state_mutex.synchronize { @state = { timed_out: false } }
         stdin.write(wrapped)
         stdin.close
         result = process_agent_output(stdout_stderr, wait_thr)
@@ -547,7 +558,8 @@ class AgentExecutor
   end
 
   def run(model, p, base_delay: 1, verification_mode: false, new_session: false,
-          prompt_request_reader: nil, on_prompt_request: nil, current_request: nil)
+          prompt_request_reader: nil, on_prompt_request: nil, current_request: nil,
+          queue_wakeup_reader: nil, defer_full_prompt: false)
     @verification_mode = verification_mode
     clear_full_prompt_buffer if new_session
     wrapped = wrap_prompt(p, new_session: new_session, current_request: current_request || p)
@@ -556,8 +568,11 @@ class AgentExecutor
     loop do
       stdout, _, status, timeout_reason = run_with_timeout_monitoring(model, wrapped,
         new_session: new_session,
-        prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request)
+        prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request,
+        queue_wakeup_reader: queue_wakeup_reader, defer_full_prompt: defer_full_prompt)
       @model_call_finished_since_compact = true
+      return [false, '', :abort_for_queue] if timeout_reason == :abort_for_queue
+
       output = (stdout || '').to_s
       if output.to_s.strip.empty?
         # Empty response is retryable; do not return success
@@ -604,7 +619,7 @@ class AgentExecutor
     cmd = setup_subprocess_run(model, wrapped, new_session: new_session)
     begin
       Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
-        @state = { timed_out: false }
+        @state_mutex.synchronize { @state = { timed_out: false } }
         stdin.write(wrapped)
         stdin.close
         process_agent_output(stdout_stderr, wait_thr)
@@ -663,20 +678,28 @@ class AgentExecutor
     Thread.new do
       loop do
         sleep TEST_RUNNER_CHECK_INTERVAL
-        break if @state[:complete]
-        if @state[:pid] && !@state[:detected] && test_runner_running?(@state[:pid])
-          @state[:detected] = @state[:disabled] = true
-          @display.puts '⚠️  Test runner detected (child of agent), disabling timeout'.yellow
-        end
+        complete = @state_mutex.synchronize { @state[:complete] }
+        break if complete
+        pid = @state_mutex.synchronize { @state[:pid] }
+        next unless pid
+        detected = @state_mutex.synchronize { @state[:detected] }
+        next if detected
+        next unless test_runner_running?(pid)
+        @state_mutex.synchronize { @state[:detected] = @state[:disabled] = true }
+        @display.puts '⚠️  Test runner detected (child of agent), disabling timeout'.yellow
       end
     end
   end
 
   def start_timeout_thread
     Thread.new do
-      until @state[:complete]
+      loop do
         sleep TEST_RUNNER_CHECK_INTERVAL
-        next if @state[:disabled] || (@state[:pid] && test_runner_running?(@state[:pid]))
+        complete, disabled, pid = @state_mutex.synchronize do
+          [@state[:complete], @state[:disabled], @state[:pid]]
+        end
+        break if complete
+        next if disabled || (pid && test_runner_running?(pid))
         check_timeouts
       end
     end
@@ -684,58 +707,79 @@ class AgentExecutor
 
   def check_timeouts
     now = Time.now
-    if @state[:start] && (now - @state[:start]) >= MAX_EXECUTION_TIMEOUT
-      @state[:timeout_reason] = :max_time
-      terminate_agent("maximum execution time (#{MAX_EXECUTION_TIMEOUT}s)")
-    elsif @state[:last_chunk] && (now - @state[:last_chunk]) >= EXECUTION_TIMEOUT
-      @state[:timeout_reason] = :no_data
-      terminate_agent("no data received (#{EXECUTION_TIMEOUT}s)")
+    reason = @state_mutex.synchronize do
+      if @state[:start] && (now - @state[:start]) >= MAX_EXECUTION_TIMEOUT
+        @state[:timeout_reason] = :max_time
+        "maximum execution time (#{MAX_EXECUTION_TIMEOUT}s)"
+      elsif @state[:last_chunk] && (now - @state[:last_chunk]) >= EXECUTION_TIMEOUT
+        @state[:timeout_reason] = :no_data
+        "no data received (#{EXECUTION_TIMEOUT}s)"
+      end
     end
+    terminate_agent(reason) if reason
   end
 
   def terminate_agent(reason)
-    @state[:timed_out] = true
+    pid, complete = @state_mutex.synchronize do
+      @state[:timed_out] = true
+      [@state[:pid], @state[:complete]]
+    end
     @display.puts "❌ Agent timed out after #{reason}".red
-    return unless @state[:pid]
+    return unless pid
     begin
-      Process.kill('TERM', @state[:pid])
+      Process.kill('TERM', pid)
       sleep 2
-      Process.kill('KILL', @state[:pid]) unless @state[:complete]
+      Process.kill('KILL', pid) unless complete
     rescue Errno::ESRCH
       # Process already exited
     end
   end
 
   def execute_agent_process(model, wrapped, new_session: false,
-                            prompt_request_reader: nil, on_prompt_request: nil)
-    cmd = setup_subprocess_run(model, wrapped, new_session: new_session)
+                            prompt_request_reader: nil, on_prompt_request: nil,
+                            queue_wakeup_reader: nil, defer_full_prompt: false)
+    cmd = setup_subprocess_run(model, wrapped, new_session: new_session, defer_full_prompt: defer_full_prompt)
     Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
-      @state[:pid] = wait_thr.pid
-      @state[:start] = @state[:last_chunk] = Time.now
+      now = Time.now
+      @state_mutex.synchronize do
+        @state[:pid] = wait_thr.pid
+        @state[:start] = @state[:last_chunk] = now
+      end
       stdin.write(wrapped)
       stdin.close
       process_agent_output(stdout_stderr, wait_thr,
-                          prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request)
+                          prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request,
+                          queue_wakeup_reader: queue_wakeup_reader)
     end
   end
 
-  def setup_subprocess_run(model, wrapped, plan_mode: false, new_session: false)
+  def setup_subprocess_run(model, wrapped, plan_mode: false, new_session: false, defer_full_prompt: false)
     @passthrough = false
     @display.reset_stream_tracking unless @passthrough
     cmd = build_command(model: model, plan_mode: plan_mode)
-    display_command(cmd, wrapped, new_session: new_session) unless @passthrough
+    display_command(cmd, wrapped, new_session: new_session, defer_full_prompt: defer_full_prompt) unless @passthrough
     cmd
   end
 
-  def process_agent_output(stdout_stderr, wait_thr, prompt_request_reader: nil, on_prompt_request: nil)
+  def process_agent_output(stdout_stderr, wait_thr, prompt_request_reader: nil, on_prompt_request: nil,
+                           queue_wakeup_reader: nil)
     raw, final, buffer = '', '', ''
+    drain_prompt_pipe(prompt_request_reader) if prompt_request_reader && on_prompt_request
     read_ios = [stdout_stderr]
     read_ios << prompt_request_reader if prompt_request_reader && on_prompt_request
+    read_ios << queue_wakeup_reader if queue_wakeup_reader
     loop do
-      break if @state[:timed_out]
+      break_out = @state_mutex.synchronize { @state[:timed_out] || @state[:abort_for_queue] }
+      break if break_out
       ready = IO.select(read_ios, nil, nil, 0.5)
+      if queue_wakeup_reader && ready && ready[0].include?(queue_wakeup_reader)
+        queue_wakeup_reader.read(1024) rescue nil
+        @state_mutex.synchronize { @state[:abort_for_queue] = true }
+        break
+      end
       if prompt_request_reader && ready && ready[0].include?(prompt_request_reader)
-        next if @state[:start] && (Time.now - @state[:start]) < 0.5
+        skip = @state_mutex.synchronize { @state[:start] && (Time.now - @state[:start]) < 0.5 }
+        next if skip
         data = prompt_request_reader.read(1024) rescue nil
         if data.nil? || data.empty?
           read_ios.delete(prompt_request_reader)
@@ -748,7 +792,7 @@ class AgentExecutor
       if ready && ready[0].include?(stdout_stderr)
         begin
           chunk = stdout_stderr.readpartial(4096)
-          @state[:last_chunk] = Time.now
+          @state_mutex.synchronize { @state[:last_chunk] = Time.now }
           raw += chunk
           buffer += chunk
           buffer, final = process_buffer(buffer, final)
@@ -787,8 +831,15 @@ class AgentExecutor
   end
 
   def finalize_execution(raw, final, wait_thr)
+    abort_for_queue, timed_out, timeout_reason = @state_mutex.synchronize do
+      [@state && @state[:abort_for_queue], @state && @state[:timed_out], @state&.dig(:timeout_reason)]
+    end
+    if abort_for_queue
+      terminate_agent("queued request(s) added by another instance")
+      return [raw.to_s, '', Struct.new(:success?).new(false), :abort_for_queue]
+    end
     status = wait_thr.value rescue Struct.new(:success?).new(false)
-    status = Struct.new(:success?).new(false) if @state && @state[:timed_out]
+    status = Struct.new(:success?).new(false) if timed_out
     out = (final.respond_to?(:empty?) && final.empty?) ? raw : final
     out = out.to_s
     success_for_display = status.success? || (@verification_mode && out.to_s.strip.length > 0)
@@ -797,7 +848,7 @@ class AgentExecutor
       display_tools_summary
       @display.display_agent_call_result(success_for_display, @tools_used.size)
     end
-    [out, '', status, @state&.dig(:timeout_reason)]
+    [out, '', status, timeout_reason]
   end
 
   def display_tools_summary

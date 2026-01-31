@@ -57,8 +57,9 @@ if __FILE__ == $PROGRAM_NAME
   begin
     if InstanceLock.lock_exists?
       loop do
-        pre_read_request = request_reader.read(use_reline: false)
-        break if pre_read_request.nil? || pre_read_request.to_s.strip.empty? || RequestReader.discard_command?(pre_read_request)
+        pre_read_request = request_reader.read(use_reline: true)
+        discard = RequestReader.discard_command?(pre_read_request)
+        break if pre_read_request.nil? || pre_read_request.to_s.strip.empty? || discard
 
         request_reader.validate(pre_read_request)
         request_reader.add_to_request_history(pre_read_request)

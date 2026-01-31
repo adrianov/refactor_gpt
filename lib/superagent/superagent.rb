@@ -76,6 +76,10 @@ class Superagent
     @session_outcomes = []
     @input_thread = nil
     @input_wakeup_writer = nil
+    @queue_wakeup_reader = nil
+    @queue_wakeup_writer = nil
+    @prompt_request_reader = nil
+    @prompt_request_writer = nil
     @auto_only = auto_only
     @resume_enabled = resume_enabled
     @git_initialized_this_run = false
@@ -173,6 +177,7 @@ class Superagent
     @attempt_count_per_model = {} unless @session_continuation
     highest_index_reached = start_index
     early_exit = nil
+    switch_to_queued = nil
     models[@current_model_index..-1].each_with_index do |model, relative_idx|
       idx = @current_model_index + relative_idx
       @current_pass = idx + 1
@@ -182,6 +187,10 @@ class Superagent
 
       result = run_model_attempt(model, idx, req)
       break if result == :success
+      if result == :abort_for_queue
+        switch_to_queued = req
+        break
+      end
       if result == :switch_to_auto_only
         @display.puts 'Usage limit reached; switching to auto-only model queue.'.yellow
         execute_attempts(0, req)
@@ -189,18 +198,29 @@ class Superagent
         break
       end
     end
+    if switch_to_queued
+      handle_switch_to_queued(switch_to_queued)
+      return
+    end
     return if early_exit
 
     @current_model_index = highest_index_reached
   end
 
   def run_model_attempt(model, idx, req)
+    process_prompt_request_if_pending
     attempt_number = (@attempt_count_per_model[model] || 0) + 1
     update_terminal_title("Attempting: #{model} (attempt #{attempt_number}/#{ATTEMPTS_PER_MODEL})")
     @display.display_attempt_header(model, idx, models.size)
 
     start = Time.now
     run_opts = { new_session: !@session_continuation }
+    run_opts[:queue_wakeup_reader] = @queue_wakeup_reader if @queue_wakeup_reader
+    run_opts[:defer_full_prompt] = true
+    if @prompt_request_reader
+      run_opts[:prompt_request_reader] = @prompt_request_reader
+      run_opts[:on_prompt_request] = method(:on_prompt_request_callback)
+    end
     success, output, reason = @agent_executor.run(model, req, **run_opts)
     elapsed = Time.now - start
 
@@ -374,6 +394,16 @@ class Superagent
     @display.display_done_requests_recap(@session_outcomes) if @session_outcomes.any?
     ensure_pending_input_stopped
 
+    process_pending_queue(previous_req)
+  end
+
+  def handle_switch_to_queued(previous_req)
+    @display.puts 'Queued request(s) added; switching to queue.'.yellow
+    ensure_pending_input_stopped
+    process_pending_queue(previous_req)
+  end
+
+  def process_pending_queue(previous_req)
     pending = @pending_queue.take_all
     CompletionNotifier.notify_completion(success: true) if pending.empty?
     if pending.any?
@@ -393,6 +423,51 @@ class Superagent
   def show_request_prompt
     $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
     $stdout.flush
+  end
+
+  def process_prompt_request_if_pending
+    return unless @prompt_request_reader
+    return unless IO.select([@prompt_request_reader], nil, nil, 0)
+
+    @prompt_request_reader.read(1024) rescue nil
+    drain_prompt_request_pipe
+    on_prompt_request_callback
+  end
+
+  def drain_prompt_request_pipe
+    return unless @prompt_request_reader
+    loop do
+      ready = IO.select([@prompt_request_reader], nil, nil, 0)
+      break unless ready && ready[0].include?(@prompt_request_reader)
+      @prompt_request_reader.read(1024) rescue break
+    end
+  end
+
+  def on_prompt_request_callback
+    run_request_form_in_main_thread
+  end
+
+  # Uses same read_interactive_silent (Reline + PASTE_THRESHOLD) as main prompt for multi-line paste behavior.
+  def run_request_form_in_main_thread
+    @display.set_output_paused(true)
+    @agent_executor.emit_full_prompt_to_display if @agent_executor.respond_to?(:emit_full_prompt_to_display)
+    show_request_prompt
+    raw = @request_reader.read_interactive_silent
+    @display.set_output_paused(false)
+    @display.flush_paused_output
+    @display.reset_after_pause
+
+    return unless raw
+    if RequestReader.discard_command?(raw)
+      @pending_queue.take_all
+      @display.puts 'Queued requests discarded.'.yellow
+      return
+    end
+
+    unless raw.to_s.strip.empty?
+      @request_reader.add_to_request_history(raw)
+      add_and_show_queue(@pending_queue, raw.to_s.strip, @current_request)
+    end
   end
 
   def prompt_for_new_request(previous_req)
@@ -551,16 +626,23 @@ class Superagent
     return if @input_thread&.alive?
 
     reader, @input_wakeup_writer = IO.pipe
+    @queue_wakeup_reader, @queue_wakeup_writer = IO.pipe
+    @prompt_request_reader, @prompt_request_writer = IO.pipe
     queue = @pending_queue
     current_request = @current_request
-    @input_thread = Thread.new { run_pending_input_loop(reader, queue, current_request) }
+    queue_wakeup_writer = @queue_wakeup_writer
+    prompt_request_writer = @prompt_request_writer
+    @input_thread = Thread.new do
+      run_pending_input_loop(reader, queue, current_request, queue_wakeup_writer, prompt_request_writer)
+    end
   end
 
-  def run_pending_input_loop(reader, queue, current_request)
+  def run_pending_input_loop(reader, queue, current_request, queue_wakeup_writer = nil, prompt_request_writer = nil)
     buffer = []
     input_io = nil
     input_io = open_controlling_tty
-    run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io)
+    run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io, queue_wakeup_writer,
+                                  prompt_request_writer)
   rescue StandardError
     # Silently ignore input errors in background thread
   ensure
@@ -576,13 +658,14 @@ class Superagent
 
   ENTER_SIGNAL_DELAY = 0.5
 
-  def run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io)
+  def run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io, queue_wakeup_writer = nil,
+                                    prompt_request_writer = nil)
     return unless input_io
 
     thread_start = Time.now
     read_ios = [reader, input_io].compact
     loop do
-      drain_pending_file(queue, current_request)
+      drain_pending_file(queue, current_request, queue_wakeup_writer)
       ready = IO.select(read_ios, nil, nil, 0.5)
       next if ready.nil?
       break flush_and_close(reader, buffer, queue, current_request) if ready[0].include?(reader)
@@ -592,14 +675,14 @@ class Superagent
       break if line.nil?
 
       if single_enter?(line, buffer) && (Time.now - thread_start) >= ENTER_SIGNAL_DELAY
-        handle_queue_request_in_thread(queue, input_io)
+        prompt_request_writer&.write('x')
         next
       end
       buffer = process_pending_line(line.chomp, buffer, queue, current_request)
     end
   end
 
-  def drain_pending_file(queue, current_request)
+  def drain_pending_file(queue, current_request, queue_wakeup_writer = nil)
     return unless InstanceLock.current_lock_path
     path = InstanceLock.pending_file_path
     return unless File.exist?(path)
@@ -612,57 +695,13 @@ class Superagent
       f.truncate(0)
     end
     requests = content.to_s.split(InstanceLock::PENDING_DELIMITER).map(&:strip).reject(&:empty?)
-    requests.each { |r| queue.add(r, current_request: current_request) }
+    added = false
+    requests.each { |r| queue.add(r, current_request: current_request); added = true }
+    queue_wakeup_writer&.write('x') if added && queue_wakeup_writer
   end
 
   def single_enter?(line, buffer)
     line.chomp.empty? && buffer.empty?
-  end
-
-  def handle_queue_request_in_thread(queue, input_io)
-    @display.set_output_paused(true)
-    $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
-    $stdout.flush
-
-    lines = []
-    saw_empty = false
-    last_time = Time.now
-    loop do
-      line = input_io.gets
-      break if line.nil?
-
-      now = Time.now
-      elapsed = now - last_time
-      last_time = now
-
-      line_stripped = line.to_s.strip
-      action = pending_empty_action(line_stripped, lines.empty?, elapsed, saw_empty)
-      case action
-      when :break then break
-      when :add_empty then lines << ''; next
-      when :set_saw_empty then saw_empty = true; next
-      else saw_empty = false; lines << line_stripped
-      end
-    end
-
-    @display.set_output_paused(false)
-    $stdout.puts ''
-    @display.flush_paused_output
-    @display.reset_after_pause
-
-    result = lines.join("\n")
-    return (queue.take_all; @display.puts 'Queued requests discarded.'.yellow) if RequestReader.discard_command?(result)
-
-    add_and_show_queue(queue, result, @current_request)
-  end
-
-  def pending_empty_action(line_stripped, lines_empty, elapsed, saw_empty)
-    return :content unless line_stripped.empty?
-
-    return :add_empty if elapsed < RequestReader::PASTE_THRESHOLD
-    return :break if !lines_empty || saw_empty
-
-    :set_saw_empty
   end
 
   def add_and_show_queue(queue, raw_new, current_request = nil)
@@ -688,13 +727,21 @@ class Superagent
   end
 
   def ensure_pending_input_stopped
-    return unless @input_thread&.alive?
-
-    @input_wakeup_writer&.write('.')
-    @input_wakeup_writer&.close
-    @input_thread.join(2)
-    @input_thread.kill if @input_thread.alive?
-    @input_thread = nil
-    @input_wakeup_writer = nil
+    if @input_thread&.alive?
+      @input_wakeup_writer&.write('.')
+      @input_wakeup_writer&.close
+      @input_thread.join(2)
+      @input_thread.kill if @input_thread.alive?
+      @input_thread = nil
+      @input_wakeup_writer = nil
+    end
+    @queue_wakeup_writer&.close
+    @queue_wakeup_writer = nil
+    @queue_wakeup_reader&.close
+    @queue_wakeup_reader = nil
+    @prompt_request_writer&.close
+    @prompt_request_writer = nil
+    @prompt_request_reader&.close
+    @prompt_request_reader = nil
   end
 end
