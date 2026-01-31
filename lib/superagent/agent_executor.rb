@@ -95,6 +95,7 @@ class AgentExecutor
     end
     parts << user_context_section
     parts << git_status_section(new_session)
+    parts << git_log_section(new_session)
     parts << git_diff_section(new_session)
     parts << working_tree_section(new_session)
     rest = parts.compact.join
@@ -118,6 +119,13 @@ class AgentExecutor
     out = `git status 2>#{File::NULL}`.to_s.strip
     return nil if out.empty?
     "\n\nGit status:\n#{out}"
+  end
+
+  def git_log_section(new_session)
+    return nil unless new_session
+    out = `git log -10 --pretty=format:'%h %s' 2>#{File::NULL}`.to_s.strip
+    return nil if out.empty?
+    "\n\nLast 10 git log entries (newest first):\n#{out}"
   end
 
   def git_diff_section(new_session)
@@ -791,13 +799,12 @@ class AgentExecutor
       break if @state_mutex.synchronize { @state[:timed_out] }
       ready = IO.select(read_ios, nil, nil, 0.5)
       if prompt_request_reader && ready && ready[0].include?(prompt_request_reader)
-        skip = @state_mutex.synchronize { @state[:start] && (Time.now - @state[:start]) < 0.5 }
-        next if skip
         data = prompt_request_reader.read(1024) rescue nil
-        if data.nil? || data.empty?
+        if data.nil?
           read_ios.delete(prompt_request_reader)
           next
         end
+        next if data.empty?
         # Signal main thread to run Reline; this thread keeps reading so last_chunk updates and timeout does not fire.
         on_prompt_request.call
         drain_prompt_pipe(prompt_request_reader)
