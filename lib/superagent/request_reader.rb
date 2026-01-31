@@ -62,8 +62,9 @@ class RequestReader
   end
 
   # Single entry point for getting a request from the user (with or without output collection).
-  def read_request(use_reline: true)
-    print_request_prompt
+  # skip_prompt: when true, caller has already shown the prompt (e.g. when output is paused and buffered).
+  def read_request(use_reline: true, skip_prompt: false)
+    print_request_prompt unless skip_prompt
     read_interactive_silent(use_reline: use_reline)
   end
 

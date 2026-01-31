@@ -439,7 +439,11 @@ class Superagent
     @in_queue_prompt = true
     @display.flush_word_buffer
     @agent_executor.emit_full_prompt_to_display if @agent_executor.respond_to?(:emit_full_prompt_to_display)
-    raw = @request_reader.read_request
+    prompt_text = "\n#{RequestReader::REQUEST_PROMPT}\n\n"
+    @display.output_raw(prompt_text)
+    $stdout.puts prompt_text
+    $stdout.flush
+    raw = @request_reader.read_request(skip_prompt: true)
     return unless raw
     if RequestReader.discard_command?(raw)
       @pending_queue.take_all
@@ -650,6 +654,7 @@ class Superagent
       ready = IO.select(read_ios, nil, nil, 0.5)
       next if ready.nil?
       break flush_and_close(reader, buffer, queue, current_request) if ready[0].include?(reader)
+      next if @in_queue_prompt
       next unless ready[0].include?(input_io)
 
       line = input_io.gets
