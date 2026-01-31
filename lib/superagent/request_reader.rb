@@ -32,11 +32,14 @@ class RequestReader
   HISTORY_DIR = SuperagentConfig::CONFIG_DIR
   HISTORY_SEP = "\n---\n"
   MAX_HISTORY = 100
+  MAX_HISTORY_LINES = 25
   READ_CHUNK = 4096
 
   def initialize(display)
     @display = display
     @plan_mode = false
+    # Freeze path at startup so history is always for the directory from which superagent was started.
+    @history_file_path = File.join(HISTORY_DIR, "#{Digest::SHA256.hexdigest(Dir.pwd)}_history")
   end
 
   attr_reader :plan_mode
@@ -73,45 +76,45 @@ class RequestReader
     $stdout.flush
   end
 
+  # Load once per process when history is empty; avoids re-reading file on every queue prompt (Reline slowness).
   def load_request_history
     return unless Reline::HISTORY.empty?
+    return unless File.exist?(@history_file_path)
 
-    path = history_file_path
-    return unless File.exist?(path)
-
-    content = File.read(path)
+    content = File.read(@history_file_path)
     return if content.strip.empty?
 
-    content.split(HISTORY_SEP).reverse_each { |req| Reline::HISTORY << req.strip unless req.strip.empty? }
+    content.split(HISTORY_SEP).reverse_each do |req|
+      s = req.strip
+      Reline::HISTORY << s unless s.empty? || !history_entry_ok?(s)
+    end
   end
 
   # Regression: must persist to file so next run sees new requests; fsync ensures write is durable.
   def add_to_request_history(request)
     return if request.to_s.strip.empty?
+    return unless history_entry_ok?(request)
     return if Reline::HISTORY.any? && Reline::HISTORY.last.to_s.strip == request.to_s.strip
 
     Reline::HISTORY << request
-    path = history_file_path
-    FileUtils.mkdir_p(File.dirname(path))
-    File.open(path, 'a') { |f| f.write(request + HISTORY_SEP); f.fsync }
+    append_request_to_history_file(request)
     trim_history_file
   end
 
   def trim_history_file
-    path = history_file_path
-    return unless File.exist?(path)
+    return unless File.exist?(@history_file_path)
 
-    entries = File.read(path).split(HISTORY_SEP).reject(&:empty?)
+    entries = File.read(@history_file_path).split(HISTORY_SEP).reject(&:empty?)
     return if entries.size <= MAX_HISTORY
 
-    File.write(path, entries.last(MAX_HISTORY).join(HISTORY_SEP) + HISTORY_SEP)
+    File.write(@history_file_path, entries.last(MAX_HISTORY).join(HISTORY_SEP) + HISTORY_SEP)
   end
 
-  def read_interactive_silent(use_reline: true)
+  def read_interactive_silent(use_reline: true, for_queue: false)
     if use_reline && $stdin.tty?
-      try_paste_then_reline
+      try_paste_then_reline(for_queue)
     elsif use_reline
-      collect_interactive_lines
+      collect_interactive_lines(for_queue)
     else
       read_until_double_newline
     end
@@ -124,24 +127,25 @@ class RequestReader
 
   # When stdin has data at entry: large chunk or "\n\n" → chunked read (avoids Reline hang on big paste).
   # Small chunk or bracketed paste → push back via pipe so Reline still sees it.
-  def try_paste_then_reline
-    return collect_interactive_lines unless IO.select([$stdin], nil, nil, 0)
+  def try_paste_then_reline(for_queue = false)
+    return collect_interactive_lines(for_queue) unless IO.select([$stdin], nil, nil, 0)
 
     chunk = $stdin.readpartial(READ_CHUNK)
-    return collect_with_stdin_pushback(chunk) if chunk.bytesize >= 6 && chunk.bytes.first(6) == BRACKETED_PASTE_BYTES
+    bracketed = chunk.bytesize >= 6 && chunk.bytes.first(6) == BRACKETED_PASTE_BYTES
+    return collect_with_stdin_pushback(chunk, for_queue) if bracketed
     return read_paste_with_initial(chunk) if chunk.bytesize >= READ_CHUNK || chunk.include?("\n\n")
 
-    collect_with_stdin_pushback(chunk)
+    collect_with_stdin_pushback(chunk, for_queue)
   end
 
-  def collect_with_stdin_pushback(chunk)
+  def collect_with_stdin_pushback(chunk, for_queue = false)
     r, w = IO.pipe
     w.write(chunk)
     stdin_orig = $stdin
     stop_r, stop_w = IO.pipe
     copy_thread = spawn_stdin_copy_thread(stdin_orig, w, stop_r)
     $stdin = r
-    collect_interactive_lines
+    collect_interactive_lines(for_queue)
   ensure
     $stdin = stdin_orig if stdin_orig
     stop_w&.close
@@ -163,8 +167,8 @@ class RequestReader
     handle_interrupt([buffer])
   end
 
-  def collect_interactive_lines
-    load_request_history
+  def collect_interactive_lines(for_queue = false)
+    load_request_history unless for_queue
     set_reline_placeholder_proc
     set_reline_filename_completion
     lines = []
@@ -178,12 +182,17 @@ class RequestReader
 
       lines << line
     end
-    (r = lines.map(&:to_s).join("\n")).to_s.strip.empty? ? nil : r
+    lines_to_result(lines)
   rescue Interrupt
     handle_interrupt(lines)
   ensure
     Reline.output_modifier_proc = nil
     Reline.completion_proc = nil
+  end
+
+  def lines_to_result(lines)
+    r = lines.map(&:to_s).join("\n").to_s.strip
+    r.empty? ? nil : r
   end
 
   def process_one_line(lines, saw_empty, last_time)
@@ -241,16 +250,20 @@ class RequestReader
   def read_interactive_line(lines)
     prompt = (PromptReader.multiline_prompt(lines.empty?) || '').to_s
     line = Reline.readline(prompt.empty? ? ' ' : prompt, true)
-    return nil if line.nil?
-
-    line = line.to_s.strip
-    return :done if line.empty? && !lines.empty?
-    return :empty_line if line.empty?
-
-    line
+    parse_line_result(line, lines)
   rescue StandardError => e
     @display.puts "Error reading input: #{(e.message || e.class.name)}".yellow
     nil
+  end
+
+  def parse_line_result(line, lines)
+    return nil if line.nil?
+
+    stripped = line.to_s.strip
+    return :done if stripped.empty? && !lines.empty?
+    return :empty_line if stripped.empty?
+
+    stripped
   end
 
   def read_until_double_newline
@@ -303,6 +316,15 @@ class RequestReader
 
   private
 
+  def history_entry_ok?(text)
+    text.to_s.lines.size <= MAX_HISTORY_LINES
+  end
+
+  def append_request_to_history_file(request)
+    FileUtils.mkdir_p(File.dirname(@history_file_path))
+    File.open(@history_file_path, 'a') { |f| f.write(request + HISTORY_SEP); f.fsync }
+  end
+
   def spawn_stdin_copy_thread(stdin_orig, w, stop_r)
     Thread.new do
       loop do
@@ -317,8 +339,4 @@ class RequestReader
     end
   end
 
-  def history_file_path
-    cwd_hash = Digest::SHA256.hexdigest(Dir.pwd)
-    File.join(HISTORY_DIR, "#{cwd_hash}_history")
-  end
 end

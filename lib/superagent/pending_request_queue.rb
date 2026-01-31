@@ -9,11 +9,10 @@ class PendingRequestQueue
     @display = display
   end
 
-  def add(request, current_request: nil)
+  def add(request)
     return if request.to_s.strip.empty?
 
     @mutex.synchronize do
-      display_running_if_present(current_request)
       @queue << request.to_s.strip
       @display.puts "Queued (#{@queue.size}): #{request_preview(request)}".light_blue
     end
@@ -42,12 +41,6 @@ class PendingRequestQueue
   end
 
   private
-
-  def display_running_if_present(current_request)
-    return if current_request.to_s.strip.empty?
-
-    @display.puts "Running: #{request_preview(current_request)}".cyan
-  end
 
   def request_preview(text)
     return '' if text.to_s.strip.empty?

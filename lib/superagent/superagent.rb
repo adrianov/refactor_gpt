@@ -74,6 +74,7 @@ class Superagent
     @pending_queue = PendingRequestQueue.new(@display)
     @session_outcomes = []
     @agent_thread = nil
+    @agent_result_mutex = Mutex.new
     @auto_only = auto_only
     @git_initialized_this_run = false
   end
@@ -116,16 +117,20 @@ class Superagent
   # Main thread listens for Enter key and runs Reline for queue input.
   # Agent execution runs in background thread.
   def run_with_interactive_queue(start_index, req)
-    @agent_result = nil
+    @agent_result_mutex.synchronize { @agent_result = nil }
     @agent_thread = Thread.new do
       execute_attempts(start_index, req)
-      @agent_result = @last_attempt_success ? :success : :failure
+      @agent_result_mutex.synchronize { @agent_result = @last_attempt_success ? :success : :failure }
     end
 
-    run_main_input_loop
+    begin
+      run_main_input_loop
+    ensure
+      @agent_thread&.join
+    end
 
-    @agent_thread.join
-    handle_final_failure unless @last_attempt_success
+    result = @agent_result_mutex.synchronize { @agent_result }
+    handle_final_failure if result == :failure
   end
 
   # Main thread input loop: waits for Enter, then shows Reline prompt for queue input.
@@ -157,7 +162,7 @@ class Superagent
     $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
     $stdout.flush
 
-    raw = @request_reader.read_interactive_silent
+    raw = @request_reader.read_interactive_silent(for_queue: true)
     process_queue_input(raw) if raw
   ensure
     @display.set_output_paused(false)
