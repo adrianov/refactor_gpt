@@ -218,7 +218,7 @@ class Superagent
   end
 
   def record_network_failure(model, output, implementation_time, reason = nil)
-    if reason == :unrecoverable && @agent_executor.usage_unrecoverable?(output)
+    if @agent_executor.usage_unrecoverable?(output)
       AutoOnlyLock.create
       @auto_only = true
     end
@@ -234,8 +234,7 @@ class Superagent
     }
     @pass_timings << pass_timing
     @display.display_pass_timing(pass_timing)
-    switch = @auto_only && reason == :unrecoverable && @agent_executor.usage_unrecoverable?(output)
-    switch ? :switch_to_auto_only : nil
+    @auto_only ? :switch_to_auto_only : nil
   end
 
   def process_verification_and_fix(model, req)
@@ -652,6 +651,8 @@ class Superagent
     @display.reset_after_pause
 
     result = lines.join("\n")
+    return (queue.take_all; @display.puts 'Queued requests discarded.'.yellow) if RequestReader.discard_command?(result)
+
     add_and_show_queue(queue, result, @current_request)
   end
 

@@ -27,6 +27,7 @@ if __FILE__ == $PROGRAM_NAME
     puts <<~HELP
       Usage: #{File.basename($PROGRAM_NAME)} [options] [request]
       Runs the agent; request can be given as an argument or entered interactively.
+      When another instance is running, enter requests to queue; empty line to finish, /discard to exit without queueing.
       Options:
         -h, --help           Show this help
         --resume             Resume from previous session
@@ -38,12 +39,9 @@ if __FILE__ == $PROGRAM_NAME
 
   CompletionNotifier.setup_exit_hook
   skip_midnight_check = ARGV.include?('--skip-midnight') || ARGV.include?('--no-midnight')
-  ARGV.delete('--skip-midnight')
-  ARGV.delete('--no-midnight')
   resume_enabled = ARGV.include?('--resume')
-  ARGV.delete('--resume')
   show_prompt = ARGV.include?('--show-prompt')
-  ARGV.delete('--show-prompt')
+  ARGV.reject! { |a| %w[--skip-midnight --no-midnight --resume --show-prompt].include?(a) }
 
   display = Display.new(skip_midnight_check: skip_midnight_check)
   auto_only = AutoOnlyLock.exist?
@@ -58,15 +56,15 @@ if __FILE__ == $PROGRAM_NAME
 
   begin
     if InstanceLock.lock_exists?
-      $stdout.puts ''
-      display.puts 'Another instance is running in the current directory.'.yellow
-      display.puts 'Enter your request to add it to the queue.'.yellow
-      $stdout.puts ''
-      pre_read_request = request_reader.read
-      request_reader.validate(pre_read_request)
-      request_reader.add_to_request_history(pre_read_request) unless pre_read_request.to_s.strip.empty?
-      InstanceLock.append_pending_request(pre_read_request)
-      display.puts 'Request queued.'.green
+      loop do
+        pre_read_request = request_reader.read(use_reline: false)
+        break if pre_read_request.nil? || pre_read_request.to_s.strip.empty? || RequestReader.discard_command?(pre_read_request)
+
+        request_reader.validate(pre_read_request)
+        request_reader.add_to_request_history(pre_read_request)
+        InstanceLock.append_pending_request(pre_read_request)
+        display.puts 'Request queued.'.green
+      end
       exit 0
     end
 

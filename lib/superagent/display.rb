@@ -57,6 +57,14 @@ class Display
     reset_stream_tracking
   end
 
+  # Output raw text (no timestamp) through the display so it is buffered when output is paused.
+  def output_raw(str)
+    return if str.to_s.empty?
+
+    str.to_s.each_line { |line| out_puts line.chomp }
+    $stdout.flush unless @output_paused
+  end
+
     def check_late_night_reminder
       return if @skip_midnight_check
       

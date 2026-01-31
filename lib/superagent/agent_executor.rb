@@ -436,7 +436,7 @@ class AgentExecutor
       return
     end
     @display.puts '--- Full prompt ---'.light_black
-    $stdout.puts prompt.to_s
+    @display.output_raw(prompt.to_s)
     @display.puts '--- End prompt ---'.light_black
   end
 
@@ -444,8 +444,7 @@ class AgentExecutor
     print_full_prompt(prompt, new_session: new_session)
     unless prompt.to_s.strip.empty?
       @display.puts '--- Full prompt ---'.light_black
-      $stdout.puts prompt.to_s
-      $stdout.flush
+      @display.output_raw(prompt.to_s)
       @display.puts '--- End prompt ---'.light_black
     end
     @full_prompt_buffer = nil if new_session

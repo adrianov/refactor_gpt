@@ -8,12 +8,16 @@ require_relative '../signal_handler'
 require_relative '../prompt_reader'
 
 # Handles reading user requests from argv, stdin, or interactive input. History is per-directory.
+# Reline path used when running the agent (history, editing); chunked stdin when queue-only (large paste safe).
 class RequestReader
   REQUEST_PROMPT = 'Enter request (press Enter twice to submit):'
+  DISCARD_CMD = '/discard'
   PASTE_THRESHOLD = 0.2
   HISTORY_DIR = SuperagentConfig::CONFIG_DIR
   HISTORY_SEP = "\n---\n"
   MAX_HISTORY = 100
+  READ_CHUNK = 4096
+  DISPLAY_PLACEHOLDER_THRESHOLD = 8000
 
   def initialize(display)
     @display = display
@@ -38,15 +42,16 @@ class RequestReader
     $stdin.read.strip
   end
 
-  def read_interactive
+  def read_interactive(use_reline: true)
     @display.puts REQUEST_PROMPT.cyan
     $stdout.puts ''
 
-    read_interactive_silent
+    read_interactive_silent(use_reline: use_reline)
   end
 
   def load_request_history
     return unless Reline::HISTORY.empty?
+
     path = history_file_path
     return unless File.exist?(path)
 
@@ -76,35 +81,60 @@ class RequestReader
     File.write(path, entries.last(MAX_HISTORY).join(HISTORY_SEP) + HISTORY_SEP)
   end
 
-  def read_interactive_silent
-    lines = collect_interactive_lines
-    return nil if lines.nil?
-
-    result = lines.join("\n")
-    result.to_s.strip.empty? ? nil : result
+  def read_interactive_silent(use_reline: true)
+    if use_reline
+      collect_interactive_lines
+    else
+      read_until_double_newline
+    end
+  rescue Interrupt
+    handle_interrupt(use_reline ? [] : [String.new])
   end
 
   def collect_interactive_lines
     load_request_history
+    set_reline_placeholder_proc
     lines = []
     saw_empty = false
     last_time = Time.now
     loop do
-      line, last_time, elapsed = read_line_with_elapsed(lines, last_time)
-      return nil if line.nil?
-      if empty_line_token?(line)
-        flow, saw_empty = apply_empty_line(line, elapsed, saw_empty, lines)
-        return nil if flow == :return_nil
-        break if flow == :break
-        next
-      end
+      action, saw_empty, last_time, line = process_one_line(lines, saw_empty, last_time)
+      return nil if action == :return_nil
+      break if action == :break
+      next if action == :next
 
-      saw_empty = false
       lines << line
     end
-    lines
+    (r = lines.join("\n")).to_s.strip.empty? ? nil : r
   rescue Interrupt
     handle_interrupt(lines)
+  ensure
+    Reline.output_modifier_proc = nil
+  end
+
+  def process_one_line(lines, saw_empty, last_time)
+    line, new_last_time, elapsed = read_line_with_elapsed(lines, last_time)
+    return [:return_nil, saw_empty, new_last_time, nil] if line.nil?
+    return handle_empty_line(line, elapsed, saw_empty, lines) if empty_line_token?(line)
+
+    [:append, false, new_last_time, line]
+  end
+
+  def handle_empty_line(line, elapsed, saw_empty, lines)
+    flow, new_saw_empty = apply_empty_line(line, elapsed, saw_empty, lines)
+    action = flow == :return_nil ? :return_nil : (flow == :break ? :break : :next)
+    lines << '' if flow == :continue
+    [action, new_saw_empty, Time.now, nil]
+  end
+
+  def set_reline_placeholder_proc
+    Reline.output_modifier_proc = proc do |str, complete:|
+      next str if str.bytesize <= DISPLAY_PLACEHOLDER_THRESHOLD
+
+      head = str.byteslice(0, DISPLAY_PLACEHOLDER_THRESHOLD)
+      extra = str.bytesize - DISPLAY_PLACEHOLDER_THRESHOLD
+      "#{head}\n[... #{extra} bytes ...]#{complete ? '' : "\n"}"
+    end
   end
 
   def empty_line_token?(line)
@@ -128,6 +158,38 @@ class RequestReader
     [:continue, true]
   end
 
+  def read_interactive_line(lines)
+    line = Reline.readline(PromptReader.multiline_prompt(lines.empty?), true)
+    return nil if line.nil?
+
+    line = line.to_s.strip
+    return :done if line.empty? && !lines.empty?
+    return :empty_line if line.empty?
+
+    line
+  rescue StandardError => e
+    @display.puts "Error reading input: #{e.message}".yellow
+    nil
+  end
+
+  def read_until_double_newline
+    buffer = String.new
+    loop do
+      buffer << $stdin.readpartial(READ_CHUNK)
+      break if buffer.include?("\n\n")
+    end
+    request_from_buffer(buffer)
+  rescue EOFError
+    request_from_buffer(buffer.to_s)
+  rescue Interrupt
+    handle_interrupt([buffer])
+  end
+
+  def request_from_buffer(buffer)
+    request = buffer.split("\n\n", 2).first.to_s.rstrip
+    request.empty? ? nil : request
+  end
+
   def handle_interrupt(lines)
     $stdout.puts ''
     partial = lines.join("\n").strip
@@ -140,26 +202,16 @@ class RequestReader
     exit SignalHandler::EXIT_SIGINT
   end
 
-  def read_interactive_line(lines)
-    line = Reline.readline(PromptReader.multiline_prompt(lines.empty?), true)
-    return nil if line.nil?
-
-    line = line.to_s.strip
-    return :done if line.empty? && !lines.empty?
-    return :empty_line if line.empty?
-
-    line
-  rescue StandardError => e
-    @display.puts "Error reading input: #{e.message}".yellow
-    return nil
-  end
-
-  def read
+  def read(use_reline: true)
     unless $stdin.tty?
       piped = read_from_stdin
       return piped if piped && !piped.to_s.strip.empty?
     end
-    read_from_argv || read_interactive
+    read_from_argv || read_interactive(use_reline: use_reline)
+  end
+
+  def self.discard_command?(str)
+    str.to_s.strip == DISCARD_CMD
   end
 
   def validate(req)
