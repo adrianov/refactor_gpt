@@ -1,18 +1,19 @@
 # frozen_string_literal: true
 
 require_relative "../agents_file_handler"
+require_relative "agent_prompt_builder"
 
-# Handles verification prompts and response parsing. After run_verification or retry_with_fix,
-# callers read the last outcome via verified, desc, review_time, call_failed, retryable, raw_output, fix_output.
+# Handles verification prompts and response parsing. After run_verification, retry_with_fix, or run_refactor,
+# callers read the last outcome via verified, desc, review_time, call_failed, retryable, raw_output,
+# fix_output, refactor_output.
 class VerificationHandler
   include AgentsFileHandler
 
-  attr_reader :verified, :desc, :review_time, :call_failed, :retryable, :raw_output, :fix_output
+  attr_reader :verified, :desc, :review_time, :call_failed, :retryable, :raw_output, :fix_output, :refactor_output
 
-  def initialize(display, agent_executor, session_tracker: nil)
+  def initialize(display, agent_executor)
     @display = display
     @agent_executor = agent_executor
-    @session_tracker = session_tracker
   end
 
   def build_fix_prompt(req)
@@ -22,6 +23,19 @@ class VerificationHandler
       The previous attempt failed. Please fix the implementation.
 
       Review the codebase and make the necessary corrections.
+    HEREDOC
+  end
+
+  def build_refactor_prompt(req)
+    <<~HEREDOC
+      User request (to be implemented in the next step): #{to_utf8(req)}
+
+      Refactor the codebase so that implementing this request will be straightforward. Do not implement the request yet.
+
+      You must:
+      - Improve structure, remove duplication, clarify names.
+      - #{AgentPromptBuilder::GUIDELINE_REFERENCE_PHRASE}
+      - Preserve all existing behavior; do not add or change functionality.
     HEREDOC
   end
 
@@ -96,7 +110,7 @@ class VerificationHandler
 
       Verification approach:
       - Review the previous agent's response to understand what was implemented
-      - You may check git diff (using 'git diff') or read relevant files to verify the changes
+      - #{AgentPromptBuilder::VERIFICATION_FILES_PHRASE}
       - Check if the changes address the user's request
       - Look for potential bugs, regressions, or missing functionality
       - Verify code quality and adherence to project guidelines
@@ -153,6 +167,7 @@ class VerificationHandler
     @retryable = reason == :recoverable
     @raw_output = output.to_s
     @fix_output = nil
+    @refactor_output = nil
   end
 
   def set_verification_success(parsed)
@@ -163,6 +178,7 @@ class VerificationHandler
     @retryable = false
     @raw_output = nil
     @fix_output = nil
+    @refactor_output = nil
   end
 
   def finalize_call_failed(verified, desc, review_time, raw_output)
@@ -173,6 +189,7 @@ class VerificationHandler
     @call_failed = true
     @retryable = false
     @fix_output = nil
+    @refactor_output = nil
   end
 
   def retry_with_fix(model, req)
@@ -186,11 +203,26 @@ class VerificationHandler
       @desc = nil
       @review_time = 0
       @fix_output = nil
+      @refactor_output = nil
       return
     end
 
     run_verification(model, req, fix_out)
     @fix_output = fix_out
+    @refactor_output = nil
+  end
+
+  def run_refactor(model, req)
+    @refactor_output = nil
+    refactor_prompt = build_refactor_prompt(req)
+    @display.puts "Refactoring: #{model}...".blue
+    $stdout.puts ''
+
+    success, refactor_out = @agent_executor.run(model, refactor_prompt, current_request: req, new_session: true)
+    return false unless success
+
+    @refactor_output = refactor_out
+    true
   end
 
   def to_utf8(str)
@@ -199,6 +231,7 @@ class VerificationHandler
     s.force_encoding(Encoding::UTF_8)
     s.valid_encoding? ? s : s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
   end
+
   private :to_utf8
 
 end
