@@ -609,7 +609,8 @@ class AgentExecutor
       end
       @display.puts "Running: #{command}".green if command && !command.empty?
     end
-    if text && !text.to_s.empty? && (type.nil? || %w[assistant result].include?(type.to_s))
+    # Accumulate assistant stream only; skip 'result' to avoid recap duplication (backend echoes full response).
+    if text && !text.to_s.empty? && (type.nil? || type.to_s == 'assistant')
       @full_agent_output = (@full_agent_output || '') + text.to_s + "\n"
     end
     return final unless text && !text.empty?
