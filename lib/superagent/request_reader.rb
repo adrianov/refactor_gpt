@@ -94,6 +94,7 @@ class RequestReader
   def collect_interactive_lines
     load_request_history
     set_reline_placeholder_proc
+    set_reline_filename_completion
     lines = []
     saw_empty = false
     last_time = Time.now
@@ -110,6 +111,7 @@ class RequestReader
     handle_interrupt(lines)
   ensure
     Reline.output_modifier_proc = nil
+    Reline.completion_proc = nil
   end
 
   def process_one_line(lines, saw_empty, last_time)
@@ -134,6 +136,16 @@ class RequestReader
       head = str.byteslice(0, DISPLAY_PLACEHOLDER_THRESHOLD)
       extra = str.bytesize - DISPLAY_PLACEHOLDER_THRESHOLD
       "#{head}\n[... #{extra} bytes ...]#{complete ? '' : "\n"}"
+    end
+  end
+
+  def set_reline_filename_completion
+    Reline.completion_proc = proc do |word|
+      next [] if word.nil?
+      dir = Dir.pwd
+      entries = Dir.entries(dir).reject { |e| e == '.' || e == '..' }
+      prefix = word.to_s
+      entries.select { |e| e.start_with?(prefix) }.sort
     end
   end
 
