@@ -117,7 +117,10 @@ class Superagent
   # Main thread listens for Enter key and runs Reline for queue input.
   # Agent execution runs in background thread.
   def run_with_interactive_queue(start_index, req)
-    @agent_result_mutex.synchronize { @agent_result = nil }
+    @agent_result_mutex.synchronize do
+      @agent_result = nil
+      @success_req = nil
+    end
     @agent_thread = Thread.new do
       execute_attempts(start_index, req)
       @agent_result_mutex.synchronize { @agent_result = @last_attempt_success ? :success : :failure }
@@ -129,8 +132,12 @@ class Superagent
       @agent_thread&.join
     end
 
-    result = @agent_result_mutex.synchronize { @agent_result }
-    handle_final_failure if result == :failure
+    result, success_req = @agent_result_mutex.synchronize { [@agent_result, @success_req] }
+    if result == :success
+      handle_final_success(success_req)
+    elsif result == :failure
+      handle_final_failure
+    end
   end
 
   # Main thread input loop: waits for Enter, then shows Reline prompt for queue input.
@@ -379,7 +386,8 @@ class Superagent
     pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
     @pass_timings << pass_timing
     handle_success(desc, context)
-    handle_final_success(req)
+    # Store req for main thread to call handle_final_success (Reline requires main thread)
+    @agent_result_mutex.synchronize { @success_req = req }
     @last_attempt_success = true
   end
 
