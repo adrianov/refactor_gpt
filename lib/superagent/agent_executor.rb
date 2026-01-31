@@ -6,6 +6,7 @@ require 'oj'
 require 'rbconfig'
 require 'timeout'
 require_relative 'agent_prompt_builder'
+require_relative 'assistant_text_accumulator'
 require_relative 'json_stream_parser'
 require_relative 'process_descendants'
 require_relative 'stream_line_parser'
@@ -26,6 +27,7 @@ class AgentExecutor
     @prompt_builder = AgentPromptBuilder.new(session_tracker)
     @stream_parser = JsonStreamParser.new
     @stream_line_parser = StreamLineParser.new(json_parser: @stream_parser)
+    @assistant_accumulator = AssistantTextAccumulator.new
     @state_mutex = Mutex.new
     @full_prompt_buffer = nil
     @show_prompt = show_prompt
@@ -217,20 +219,21 @@ class AgentExecutor
     end
   end
 
-  # Processes one full stream line (one JSON line from agent). Same logic can be fed from live
-  # stdout or from a file (e.g. ~/output.log) for parsing/formatting checks.
+  # Processes one full stream line from the agent output.
   def process_stream_line(line, final)
     parsed = @stream_line_parser.parse_stream_line(line)
     record_tool_used(parsed[:tool]) if parsed[:tool]
     display_tool_and_command(parsed[:tool], parsed[:command]) unless @passthrough
-    accumulate_assistant_text(parsed)
+    @full_agent_output = @assistant_accumulator.accumulate(parsed, @full_agent_output)
     return final unless parsed[:text] && !parsed[:text].empty?
 
     handle_stream_line_display(parsed, final)
   end
 
-  def parse_stream_line(line)
-    @stream_line_parser.parse_stream_line(line)
+  def finalize_display(success_for_display)
+    @display.flush_assistant_text_buffer
+    display_tools_summary
+    @display.display_agent_call_result(success_for_display, @tools_used.size)
   end
 
   private
@@ -260,24 +263,6 @@ class AgentExecutor
     return if @tools_used.any? { |t| t[:name] == tool[:name] && t[:subtype] == tool[:subtype] }
 
     @tools_used << tool.dup
-  end
-
-  def accumulate_assistant_text(parsed)
-    return unless accumulatable_assistant?(parsed)
-
-    stripped = StreamFilter.strip_trailing_think_close(parsed[:text])
-    return if stripped.to_s.strip.empty?
-
-    @full_agent_output = (@full_agent_output || '') + stripped.to_s + "\n"
-  end
-
-  def accumulatable_assistant?(parsed)
-    text = parsed[:text]
-    return false unless text && !text.to_s.empty?
-    return false unless parsed[:type].nil? || parsed[:type].to_s == 'assistant'
-    return false if parsed[:think_close_only]
-
-    true
   end
 
   def display_tool_result(tool)
@@ -587,12 +572,6 @@ class AgentExecutor
   def finalize_output(raw, final)
     fallback = (final.respond_to?(:empty?) && final.empty?) ? raw : final
     (@full_agent_output.to_s.strip != '') ? @full_agent_output.to_s : fallback.to_s
-  end
-
-  def finalize_display(success_for_display)
-    @display.flush_assistant_text_buffer
-    display_tools_summary
-    @display.display_agent_call_result(success_for_display, @tools_used.size)
   end
 
   def display_tools_summary
