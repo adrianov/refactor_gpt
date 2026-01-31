@@ -58,10 +58,13 @@ class Display
   end
 
   # Output raw text (no timestamp) through the display so it is buffered when output is paused.
-  def output_raw(str)
+  # Optional color: symbol (e.g. :yellow) applied to each line.
+  def output_raw(str, color: nil)
     return if str.to_s.empty?
 
-    str.to_s.each_line { |line| out_puts line.chomp }
+    str.to_s.each_line do |line|
+      out_puts color ? line.chomp.to_s.public_send(color) : line.chomp
+    end
     $stdout.flush unless @output_paused
   end
 
@@ -192,10 +195,11 @@ class Display
     end
 
     # Shows session start: "Superagent:", session type (continuation/new + tags), full request text, then git status.
+    # Request is output raw (no timestamp per line) so lines are not squished.
     def display_start_message(req, continuation = false, tags = [])
       puts "\nSuperagent:".cyan
       display_session_type(continuation, tags)
-      puts req.yellow
+      output_raw(req.to_s, color: :yellow)
       out_puts ''
       display_git_status
     end
@@ -633,7 +637,7 @@ class Display
     def format_with_timestamp(text, ts)
       if text.start_with?("\e[")
         m_index = text.index('m')
-        return text[0..m_index] + ts + text[m_index + 1..-1] if m_index
+        return text[0..m_index] + ts + (text[m_index + 1..-1] || '').to_s if m_index
       end
       "#{ts}#{text}"
     end

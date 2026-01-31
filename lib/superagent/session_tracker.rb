@@ -177,10 +177,23 @@ class SessionTracker
   end
 
   def create_ask_client
-    return AskGeminiClient.new(progress: true) if Utility.gemini_configured?
-    return AskGptClient.new if Utility.openai_configured?
+    env = ENV.to_h.merge(Utility.load_env_vars)
+    model = LlmRouter.default_model(env)
+    config = LlmRouter.config_for_model(model, env)
+    return nil if config.nil?
 
-    nil
+    common = {
+      model: config[:model],
+      api_base_url: config[:base_url],
+      api_key: config[:access_token],
+      debug: false,
+      progress: true
+    }
+    if config[:backend] == :gemini
+      AskGeminiClient.new(**common)
+    else
+      AskGptClient.new(**common, backend: config[:backend])
+    end
   end
 
   def build_classification_prompt(request)

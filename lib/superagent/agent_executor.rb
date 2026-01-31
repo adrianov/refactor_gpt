@@ -456,7 +456,15 @@ class AgentExecutor
       @full_prompt_buffer = nil if new_session
     end
     @display.puts "Running: #{cmd.join(' ')}".green
-    prompt_excerpt_lines(prompt).each { |line| @display.puts "  #{line}".light_black }
+    excerpt_str = format_prompt_excerpt(prompt)
+    @display.output_raw(excerpt_str) if excerpt_str
+  end
+
+  def format_prompt_excerpt(prompt)
+    lines = prompt_excerpt_lines(prompt)
+    return nil if lines.empty?
+
+    lines.map { |l| "  #{l}" }.join("\n") + "\n"
   end
 
   # First 5 lines of prompt, each line truncated to 72 chars; newlines preserved for readability.
