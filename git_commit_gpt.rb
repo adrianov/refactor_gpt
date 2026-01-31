@@ -310,27 +310,35 @@ end
 
 def fix_json_truncation_in_commits(commits, status_filenames)
   status_set = status_filenames.to_set
+  deleted_status = status_filenames.select { |p| !File.exist?(p) }
 
   commits.each do |commit|
     next unless commit["files"]
 
     commit["files"] = commit["files"].map do |filename|
-      if status_set.include?(filename)
-        filename
-      elsif filename.end_with?(".")
-        fixed_filename = filename.sub(/\.$/, "")
-        if status_set.include?("#{fixed_filename}.json")
-          "#{fixed_filename}.json"
-        else
-          filename
-        end
-      else
-        filename
-      end
+      fix_commit_filename(filename, status_set, deleted_status)
     end
   end
 
   commits
+end
+
+def fix_commit_filename(filename, status_set, deleted_status)
+  return filename if status_set.include?(filename)
+  return fix_trailing_dot_json(filename, status_set) if filename.end_with?(".")
+  return resolve_deleted_path(filename, deleted_status) || filename unless File.exist?(filename)
+
+  filename
+end
+
+def fix_trailing_dot_json(filename, status_set)
+  fixed = filename.sub(/\.$/, "")
+  status_set.include?("#{fixed}.json") ? "#{fixed}.json" : filename
+end
+
+def resolve_deleted_path(plan_path, deleted_status_paths)
+  stem = File.basename(plan_path, ".*")
+  deleted_status_paths.find { |p| File.basename(p).start_with?(stem) }
 end
 
 WATCH_INTERVAL = 30
@@ -410,9 +418,31 @@ def extract_commit_files(commit)
 end
 
 def run_git_add(files)
-  add_cmd = ["git", "add", *files].map { |p| Shellwords.escape(p) }.join(" ")
+  existing = files.select { |f| File.exist?(f) }
+  deleted = files.reject { |f| File.exist?(f) }
+  run_git_add_existing(existing)
+  run_git_add_deleted(deleted)
+end
+
+def run_git_add_existing(paths)
+  return if paths.empty?
+
+  add_cmd = ["git", "add", *paths].map { |p| Shellwords.escape(p) }.join(" ")
   puts "Running: #{add_cmd}".green
-  system(add_cmd)
+  abort_staging unless system(add_cmd)
+end
+
+def run_git_add_deleted(paths)
+  return if paths.empty?
+
+  add_u_cmd = ["git", "add", "-u", "--", *paths].map { |p| Shellwords.escape(p) }.join(" ")
+  puts "Running: #{add_u_cmd}".green
+  abort_staging unless system(add_u_cmd)
+end
+
+def abort_staging
+  warn "Staging failed; skipping commit.".red
+  exit 1
 end
 
 def run_git_commit(message)
