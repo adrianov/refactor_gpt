@@ -6,6 +6,7 @@ SCRIPT_DIR = File.expand_path(File.dirname(__FILE__)).freeze
 
 require_relative "lib/openai_client"
 require_relative "lib/gemini_client"
+require_relative "lib/llm_router"
 require_relative "lib/completion_notifier"
 require_relative "lib/prompt_reader"
 require "ruby-progressbar"
@@ -245,16 +246,19 @@ module Utility
   end
 end
 
-# OpenAI API client wrapper
+# OpenAI API client wrapper (OpenAI and Claude backends via LlmRouter).
 class AskGptClient
   SEARCH_MODEL = "gpt-4o-search-preview"
 
-  def initialize(model: nil, max_completion_tokens: nil, debug: false)
+  attr_reader :model, :backend
+
+  def initialize(model: nil, max_completion_tokens: nil, debug: false, api_base_url: nil, api_key: nil, backend: nil)
     @model = model
+    @backend = backend || :openai
     @max_completion_tokens = max_completion_tokens
     @debug = debug
     @client = OpenAiClient.new(model: model, max_completion_tokens: max_completion_tokens, debug: debug,
-      progress_title: "Thinking")
+      progress_title: "Thinking", api_base_url: api_base_url, api_key: api_key)
   end
 
   def build_system_message(style, brevity)
@@ -333,9 +337,14 @@ class AskGptClient
   def change_model(new_model)
     return if @model == new_model
 
+    env = ENV.to_h.merge(Utility.load_env_vars)
+    config = LlmRouter.config_for_model(new_model, env)
+    return if config.nil?
+
     @model = new_model
+    @backend = config[:backend]
     @client = OpenAiClient.new(model: @model, max_completion_tokens: @max_completion_tokens, debug: @debug,
-      progress_title: "Thinking")
+      progress_title: "Thinking", api_base_url: config[:base_url], api_key: config[:access_token])
   end
 
   def search_mode?
@@ -363,13 +372,16 @@ end
 class AskGeminiClient
   DEFAULT_MODEL = "gemini-3-flash"
 
-  def initialize(model: nil, max_completion_tokens: nil, debug: false, progress: true)
+  attr_reader :model, :backend
+
+  def initialize(model: nil, max_completion_tokens: nil, debug: false, progress: true, api_base_url: nil, api_key: nil)
     @model = model
+    @backend = :gemini
     @max_completion_tokens = max_completion_tokens
     @debug = debug
     progress_title = progress ? "Thinking" : nil
     @client = GeminiClient.new(model: model, max_completion_tokens: max_completion_tokens, debug: debug,
-      progress_title: progress_title)
+      progress_title: progress_title, api_base_url: api_base_url, api_key: api_key)
   end
 
   def ask(messages, json: false, title: nil)
@@ -494,50 +506,45 @@ def show_interactive_prompt(args)
   puts "Use arrow keys for history, Tab for completion"
   puts "For multiline input, press Enter twice to submit"
   puts ""
-  puts "Note: Provider is auto-detected from .env (Gemini preferred)"
+  puts "Note: Backend is chosen from MODEL in .env (claude-* / gemini-* / gpt-*)"
 end
 
 def create_client(args)
-  use_streaming = Utility.md2term_available? && Utility.gemini_configured? && !args[:search_mode]
-
-  if Utility.gemini_configured?
-    init_gemini_client(args, use_streaming)
-  elsif Utility.openai_configured?
-    init_openai_client(args)
-  else
+  env = ENV.to_h.merge(Utility.load_env_vars)
+  model = args[:search_mode] ? AskGptClient::SEARCH_MODEL : LlmRouter.default_model(env)
+  config = LlmRouter.config_for_model(model, env)
+  if config.nil?
     print_config_error
+    return
+  end
+  build_client_from_config(config, args)
+end
+
+def build_client_from_config(config, args)
+  use_streaming = Utility.md2term_available? && config[:backend] == :gemini && !args[:search_mode]
+  common = {
+    model: config[:model],
+    max_completion_tokens: args[:short_mode] ? 500 : nil,
+    debug: args[:debug_mode],
+    api_base_url: config[:base_url],
+    api_key: config[:access_token]
+  }
+  if config[:backend] == :gemini
+    AskGeminiClient.new(**common, progress: !use_streaming)
+  else
+    AskGptClient.new(**common, backend: config[:backend])
   end
 end
 
-def init_gemini_client(args, use_streaming)
-  AskGeminiClient.new(
-    model: nil,
-    max_completion_tokens: args[:short_mode] ? 500 : nil,
-    debug: args[:debug_mode],
-    progress: !use_streaming
-  )
-end
-
-def init_openai_client(args)
-  AskGptClient.new(
-    model: args[:search_mode] ? AskGptClient::SEARCH_MODEL : nil,
-    max_completion_tokens: args[:short_mode] ? 500 : nil,
-    debug: args[:debug_mode]
-  )
-end
-
 def print_config_error
-  warn "❌ No API configuration found. Please configure either:"
-  warn "   • OpenAI: Set OPENAI_ACCESS_TOKEN in .env"
-  warn "   • Gemini: Set GEMINI_ACCESS_TOKEN in .env"
+  warn "❌ No API configuration found. Set MODEL (or CLAUDE_/OPENAI_/GEMINI_ACCESS_TOKEN) in .env"
   exit 1
 end
 
 def initialize_conversation(client, args)
-  provider = (Utility.gemini_configured? && !args[:search_mode]) ? :gemini : :openai
-  Utility.display_model_info(provider)
+  Utility.display_model_info(client.backend, client.model)
 
-  if provider == :gemini
+  if client.backend == :gemini
     [{role: "user", content: client.build_system_instruction(args[:eldritch_mode] ? :eldritch : nil,
       args[:short_mode] ? :short : nil)}]
   else
