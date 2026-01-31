@@ -127,7 +127,7 @@ class VerificationHandler
     user_content = build_verification_user_content(req, previous_agent_response)
     notice = @agent_executor.non_interactive_notice
     guidelines = @agent_executor.guidelines_section(always_include: true)
-    "#{build_verification_system_instruction}\n\n---\n\n#{notice}\n\n#{guidelines}\n\n---\n\n#{user_content}"
+    "#{build_verification_system_instruction}\n\n---\n\n#{user_content}\n\n---\n\n#{notice}\n\n#{guidelines}"
   end
 
   def run_verification(model, req, previous_agent_response = nil)
