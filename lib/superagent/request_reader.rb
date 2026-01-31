@@ -82,13 +82,55 @@ class RequestReader
   end
 
   def read_interactive_silent(use_reline: true)
-    if use_reline
+    if use_reline && $stdin.tty?
+      try_paste_then_reline
+    elsif use_reline
       collect_interactive_lines
     else
       read_until_double_newline
     end
   rescue Interrupt
     handle_interrupt(use_reline ? [] : [String.new])
+  end
+
+  # When stdin has data at entry: large chunk or "\n\n" → chunked read (avoids Reline hang on big paste).
+  # Small chunk → push back via pipe so Reline still sees it.
+  def try_paste_then_reline
+    return collect_interactive_lines unless IO.select([$stdin], nil, nil, 0)
+
+    chunk = $stdin.readpartial(READ_CHUNK)
+    return read_paste_with_initial(chunk) if chunk.bytesize >= READ_CHUNK || chunk.include?("\n\n")
+
+    collect_with_stdin_pushback(chunk)
+  end
+
+  def collect_with_stdin_pushback(chunk)
+    r, w = IO.pipe
+    w.write(chunk)
+    stdin_orig = $stdin
+    stop_r, stop_w = IO.pipe
+    copy_thread = spawn_stdin_copy_thread(stdin_orig, w, stop_r)
+    $stdin = r
+    collect_interactive_lines
+  ensure
+    $stdin = stdin_orig if stdin_orig
+    stop_w&.close
+    w&.close
+    copy_thread&.join(2)
+    stop_r&.close
+    r&.close
+  end
+
+  def read_paste_with_initial(chunk)
+    buffer = chunk.dup
+    until buffer.include?("\n\n")
+      buffer << $stdin.readpartial(READ_CHUNK)
+    end
+    request_from_buffer(buffer)
+  rescue EOFError
+    request_from_buffer(buffer.to_s)
+  rescue Interrupt
+    handle_interrupt([buffer])
   end
 
   def collect_interactive_lines
@@ -233,6 +275,20 @@ class RequestReader
   end
 
   private
+
+  def spawn_stdin_copy_thread(stdin_orig, w, stop_r)
+    Thread.new do
+      loop do
+        ready = IO.select([stdin_orig, stop_r], nil, nil, 0.2)
+        break if ready && ready[0].include?(stop_r)
+        next unless ready && ready[0].include?(stdin_orig)
+
+        w.write(stdin_orig.readpartial(READ_CHUNK))
+      end
+    rescue IOError, Errno::EPIPE
+      # Pipe closed or broken
+    end
+  end
 
   def history_file_path
     cwd_hash = Digest::SHA256.hexdigest(Dir.pwd)
