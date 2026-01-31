@@ -163,14 +163,14 @@ class AgentExecutor
 
   MAX_PREVIOUS_REQUESTS = 5
 
+  # Builds "Previous requests" prompt block: last N entries, direct order (oldest to newest),
+  # each line prefixed with (type) e.g. (implementation), (verification), (fix); indices match session position.
   def history_section(current_request: nil)
-    history = @session_tracker&.get_session_request_history(exclude_equal: current_request) || []
-    return nil if history.empty?
+    recent, start_num, width = recent_request_history_slice(current_request)
+    return nil if recent.nil? || recent.empty?
 
-    history = history.last(MAX_PREVIOUS_REQUESTS).reverse
-    width = [2, history.size.to_s.length].max
-    lines = history.map.with_index(1) { |req, idx| "#{idx.to_s.rjust(width)}. #{req}" }
-    "\n\nPrevious requests in this session:\n" + lines.join("\n")
+    lines = recent.each_with_index.map { |req, i| format_previous_request_line(start_num + i, width, req) }
+    "\n\nPrevious requests in this session (oldest to newest, last #{recent.size}):\n" + lines.join("\n")
   end
 
   def non_interactive_notice
@@ -628,6 +628,21 @@ class AgentExecutor
   end
 
   private
+
+  def recent_request_history_slice(current_request)
+    full = @session_tracker&.get_session_request_history(exclude_equal: current_request) || []
+    return [nil, 0, 0] if full.empty?
+
+    recent = full.last(MAX_PREVIOUS_REQUESTS)
+    start_num = full.size - recent.size + 1
+    last_num = start_num + recent.size - 1
+    width = [2, last_num.to_s.length].max
+    [recent, start_num, width]
+  end
+
+  def format_previous_request_line(num, width, req)
+    "#{num.to_s.rjust(width)}. (#{req[:type]}) #{req[:text]}"
+  end
 
   def drain_prompt_pipe(pipe)
     return unless pipe

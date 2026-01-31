@@ -82,9 +82,12 @@ class SessionTracker
     description.to_s.strip.empty? ? default_description(request) : description
   end
 
-  def save_session(request, description, tags, continuation, last_agent_summary = :not_provided)
+  DEFAULT_REQUEST_TYPE = 'implementation'
+
+  def save_session(request, description, tags, continuation, last_agent_summary = :not_provided,
+                   request_type: DEFAULT_REQUEST_TYPE)
     previous_session = load_previous_session
-    request_history = previous_session&.dig(:request_history).to_a + expand_combined(request)
+    request_history = previous_request_history_list(previous_session) + expand_combined(request, type: request_type)
     agent_summary = determine_agent_summary(continuation, previous_session, last_agent_summary)
 
     session_data = {
@@ -111,11 +114,11 @@ class SessionTracker
   end
 
   # Appends a request to session request_history so queue-added requests appear in "Previous requests".
-  def append_to_request_history(request)
+  def append_to_request_history(request, type: DEFAULT_REQUEST_TYPE)
     return if request.nil? || request.to_s.strip.empty?
 
     previous = load_previous_session
-    request_history = previous&.dig(:request_history).to_a + expand_combined(request)
+    request_history = previous_request_history_list(previous) + expand_combined(request, type: type)
     session_data = (previous || {}).merge(
       request_history: request_history,
       timestamp: Time.now.to_i,
@@ -128,11 +131,11 @@ class SessionTracker
     session_data = load_previous_session
     return [] unless session_data
 
-    list = session_data[:request_history] || []
+    list = previous_request_history_list(session_data)
     return list if exclude_equal.nil? || exclude_equal.to_s.strip.empty?
 
     exclude = exclude_equal.to_s.strip
-    list.reject { |req| req.to_s.strip == exclude }
+    list.reject { |req| req[:text].to_s.strip == exclude }
   end
 
   def get_last_agent_summary
@@ -144,14 +147,28 @@ class SessionTracker
 
   private
 
-  def expand_combined(request)
+  def previous_request_history_list(session)
+    (session&.dig(:request_history) || []).map { |el| normalize_request_entry(el) }
+  end
+
+  def normalize_request_entry(el)
+    return { type: DEFAULT_REQUEST_TYPE, text: el.to_s } unless el.is_a?(Hash)
+
+    {
+      type: (el[:type] || el['type'] || DEFAULT_REQUEST_TYPE).to_s,
+      text: (el[:text] || el['text'] || el.to_s).to_s
+    }
+  end
+
+  def expand_combined(request, type: DEFAULT_REQUEST_TYPE)
     return [] if request.nil? || request.to_s.strip.empty?
 
     segments = request.to_s.split(/\n\n+/)
-    return [request.to_s] if segments.size < 2
-    return [request.to_s] unless segments.all? { |seg| seg.match?(/\A\d+\.\s/) }
+    if segments.size < 2 || !segments.all? { |seg| seg.match?(/\A\d+\.\s/) }
+      return [{ type: type, text: request.to_s }]
+    end
 
-    segments.map { |seg| seg.sub(/\A\d+\.\s+/, '') }
+    segments.map { |seg| { type: type, text: seg.sub(/\A\d+\.\s+/, '') } }
   end
 
   def ensure_session_dir
