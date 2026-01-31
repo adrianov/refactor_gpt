@@ -6,6 +6,7 @@ require_relative 'verification_display'
 require_relative 'outcome_display'
 require_relative 'queue_display'
 require_relative 'stream_filter'
+require_relative 'tool_call_formatter'
 require 'tty-box'
 require 'tty-cursor'
 
@@ -29,11 +30,9 @@ class Display
   end
 
   def initialize(skip_midnight_check: false)
-      @text_buffer = ''
       @at_start_of_line = true
       @current_stream_id = nil
       @has_printed_in_stream = false
-      @last_printed_line = nil
       @thinking_indicator_count = 0
       @last_thinking_indicator_time = nil
       @tool_line_in_progress = false
@@ -75,7 +74,6 @@ class Display
   end
 
   def reset_after_pause
-    @text_buffer = ''
     @at_start_of_line = true
     reset_stream_tracking
   end
@@ -118,63 +116,44 @@ class Display
       exit 0
     end
 
-    # Appends assistant text to the line buffer and flushes complete lines. Buffers by newline
-    # so partial lines from multiple stream lines are reassembled before display.
+    # Prints one stream line of assistant text. Agent sends full lines (one JSON per line).
     def print_assistant_text(text, stream_id: nil)
-      return if text.nil? || text.to_s.empty?
-      return if StreamFilter.think_close_only?(text)
-
-      text = StreamFilter.strip_trailing_think_close(text)
-      return if text.to_s.strip.empty?
+      text = normalized_assistant_text(text)
+      return if text.nil? || text.empty?
 
       clear_thinking_indicator
-      @text_buffer ||= ''
-      @at_start_of_line ||= true
-      is_new_stream = apply_new_stream(stream_id)
-      @text_buffer += text.to_s
-      process_complete_lines(is_new_stream: is_new_stream)
-      maybe_flush_long_buffer(is_new_stream)
+      ensure_timestamp(is_new_stream: apply_new_stream(stream_id))
+      print_one_assistant_line(text)
     end
 
-    def flush_assistant_text_buffer
-      clear_thinking_indicator
-      return if @text_buffer.nil? || @text_buffer.empty?
+    def normalized_assistant_text(text)
+      return nil if text.nil? || text.to_s.empty?
+      return nil if StreamFilter.think_close_only?(text)
 
-      @text_buffer ||= ''
-      @at_start_of_line ||= true
-      @text_buffer = @text_buffer.sub(/\n{2,}\z/, "\n")
-      process_complete_lines
-
-      @text_buffer.to_s.strip.empty? ? clear_trailing_whitespace_buffer : flush_trailing_buffer_content
+      stripped = StreamFilter.strip_trailing_think_close(text)
+      stripped.to_s.strip.empty? ? nil : stripped.to_s
     end
 
-    def clear_trailing_whitespace_buffer
-      @text_buffer = ''
-      @at_start_of_line = true
-      out_puts ''
-      $stdout.flush
-    end
-
-    def flush_trailing_buffer_content
-      ensure_timestamp if @at_start_of_line
-      out_print body(@text_buffer)
-      out_puts '' unless @text_buffer.end_with?("\n")
-      @text_buffer = ''
-      @at_start_of_line = true
+    def print_one_assistant_line(text)
+      out_print body(text)
+      out_puts '' unless text.end_with?("\n")
+      @at_start_of_line = text.end_with?("\n")
       @has_printed_in_stream = true
       $stdout.flush
     end
 
-    # Ensure newline after think block ends. When buffer is empty (e.g. think_close_only
-    # line), flush_assistant_text_buffer returns without outputting; output newline so next
-    # line (e.g. tool call) does not run on (regression fix).
-    def ensure_newline_after_think_close
-      flush_assistant_text_buffer
+    def flush_assistant_text_buffer
+      clear_thinking_indicator
       return if @at_start_of_line
 
       out_puts ''
       @at_start_of_line = true
       $stdout.flush
+    end
+
+    # Ensure newline after think block ends so next line (e.g. tool call) does not run on (regression fix).
+    def ensure_newline_after_think_close
+      flush_assistant_text_buffer
     end
 
     # Applies display for one stream line: flushes newline when think block ends (only or trailing),
@@ -193,7 +172,6 @@ class Display
     def reset_stream_tracking
       @current_stream_id = nil
       @has_printed_in_stream = false
-      @last_printed_line = nil
       @thinking_indicator_count = 0
       @last_thinking_indicator_time = nil
       @tool_line_in_progress = false
@@ -343,7 +321,7 @@ class Display
 
       func_name = tool_call_info[:name]
       subtype = tool_call_info[:subtype]
-      formatted_args = format_tool_call_args(tool_call_info[:arguments])
+      formatted_args = tool_call_formatter.format_args(tool_call_info[:arguments])
 
       tool_part = build_tool_part(func_name, subtype, formatted_args)
       print_tool_line(tool_part, subtype)
@@ -380,83 +358,13 @@ class Display
     end
 
     def format_tool_call_args(args)
-      return nil unless args
-      return format_hash_args(args) if args.is_a?(Hash)
-      return format_string_args(args) if args.is_a?(String) && !args.empty?
-      
-      nil
+      tool_call_formatter.format_args(args)
     end
 
-    def format_hash_args(args)
-      filtered_args = args.reject { |k, _| %w[explanation toolCallId].include?(k) }
-      return nil if filtered_args.empty?
-      
-      formatted_parts = filtered_args.map { |k, v| "#{k}: #{format_arg_value(v)}" }
-      args_str = formatted_parts.join(', ')
-      truncate_string(args_str, 120)
+    def tool_call_formatter
+      @tool_call_formatter ||= ToolCallFormatter.new
     end
 
-    def format_string_args(args)
-      truncate_string(args, 120)
-    end
-
-    def truncate_string(str, max_length)
-      return str if str.length <= max_length
-      "#{str[0..(max_length - 4)]}..."
-    end
-
-    def format_arg_value(v)
-      case v
-      when String
-        format_string_value(v)
-      when Hash, Array
-        format_inspect_value(v)
-      else
-        v.inspect
-      end
-    end
-
-    def format_string_value(v)
-      return v if v.length <= 50
-      return format_url_value(v) if v.match?(%r{\Ahttps?://})
-      return format_path_value(v) if v.include?('/') && v.length > 40
-
-      "#{v[0..47]}..."
-    end
-
-    def format_url_value(v)
-      m = v.match(%r{\A(https?://[^/]+)(/.*)?\z})
-      return v if !m || v.length <= 80
-
-      origin = m[1]
-      path = m[2]
-      return origin if path.nil? || path.empty?
-      return v if (origin.length + path.length) <= 80
-
-      "#{origin}/...#{url_path_suffix(path)}"
-    end
-
-    def url_path_suffix(path)
-      filename = path.split('/').last
-      return '' if filename.nil? || filename.empty?
-      filename.length > 30 ? filename[-27..] : filename
-    end
-
-    def format_path_value(v)
-      parts = v.split('/')
-      filename = parts.last
-      
-      return "#{parts[0..-2].join('/')}/...#{filename[-27..-1]}" if filename.length > 30
-      return "#{parts[0]}/...#{parts[-2]}/#{filename}" if parts.length > 3
-      
-      v.length > 50 ? "#{v[0..47]}..." : v
-    end
-
-    def format_inspect_value(v)
-      inspected = v.inspect
-      inspected.length > 50 ? "#{inspected[0..47]}..." : inspected
-    end
-    
     def print_tool_line(tool_part, subtype)
       line = tool_part.to_s
       if subtype == 'started'
@@ -584,19 +492,9 @@ class Display
       if is_new
         @current_stream_id = stream_id
         @has_printed_in_stream = false
-        out_puts '' unless @text_buffer.empty?
+        out_puts '' unless @at_start_of_line
       end
       is_new
-    end
-
-    def maybe_flush_long_buffer(is_new_stream)
-      return unless @text_buffer.length > 200 && !@text_buffer.include?("\n")
-      ensure_timestamp(is_new_stream: is_new_stream) if @at_start_of_line
-      out_print body(@text_buffer)
-      @text_buffer = ''
-      @at_start_of_line = false
-      @has_printed_in_stream = true
-      $stdout.flush
     end
 
     def timestamp_str
@@ -609,27 +507,6 @@ class Display
         return text[0..m_index] + ts + (text[m_index + 1..-1] || '').to_s if m_index
       end
       "#{ts}#{text}"
-    end
-
-    def process_complete_lines(is_new_stream: false)
-      return if @text_buffer.empty?
-
-      while (newline_idx = @text_buffer.index("\n"))
-        line_with_newline = @text_buffer[0..newline_idx]
-        @text_buffer = @text_buffer[(newline_idx + 1)..-1] || ''
-
-        line_content = line_with_newline.chomp
-        unless line_content.empty? || line_content == @last_printed_line
-          @last_printed_line = line_content
-          ensure_timestamp(is_new_stream: is_new_stream)
-          out_print body(line_content)
-          @has_printed_in_stream = true
-        end
-
-        out_puts ''
-        @at_start_of_line = true
-        $stdout.flush
-      end
     end
 
     def ensure_timestamp(is_new_stream: false)
