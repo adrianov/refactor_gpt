@@ -2,7 +2,11 @@
 
 require_relative "diff_compactor"
 
+# Builds and truncates unified diffs for commit planning; truncation boundary
+# uses newline then word boundary so context is not cut mid-word.
 class DiffProcessor
+  FILE_TRUNCATION_SUFFIX = "\n... (file truncated due to size limit)\n"
+
   CODE_EXTENSIONS = %w[
     .rb .c .h .cpp .hpp .cc .cxx .java .py .js .ts .jsx .tsx .go .rs .swift
     .kt .scala .cs .php .pl .pm .sh .bash .zsh .lua .r .m .mm .sql .graphql
@@ -128,11 +132,34 @@ class DiffProcessor
   def truncate_file_diff(diff_content, max_bytes)
     return "" if max_bytes <= 0
 
-    truncated = diff_content.byteslice(0, max_bytes)
-    last_newline = truncated.rindex("\n")
-    return truncated if last_newline.nil?
+    keep_len, at_line_boundary = truncation_boundary(diff_content, max_bytes)
+    result = diff_content.byteslice(0, keep_len)
+    result += FILE_TRUNCATION_SUFFIX if at_line_boundary
+    result
+  end
 
-    truncated.byteslice(0, last_newline + 1) + "\n... (file truncated due to size limit)\n"
+  # Returns [byte_length_to_keep, add_truncation_suffix?]. Cuts at last newline
+  # before max_bytes; when no newline in first max_bytes, at last word boundary.
+  def truncation_boundary(content, max_bytes)
+    slice = content.byteslice(0, max_bytes)
+    last_newline = slice.rindex("\n")
+    if last_newline.nil?
+      keep_len = last_word_boundary_byte_len(slice)
+      kept = keep_len || max_bytes
+      [kept, content.bytesize > kept]
+    else
+      [last_newline + 1, content.bytesize > max_bytes]
+    end
+  end
+
+  # Byte length to keep so the slice ends at a word boundary (last space/tab or
+  # last non-word char). Nil if no boundary found.
+  def last_word_boundary_byte_len(slice)
+    last_ws = slice.rindex(/\s/)
+    return last_ws + 1 if last_ws
+
+    last_non_word = slice.rindex(/[^a-zA-Z0-9_\s]/)
+    last_non_word ? last_non_word + 1 : nil
   end
 
   def parse_file_diffs(diff_output)

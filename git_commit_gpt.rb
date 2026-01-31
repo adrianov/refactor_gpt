@@ -4,6 +4,7 @@
 require_relative "lib/signal_handler"
 require_relative "lib/openai_client"
 require_relative "lib/agents_file_handler"
+require_relative "lib/commit_path_corrections"
 require_relative "lib/diff_processor"
 require_relative "lib/diff_compactor"
 require_relative "lib/completion_notifier"
@@ -306,39 +307,6 @@ def extract_porcelain_filenames(porcelain_output)
       status_and_path
     end
   end.compact
-end
-
-def fix_json_truncation_in_commits(commits, status_filenames)
-  status_set = status_filenames.to_set
-  deleted_status = status_filenames.select { |p| !File.exist?(p) }
-
-  commits.each do |commit|
-    next unless commit["files"]
-
-    commit["files"] = commit["files"].map do |filename|
-      fix_commit_filename(filename, status_set, deleted_status)
-    end
-  end
-
-  commits
-end
-
-def fix_commit_filename(filename, status_set, deleted_status)
-  return filename if status_set.include?(filename)
-  return fix_trailing_dot_json(filename, status_set) if filename.end_with?(".")
-  return resolve_deleted_path(filename, deleted_status) || filename unless File.exist?(filename)
-
-  filename
-end
-
-def fix_trailing_dot_json(filename, status_set)
-  fixed = filename.sub(/\.$/, "")
-  status_set.include?("#{fixed}.json") ? "#{fixed}.json" : filename
-end
-
-def resolve_deleted_path(plan_path, deleted_status_paths)
-  stem = File.basename(plan_path, ".*")
-  deleted_status_paths.find { |p| File.basename(p).start_with?(stem) }
 end
 
 WATCH_INTERVAL = 30
@@ -941,7 +909,7 @@ def extract_plan_results(plan, status_output)
   quality_assessment = plan["quality_assessment"]
   excluded_files = plan["excluded_files"] || []
   status_filenames = extract_porcelain_filenames(status_output)
-  commits = fix_json_truncation_in_commits(commits, status_filenames)
+  commits = CommitPathCorrections.apply_to_commits(commits, status_filenames)
 
   {
     "commits" => commits,
