@@ -1,6 +1,11 @@
 # frozen_string_literal: true
 
 require_relative '../prompt_reader'
+require_relative 'pass_timing_display'
+require_relative 'verification_display'
+require_relative 'outcome_display'
+require_relative 'queue_display'
+require_relative 'stream_filter'
 require 'tty-box'
 require 'tty-cursor'
 
@@ -36,10 +41,27 @@ class Display
       @output_paused = false
       @output_buffer = []
       @output_buffer_mutex = Mutex.new
+      @pass_timing_display = PassTimingDisplay.new(self)
+      @verification_display = VerificationDisplay.new(self)
+      @outcome_display = OutcomeDisplay.new(self)
+      @queue_display = QueueDisplay.new(self)
     end
 
   def set_output_paused(paused)
     @output_paused = paused
+  end
+
+    def output_paused
+    @output_paused
+  end
+
+  def body(str)
+    str.to_s.colorize(BODY_COLOR)
+  end
+
+  def format_duration(sec)
+    return "0s" if sec.nil? || sec < 1
+    "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
   end
 
   def flush_paused_output
@@ -98,30 +120,18 @@ class Display
 
     def print_word(text, stream_id: nil)
       return if text.nil? || text.to_s.empty?
+      return if StreamFilter.think_close_only?(text)
+
+      text = StreamFilter.strip_trailing_think_close(text)
+      return if text.to_s.strip.empty?
 
       clear_thinking_indicator
-
       @text_buffer ||= ''
       @at_start_of_line ||= true
-
-      is_new_stream = stream_id && stream_id != @current_stream_id
-      if is_new_stream
-        @current_stream_id = stream_id
-        @has_printed_in_stream = false
-        out_puts '' unless @text_buffer.empty?
-      end
-
+      is_new_stream = apply_new_stream(stream_id)
       @text_buffer += text.to_s
       process_complete_lines(is_new_stream: is_new_stream)
-
-      if @text_buffer.length > 200 && !@text_buffer.include?("\n")
-        ensure_timestamp(is_new_stream: is_new_stream) if @at_start_of_line
-        out_print body(@text_buffer)
-        @text_buffer = ''
-        @at_start_of_line = false
-        @has_printed_in_stream = true
-        $stdout.flush
-      end
+      maybe_flush_long_buffer(is_new_stream)
     end
 
     def flush_word_buffer
@@ -199,7 +209,7 @@ class Display
     # Request is output raw (no timestamp per line) so lines are not squished.
     def display_start_message(req, continuation = false, tags = [])
       puts "\nSuperagent:".cyan
-      display_session_type(continuation, tags)
+      @queue_display.display_session_type(continuation, tags)
       output_raw(req.to_s, color: :yellow)
       out_puts ''
       display_git_status
@@ -221,53 +231,16 @@ class Display
 
     # Lists queued requests; shows running request preview if any.
     def display_pending_list(requests, current_request: nil)
-      unless current_request.to_s.strip.empty?
-        puts "Running: #{pending_request_preview(current_request)}".cyan
-      end
-      return if requests.nil? || requests.empty?
-
-      puts "Using #{requests.size} queued request(s):".cyan
-      requests.each_with_index { |r, i| out_puts body("  #{i + 1}. #{r.lines.first&.chomp}") }
-      out_puts ''
+      @queue_display.display_pending_list(requests, current_request: current_request)
     end
 
     # Single-line preview for queue/running: first line of text, truncated to 60 chars.
     def pending_request_preview(text)
-      preview = text.to_s.strip.lines.first&.chomp
-      preview = preview[0..60] + '...' if preview && preview.length > 60
-      preview || ''
+      @queue_display.pending_request_preview(text)
     end
 
     def display_done_requests_recap(outcomes)
-      return if outcomes.nil? || outcomes.empty?
-
-      print_outcome_section('Completed', :green, outcomes.select { |o| o[:success] }.map { |o| o[:request] })
-      print_outcome_section('Failed', :red, outcomes.reject { |o| o[:success] }.map { |o| o[:request] })
-      out_puts ''
-    end
-
-    def print_outcome_section(label, color, items)
-      return if items.empty?
-
-      puts "#{label} (#{items.size}):".send(color)
-      items.each_with_index { |r, i| out_puts body("  #{i + 1}. #{preview_request(r).sub(/\A\d+\.\s*/, '')}") }
-    end
-
-    def preview_request(request)
-      line = request.to_s.lines.first&.chomp.to_s
-      line.length > 80 ? "#{line[0..80]}..." : line
-    end
-
-    def display_session_type(continuation, tags)
-      if continuation
-        tag_display = tags.empty? ? '' : " [#{tags.join(', ')}]"
-        puts "↻ Continuing previous session#{tag_display}".light_blue
-        puts 'Step: Resuming previous session'.cyan
-        out_puts ''
-      elsif tags.any?
-        puts "🆕 New session [#{tags.join(', ')}]".light_blue
-        out_puts ''
-      end
+      @outcome_display.display_done_requests_recap(outcomes)
     end
 
     def display_attempt_header(model, idx, total)
@@ -276,22 +249,9 @@ class Display
     end
 
     def display_verification_result(verified, desc, context = '', call_failed: false, full_recap: nil)
-      display_full_recap(full_recap) if verified && full_recap.to_s.strip != ''
-      prefix = if call_failed
-                 'Verification call did not complete'
-               else
-                 verified ? '✔ Passed' : '✗ Failed'
-               end
-      suffix = context.empty? ? '' : " #{context}"
-
-      if desc && !desc.empty?
-        puts "#{prefix}#{suffix}:".send(verified ? :green : :yellow)
-        desc.each_line { |line| out_puts body("  #{line.chomp}") }
-      elsif verified
-        puts "#{prefix}#{suffix}! Success.".send(:green)
-      else
-        puts "#{prefix}#{suffix}! #{context.empty? ? 'Retrying...' : 'Next...'}".send(:yellow)
-      end
+      @verification_display.display_verification_result(
+        verified, desc, context, call_failed: call_failed, full_recap: full_recap
+      )
     end
 
     def display_agent_call_result(success, tools_count = 0)
@@ -545,69 +505,23 @@ class Display
     end
 
     def display_pass_timing(pass_timing)
-      return unless pass_timing
-
-      out_puts ''
-      puts "Pass #{pass_timing[:pass]} timing:".cyan
-      
-      display_timing_item("Implementation", pass_timing[:implementation_time], :light_blue)
-      display_timing_item("Review", pass_timing[:review_time], :light_blue)
-      display_timing_item("Fix", pass_timing[:fix_time], :light_blue)
-      display_timing_item("Total", pass_timing[:total_time], :cyan)
-      
-      out_puts ''
-    end
-
-    def display_timing_item(label, time, color)
-      return unless time
-      puts "  #{label}: #{format_duration(time)}".send(color)
+      @pass_timing_display.display_pass_timing(pass_timing)
     end
 
     def display_feature_timing(pass_timings, feature_start_time)
-      return unless feature_start_time && pass_timings && !pass_timings.empty?
-
-      total_feature_time = Time.now - feature_start_time
-      
-      total_implementation = pass_timings.sum { |p| p[:implementation_time] || 0 }
-      total_review = pass_timings.sum { |p| p[:review_time] || 0 }
-      total_fix = pass_timings.sum { |p| p[:fix_time] || 0 }
-      
-      out_puts ''
-      puts "Feature/Bugfix/Chore timing:".cyan
-      puts "  Implementation: #{format_duration(total_implementation)}".light_blue
-      puts "  Review: #{format_duration(total_review)}".light_blue
-      puts "  Fix: #{format_duration(total_fix)}".light_blue
-      puts "  Total: #{format_duration(total_feature_time)}".cyan
-      out_puts ''
+      @pass_timing_display.display_feature_timing(pass_timings, feature_start_time)
     end
 
     def display_passes_recap(pass_timings)
-      return unless pass_timings && !pass_timings.empty?
-
-      out_puts ''
-      fix_count = pass_timings.count { |p| (p[:fix_time] || 0) > 0 }
-      runs = pass_timings.size + fix_count
-      puts "This request: #{runs} runs, #{fix_count} fixes".cyan
-      out_puts ''
-      puts "Models used and timings:".cyan
-      pass_timings.each { |pass| display_single_pass_recap(pass) }
-      out_puts ''
+      @pass_timing_display.display_passes_recap(pass_timings)
     end
 
     def display_single_pass_recap(pass)
-      model = pass[:model] || 'unknown'
-      pass_num = pass[:pass] || '?'
-      puts "  Pass #{pass_num}: #{model}".light_blue
-      
-      display_pass_detail("Implementation", pass[:implementation_time])
-      display_pass_detail("Review", pass[:review_time])
-      display_pass_detail("Fix", pass[:fix_time])
-      display_pass_detail("Total", pass[:total_time], color: :cyan)
+      @pass_timing_display.display_single_pass_recap(pass)
     end
 
     def display_pass_detail(label, time, color: :light_black)
-      return unless time && time > 0
-      puts "    #{label}: #{format_duration(time)}".send(color)
+      @pass_timing_display.display_pass_detail(label, time, color: color)
     end
 
     def out_print(str)
@@ -629,34 +543,28 @@ class Display
 
     private
 
-    def display_full_recap(text)
-      return if text.to_s.strip == ''
-
-      out_puts ''
-      puts 'Full recap:'.cyan
-      lines = text.to_s.each_line.to_a
-      summary_idx = lines.index { |l| l =~ SUMMARY_MARKER }
-      print_recap_intro(lines, summary_idx)
-      print_recap_summary(lines, summary_idx) if summary_idx
-      out_puts ''
-      $stdout.flush unless @output_paused
+    def apply_new_stream(stream_id)
+      is_new = stream_id && stream_id != @current_stream_id
+      if is_new
+        @current_stream_id = stream_id
+        @has_printed_in_stream = false
+        out_puts '' unless @text_buffer.empty?
+      end
+      is_new
     end
 
-    def print_recap_intro(lines, summary_idx)
-      range = summary_idx ? lines[0...summary_idx] : lines
-      range.each { |line| out_puts body("  #{line.chomp}") unless line.chomp.empty? }
-    end
-
-    def print_recap_summary(lines, summary_idx)
-      lines[summary_idx..].each { |line| out_puts body("  #{line.chomp}") }
+    def maybe_flush_long_buffer(is_new_stream)
+      return unless @text_buffer.length > 200 && !@text_buffer.include?("\n")
+      ensure_timestamp(is_new_stream: is_new_stream) if @at_start_of_line
+      out_print body(@text_buffer)
+      @text_buffer = ''
+      @at_start_of_line = false
+      @has_printed_in_stream = true
+      $stdout.flush
     end
 
     def timestamp_str
       Time.now.strftime("[%H:%M:%S] ").colorize(TIMESTAMP_COLOR)
-    end
-
-    def body(str)
-      str.to_s.colorize(BODY_COLOR)
     end
 
     def format_with_timestamp(text, ts)
@@ -694,11 +602,6 @@ class Display
 
       out_print timestamp_str
       @at_start_of_line = false
-    end
-
-    def format_duration(sec)
-      return "0s" if sec.nil? || sec < 1
-      "#{(sec / 60).to_i}m #{(sec % 60).to_i}s"
     end
 
     def print_tool_line_started(text)
