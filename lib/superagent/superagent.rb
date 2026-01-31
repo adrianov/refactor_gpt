@@ -73,11 +73,7 @@ class Superagent
     @attempt_count_per_model = {}
     @pending_queue = PendingRequestQueue.new(@display)
     @session_outcomes = []
-    @input_thread = nil
-    @in_queue_prompt = false
-    @input_wakeup_writer = nil
-    @prompt_request_reader = nil
-    @prompt_request_writer = nil
+    @agent_thread = nil
     @auto_only = auto_only
     @git_initialized_this_run = false
   end
@@ -108,13 +104,65 @@ class Superagent
     return run_plan_mode(req, start_index) if @request_reader.plan_mode
 
     @display.display_pending_hint
-    start_pending_input_thread
 
     @feature_start_time = Time.now
     @pass_timings = []
     @active_start = Time.now
-    execute_attempts(start_index, req)
+
+    # Run agent in background thread, keep main thread for input (Reline requires main thread)
+    run_with_interactive_queue(start_index, req)
+  end
+
+  # Main thread listens for Enter key and runs Reline for queue input.
+  # Agent execution runs in background thread.
+  def run_with_interactive_queue(start_index, req)
+    @agent_result = nil
+    @agent_thread = Thread.new do
+      execute_attempts(start_index, req)
+      @agent_result = @last_attempt_success ? :success : :failure
+    end
+
+    run_main_input_loop
+
+    @agent_thread.join
     handle_final_failure unless @last_attempt_success
+  end
+
+  # Main thread input loop: waits for Enter, then shows Reline prompt for queue input.
+  def run_main_input_loop
+    input_io = File.open("/dev/tty", "r")
+    loop do
+      break unless @agent_thread&.alive?
+
+      ready = IO.select([input_io], nil, nil, 0.3)
+      next unless ready
+
+      line = input_io.gets
+      break if line.nil?
+      next unless line.chomp.empty? # Only react to empty Enter
+
+      handle_queue_input_request
+    end
+  rescue IOError, Errno::EIO
+    # Terminal closed or unavailable
+  ensure
+    input_io&.close
+  end
+
+  # Pause agent output, show prompt, read with Reline, add to queue, resume output.
+  def handle_queue_input_request
+    @display.set_output_paused(true)
+    @display.flush_word_buffer
+
+    $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
+    $stdout.flush
+
+    raw = @request_reader.read_interactive_silent
+    process_queue_input(raw) if raw
+  ensure
+    @display.set_output_paused(false)
+    @display.flush_paused_output
+    @display.reset_after_pause
   end
 
   def run_plan_mode(req, start_index = 0)
@@ -191,17 +239,12 @@ class Superagent
   end
 
   def run_model_attempt(model, idx, req)
-    process_prompt_request_if_pending
     attempt_number = (@attempt_count_per_model[model] || 0) + 1
     update_terminal_title("Attempting: #{model} (attempt #{attempt_number}/#{ATTEMPTS_PER_MODEL})")
     @display.display_attempt_header(model, idx, models.size)
 
     start = Time.now
     run_opts = {new_session: !@session_continuation, defer_full_prompt: false}
-    if @prompt_request_reader
-      run_opts[:prompt_request_reader] = @prompt_request_reader
-      run_opts[:on_prompt_request] = method(:on_prompt_request_callback)
-    end
     success, output, reason = @agent_executor.run(model, req, **run_opts)
     elapsed = Time.now - start
 
@@ -287,7 +330,7 @@ class Superagent
   def run_verification_with_retries(model, req)
     exhausted = true
     (VERIFICATION_CALL_RETRIES + 1).times do |attempt|
-      with_prompt_request_polling { @verification_handler.run_verification(model, req, @current_agent_output) }
+      @verification_handler.run_verification(model, req, @current_agent_output)
       h = @verification_handler
       unless h.call_failed && h.retryable
         exhausted = false
@@ -306,7 +349,7 @@ class Superagent
     @session_tracker.append_to_request_history("Fix after verification failure", type: "fix")
     update_terminal_title("Retrying: #{model}")
     fix_start = Time.now
-    with_prompt_request_polling { @verification_handler.retry_with_fix(model, req) }
+    @verification_handler.retry_with_fix(model, req)
     h = @verification_handler
     pass_timing[:fix_time] = Time.now - fix_start - (h.review_time || 0)
     pass_timing[:review_time] += h.review_time || 0
@@ -374,7 +417,6 @@ class Superagent
     @session_outcomes << {request: current_req, success: true}
     save_current_session(current_req) if current_req
     @display.display_done_requests_recap(@session_outcomes) if @session_outcomes.any?
-    ensure_pending_input_stopped
 
     process_pending_queue(previous_req)
   end
@@ -398,73 +440,6 @@ class Superagent
       add_active_segment
       prompt_for_new_request(previous_req)
     end
-  end
-
-  def process_prompt_request_if_pending
-    return unless @prompt_request_reader
-    return unless IO.select([@prompt_request_reader], nil, nil, 0)
-
-    begin
-      @prompt_request_reader.read(1024)
-    rescue
-      nil
-    end
-    drain_prompt_request_pipe
-    on_prompt_request_callback
-  end
-
-  def with_prompt_request_polling
-    thr = Thread.new { yield }
-    while thr.alive?
-      process_prompt_request_if_pending
-      thr.join(0.1)
-    end
-    thr.join
-  end
-
-  def drain_prompt_request_pipe
-    return unless @prompt_request_reader
-    loop do
-      ready = IO.select([@prompt_request_reader], nil, nil, 0)
-      break unless ready && ready[0].include?(@prompt_request_reader)
-      begin
-        @prompt_request_reader.read(1024)
-      rescue
-        break
-      end
-    end
-  end
-
-  def on_prompt_request_callback
-    run_request_form_in_main_thread
-  end
-
-  # Handles interactive queue input while agent runs in background.
-  # Called from main thread when user presses Enter (detected by background input thread).
-  #
-  # Flow:
-  # 1. Pause output - agent output collected to buffer instead of printed to stdout
-  # 2. Block background input thread via @in_queue_prompt flag
-  # 3. Flush any partial streaming text to the buffer
-  # 4. Show prompt and read user request via Reline (double-Enter to submit)
-  # 5. Add request to pending queue
-  # 6. Resume output - flush buffered agent output, continue normal printing
-  def run_request_form_in_main_thread
-    @display.set_output_paused(true)
-    @in_queue_prompt = true
-    @display.flush_word_buffer
-    @agent_executor.emit_full_prompt_to_display if @agent_executor.respond_to?(:emit_full_prompt_to_display)
-
-    # read_request prints prompt directly to stdout, then reads via Reline
-    raw = @request_reader.read_request
-    return unless raw
-
-    process_queue_input(raw)
-  ensure
-    @in_queue_prompt = false
-    @display.set_output_paused(false)
-    @display.flush_paused_output
-    @display.reset_after_pause
   end
 
   def process_queue_input(raw)
@@ -538,7 +513,6 @@ class Superagent
 
   def handle_final_failure
     @session_outcomes << {request: @current_request, success: false} if @current_request
-    ensure_pending_input_stopped
     no_queued = @pending_queue.size == 0
     @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
@@ -632,102 +606,11 @@ class Superagent
     tags.any? { |tag| %w[#bug #regression #hotfix].include?(tag) }
   end
 
-  def start_pending_input_thread
-    return if @input_thread&.alive?
-
-    reader, @input_wakeup_writer = IO.pipe
-    @prompt_request_reader, @prompt_request_writer = IO.pipe
-    queue = @pending_queue
-    current_request = @current_request
-    prompt_request_writer = @prompt_request_writer
-    @input_thread = Thread.new do
-      run_pending_input_loop(reader, queue, current_request, prompt_request_writer)
-    end
-  end
-
-  def run_pending_input_loop(reader, queue, current_request, prompt_request_writer = nil)
-    buffer = []
-    input_io = nil
-    input_io = open_controlling_tty
-    run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io, prompt_request_writer)
-  rescue
-    # Silently ignore input errors in background thread
-  ensure
-    input_io&.close if input_io && input_io != $stdin
-    begin
-      reader.close
-    rescue
-      nil
-    end
-  end
-
-  def open_controlling_tty
-    File.open("/dev/tty", "r")
-  rescue
-    $stdin
-  end
-
-  def run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io, prompt_request_writer = nil)
-    return unless input_io
-
-    read_ios = [reader, input_io].compact
-    loop do
-      sleep(0.05) while @in_queue_prompt
-      ready = IO.select(read_ios, nil, nil, 0.5)
-      next if ready.nil?
-      break flush_and_close(reader, buffer, queue, current_request) if ready[0].include?(reader)
-      next if @in_queue_prompt
-      next unless ready[0].include?(input_io)
-
-      line = input_io.gets
-      break if line.nil?
-
-      if single_enter?(line, buffer)
-        prompt_request_writer&.write("x")
-        next
-      end
-      buffer = process_pending_line(line.chomp, buffer, queue, current_request)
-    end
-  end
-
-  def single_enter?(line, buffer)
-    line.chomp.empty? && buffer.empty?
-  end
-
   def add_and_show_queue(queue, raw_new, current_request = nil)
     return if raw_new.to_s.strip.empty?
 
-    queue.add(raw_new.to_s.strip, current_request: current_request)
+    queue.add(raw_new.to_s.strip)
     list = queue.snapshot
     @display.display_pending_list(list, current_request: current_request) unless list.empty?
-  end
-
-  def process_pending_line(line, buffer, queue, current_request)
-    if line.empty? && buffer.any?
-      queue.add(buffer.join("\n"), current_request: current_request)
-      return []
-    end
-    return buffer << line unless line.empty?
-
-    buffer
-  end
-
-  def flush_and_close(_reader, buffer, queue, current_request)
-    queue.add(buffer.join("\n"), current_request: current_request) if buffer.any?
-  end
-
-  def ensure_pending_input_stopped
-    if @input_thread&.alive?
-      @input_wakeup_writer&.write(".")
-      @input_wakeup_writer&.close
-      @input_thread.join(2)
-      @input_thread.kill if @input_thread.alive?
-      @input_thread = nil
-      @input_wakeup_writer = nil
-    end
-    @prompt_request_writer&.close
-    @prompt_request_writer = nil
-    @prompt_request_reader&.close
-    @prompt_request_reader = nil
   end
 end
