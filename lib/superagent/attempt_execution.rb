@@ -81,22 +81,21 @@ module AttemptExecution
     pass_timing = PassTimingBuilder.build(
       @current_pass, @current_model,
       implementation_time: implementation_time,
-      refactor_time: refactor_t,
-      total_time: implementation_time
+      refactor_time: refactor_t
     )
+    set_pass_total_time(pass_timing)
     @pass_timings << pass_timing
     @display.display_pass_timing(pass_timing)
     @auto_only ? :switch_to_auto_only : nil
   end
 
   def process_verification_and_fix(model, req)
-    pass_start = Time.now
     pass_timing = build_pass_timing
     @pass_refactor_time = nil
     update_terminal_title("Verifying: #{model}")
     run_verification_with_retries(model, req)
     @session_tracker.append_to_request_history(RequestHistoryFormatter.verification_entry(req), type: "verification")
-    process_verification_after_run(model, req, pass_timing, pass_start)
+    process_verification_after_run(model, req, pass_timing)
   end
 
   def build_pass_timing
@@ -107,19 +106,19 @@ module AttemptExecution
     )
   end
 
-  def process_verification_after_run(model, req, pass_timing, pass_start)
+  def process_verification_after_run(model, req, pass_timing)
     h = @verification_handler
     pass_timing[:review_time] = h.review_time
     @display.out_puts ""
-    return handle_verification_call_failed(model, pass_timing, pass_start) if h.call_failed
+    return handle_verification_call_failed(model, pass_timing) if h.call_failed
     if h.verified
-      finalize_success(pass_timing, pass_start, h.desc, req)
+      finalize_success(pass_timing, h.desc, req)
       return :success
     end
 
     @display.display_verification_result(false, h.desc)
     @display.out_puts ""
-    retry_verification_with_fix(model, req, pass_timing, pass_start)
+    retry_verification_with_fix(model, req, pass_timing)
   end
 
   def run_verification_with_retries(model, req)
@@ -157,13 +156,13 @@ module AttemptExecution
     save_agent_summary(out) if out && !out.to_s.strip.empty?
   end
 
-  def handle_verification_call_failed(model, pass_timing, pass_start)
+  def handle_verification_call_failed(model, pass_timing)
     h = @verification_handler
     record_attempt_failure(model)
     apply_usage_unrecoverable_if_needed(h.raw_output.to_s.empty? ? h.desc : h.raw_output)
     @display.display_verification_result(false, h.desc, "", call_failed: true)
     @display.out_puts ""
-    pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
+    set_pass_total_time(pass_timing)
     @pass_timings << pass_timing
     @display.display_pass_timing(pass_timing)
     @auto_only ? :switch_to_auto_only : :continue
@@ -176,47 +175,51 @@ module AttemptExecution
     @auto_only = true
   end
 
-  def retry_verification_with_fix(model, req, pass_timing, pass_start)
+  def retry_verification_with_fix(model, req, pass_timing)
     @session_tracker.append_to_request_history("Fix after verification failure", type: "fix")
     update_terminal_title("Retrying: #{model}")
     fix_start = Time.now
     @verification_handler.retry_with_fix(model, req)
-    retry_verification_after_fix(pass_timing, pass_start, fix_start)
+    retry_verification_after_fix(pass_timing, fix_start)
   end
 
-  def retry_verification_after_fix(pass_timing, pass_start, fix_start)
+  def retry_verification_after_fix(pass_timing, fix_start)
     h = @verification_handler
     pass_timing[:fix_time] = Time.now - fix_start - (h.review_time || 0)
     pass_timing[:review_time] += h.review_time || 0
     @display.out_puts ""
     save_agent_summary(h.fix_output) if h.fix_output
-    return retry_verification_success(pass_timing, pass_start, h, req) if h.verified
+    return retry_verification_success(pass_timing, h, req) if h.verified
 
-    retry_verification_failure(pass_timing, pass_start, h)
+    retry_verification_failure(pass_timing, h)
   end
 
-  def retry_verification_success(pass_timing, pass_start, h, req)
-    finalize_success(pass_timing, pass_start, h.desc, req, "after retry")
+  def retry_verification_success(pass_timing, h, req)
+    finalize_success(pass_timing, h.desc, req, "after retry")
     :success
   end
 
-  def retry_verification_failure(pass_timing, pass_start, h)
+  def retry_verification_failure(pass_timing, h)
     @last_attempt_success = false
     @display.display_verification_result(false, h.desc, "after retry")
     @display.out_puts ""
-    pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
+    set_pass_total_time(pass_timing)
     @pass_timings << pass_timing
     @display.display_pass_timing(pass_timing)
     :continue
   end
 
-  def finalize_success(pass_timing, pass_start, desc, req, context = "")
-    pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
+  def finalize_success(pass_timing, desc, req, context = "")
+    set_pass_total_time(pass_timing)
     @pass_timings << pass_timing
     handle_success(desc, context)
     # Store req for main thread to call handle_final_success (Reline requires main thread)
     @agent_result_mutex.synchronize { @success_req = req }
     @last_attempt_success = true
+  end
+
+  def set_pass_total_time(pass_timing)
+    pass_timing[:total_time] = PassTimingBuilder.phase_times_sum(pass_timing)
   end
 
   def record_attempt_failure(model)
