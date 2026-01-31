@@ -41,7 +41,7 @@ class Superagent
     verification_handler: nil,
     session_tracker: nil,
     auto_only: false,
-    show_prompt: false
+    show_prompt: true
   )
     @display = display
     @session_tracker = session_tracker || SessionTracker.new(@display)
@@ -76,8 +76,6 @@ class Superagent
     @input_thread = nil
     @in_queue_prompt = false
     @input_wakeup_writer = nil
-    @queue_wakeup_reader = nil
-    @queue_wakeup_writer = nil
     @prompt_request_reader = nil
     @prompt_request_writer = nil
     @auto_only = auto_only
@@ -101,7 +99,6 @@ class Superagent
     @current_request = req
 
     apply_continuation_analysis(continuation_analysis) if continuation_analysis
-    @agent_executor.reset_agent_session unless @session_continuation
     save_current_session(req)
     
     start_index = determine_start_index(model_index_from_request, start_model_index)
@@ -172,7 +169,6 @@ class Superagent
     @attempt_count_per_model = {} unless @session_continuation
     highest_index_reached = start_index
     early_exit = nil
-    switch_to_queued = nil
     models[@current_model_index..-1].each_with_index do |model, relative_idx|
       idx = @current_model_index + relative_idx
       @current_pass = idx + 1
@@ -182,20 +178,12 @@ class Superagent
 
       result = run_model_attempt(model, idx, req)
       break if result == :success
-      if result == :abort_for_queue
-        switch_to_queued = req
-        break
-      end
       if result == :switch_to_auto_only
         @display.puts 'Usage limit reached; switching to auto-only model queue.'.yellow
         execute_attempts(0, req)
         early_exit = true
         break
       end
-    end
-    if switch_to_queued
-      handle_switch_to_queued(switch_to_queued)
-      return
     end
     return if early_exit
 
@@ -209,9 +197,7 @@ class Superagent
     @display.display_attempt_header(model, idx, models.size)
 
     start = Time.now
-    run_opts = { new_session: !@session_continuation }
-    run_opts[:queue_wakeup_reader] = @queue_wakeup_reader if @queue_wakeup_reader
-    run_opts[:defer_full_prompt] = true
+    run_opts = { new_session: !@session_continuation, defer_full_prompt: true }
     if @prompt_request_reader
       run_opts[:prompt_request_reader] = @prompt_request_reader
       run_opts[:on_prompt_request] = method(:on_prompt_request_callback)
@@ -392,12 +378,6 @@ class Superagent
     process_pending_queue(previous_req)
   end
 
-  def handle_switch_to_queued(previous_req)
-    @display.puts 'Queued request(s) added; switching to queue.'.yellow
-    ensure_pending_input_stopped
-    process_pending_queue(previous_req)
-  end
-
   def process_pending_queue(previous_req)
     pending = @pending_queue.take_all
     CompletionNotifier.notify_completion(success: true) if pending.empty?
@@ -405,7 +385,11 @@ class Superagent
       combined = @pending_queue.to_combined_request(pending)
       @display.display_pending_list(pending)
       InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
-      exit 1 unless InstanceLock.acquire_lock
+      unless InstanceLock.acquire_lock
+        base_name = InstanceLock.project_base_name
+        @display.puts "Another instance is already running for this project (#{base_name}). Exiting.".red
+        exit 1
+      end
       model_index = extract_model_index(combined)
       execute_new_request(combined, previous_req, model_index)
     else
@@ -484,11 +468,15 @@ class Superagent
     new_req = sanitize_request(raw_new_req)
     return if new_req.to_s.strip.empty?
 
-    exit 1 unless InstanceLock.acquire_lock
+    unless InstanceLock.acquire_lock
+      base_name = InstanceLock.project_base_name
+      @display.puts "Another instance is already running for this project (#{base_name}). Exiting.".red
+      exit 1
+    end
     execute_new_request(new_req, previous_req, model_index)
   end
 
-  def execute_new_request(new_req, previous_req, model_index)
+  def execute_new_request(new_req, _previous_req, model_index)
     analysis = {continuation: false, tags: [], description: nil}
     if analysis[:continuation] && user_disagrees_with_verification?(analysis[:tags])
       record_attempt_failure(@current_model)
@@ -543,8 +531,7 @@ class Superagent
             when false then '❌ Error'
             else phase.to_s
             end
-    project_name = File.basename(Dir.pwd)
-    title = "#{project_name}: #{title}"
+    title = "#{InstanceLock.project_base_name}: #{title}"
     sequence = "\033]0;#{title}\007"
     $stderr.print sequence if $stderr.tty?
     $stderr.flush if $stderr.tty?
@@ -611,23 +598,20 @@ class Superagent
     return if @input_thread&.alive?
 
     reader, @input_wakeup_writer = IO.pipe
-    @queue_wakeup_reader, @queue_wakeup_writer = IO.pipe
     @prompt_request_reader, @prompt_request_writer = IO.pipe
     queue = @pending_queue
     current_request = @current_request
-    queue_wakeup_writer = @queue_wakeup_writer
     prompt_request_writer = @prompt_request_writer
     @input_thread = Thread.new do
-      run_pending_input_loop(reader, queue, current_request, queue_wakeup_writer, prompt_request_writer)
+      run_pending_input_loop(reader, queue, current_request, prompt_request_writer)
     end
   end
 
-  def run_pending_input_loop(reader, queue, current_request, queue_wakeup_writer = nil, prompt_request_writer = nil)
+  def run_pending_input_loop(reader, queue, current_request, prompt_request_writer = nil)
     buffer = []
     input_io = nil
     input_io = open_controlling_tty
-    run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io, queue_wakeup_writer,
-                                  prompt_request_writer)
+    run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io, prompt_request_writer)
   rescue StandardError
     # Silently ignore input errors in background thread
   ensure
@@ -643,15 +627,13 @@ class Superagent
 
   ENTER_SIGNAL_DELAY = 0.5
 
-  def run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io, queue_wakeup_writer = nil,
-                                    prompt_request_writer = nil)
+  def run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io, prompt_request_writer = nil)
     return unless input_io
 
     thread_start = Time.now
     read_ios = [reader, input_io].compact
     loop do
       sleep(0.05) while @in_queue_prompt
-      drain_pending_file(queue, current_request, queue_wakeup_writer)
       ready = IO.select(read_ios, nil, nil, 0.5)
       next if ready.nil?
       break flush_and_close(reader, buffer, queue, current_request) if ready[0].include?(reader)
@@ -666,24 +648,6 @@ class Superagent
       end
       buffer = process_pending_line(line.chomp, buffer, queue, current_request)
     end
-  end
-
-  def drain_pending_file(queue, current_request, queue_wakeup_writer = nil)
-    return unless InstanceLock.current_lock_path
-    path = InstanceLock.pending_file_path
-    return unless File.exist?(path)
-
-    content = nil
-    File.open(path, "r+") do |f|
-      f.flock(File::LOCK_EX)
-      content = f.read
-      f.rewind
-      f.truncate(0)
-    end
-    requests = content.to_s.split(InstanceLock::PENDING_DELIMITER).map(&:strip).reject(&:empty?)
-    added = false
-    requests.each { |r| queue.add(r, current_request: current_request); added = true }
-    queue_wakeup_writer&.write('x') if added && queue_wakeup_writer
   end
 
   def single_enter?(line, buffer)
@@ -721,10 +685,6 @@ class Superagent
       @input_thread = nil
       @input_wakeup_writer = nil
     end
-    @queue_wakeup_writer&.close
-    @queue_wakeup_writer = nil
-    @queue_wakeup_reader&.close
-    @queue_wakeup_reader = nil
     @prompt_request_writer&.close
     @prompt_request_writer = nil
     @prompt_request_reader&.close

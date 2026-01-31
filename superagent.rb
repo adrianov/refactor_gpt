@@ -27,10 +27,11 @@ if __FILE__ == $PROGRAM_NAME
     puts <<~HELP
       Usage: #{File.basename($PROGRAM_NAME)} [options] [request]
       Runs the agent; request can be given as an argument or entered interactively.
-      When another instance is running, enter requests to queue; empty line to finish, /discard to exit without queueing.
+      Only one instance per project; if another is running, this process exits.
       Options:
         -h, --help           Show this help
-        --no-show-prompt     Do not show the system prompt (prompt is shown by default)
+        --show-prompt        Show the system prompt (default)
+        --no-show-prompt     Do not show the system prompt
         --skip-midnight, --no-midnight   Skip midnight-rollover check
     HELP
     exit 0
@@ -38,8 +39,9 @@ if __FILE__ == $PROGRAM_NAME
 
   CompletionNotifier.setup_exit_hook
   skip_midnight_check = ARGV.include?('--skip-midnight') || ARGV.include?('--no-midnight')
-  show_prompt = !ARGV.include?('--no-show-prompt')
-  ARGV.reject! { |a| %w[--skip-midnight --no-midnight --no-show-prompt].include?(a) }
+  show_prompt = true
+  show_prompt = false if ARGV.include?('--no-show-prompt')
+  ARGV.reject! { |a| %w[--skip-midnight --no-midnight --show-prompt --no-show-prompt].include?(a) }
 
   display = Display.new(skip_midnight_check: skip_midnight_check)
   auto_only = AutoOnlyLock.exist?
@@ -53,24 +55,10 @@ if __FILE__ == $PROGRAM_NAME
   request_reader = RequestReader.new(display)
 
   begin
-    if InstanceLock.lock_exists?
-      loop do
-        pre_read_request = request_reader.read(use_reline: true)
-        discard = RequestReader.discard_command?(pre_read_request)
-        break if pre_read_request.nil? || pre_read_request.to_s.strip.empty? || discard
-
-        request_reader.validate(pre_read_request)
-        request_reader.add_to_request_history(pre_read_request)
-        InstanceLock.append_pending_request(pre_read_request)
-        display.puts 'Request queued.'.green
-      end
-      exit 0
-    end
-
     lock_path = InstanceLock.acquire_lock
-
     unless lock_path
-      display.puts 'Failed to acquire instance lock. Exiting.'.red
+      base_name = InstanceLock.project_base_name
+      display.puts "Another instance is already running for this project (#{base_name}). Exiting.".red
       exit 1
     end
 

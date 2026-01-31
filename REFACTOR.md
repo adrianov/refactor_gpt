@@ -57,3 +57,9 @@
    - Phrase the comment so a future editor (or tool) reading the file will
      avoid reintroducing the same bug; include the symptom or constraint
      that would be violated if the fix were reverted or "simplified" away.
+
+11. **Git history**
+   - Use `git blame`, `git log`, and `git diff` as additional context whenever
+     they help: for architectural research, understanding recent changes,
+     fulfilling requests, and investigating bugs. Prefer evidence from commit
+     history over guessing when it is available.

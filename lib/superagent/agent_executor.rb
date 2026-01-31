@@ -13,29 +13,14 @@ class AgentExecutor
   TEST_RUNNERS = %w[rspec minitest test-unit cucumber jest mocha pytest].freeze
   TEST_RUNNER_CHECK_INTERVAL = 2
 
-  attr_reader :agent_session_id
-
-  def initialize(display, session_tracker: nil, show_prompt: false)
+  def initialize(display, session_tracker: nil, show_prompt: true)
     @display = display
     @tools_used = []
     @session_tracker = session_tracker
-    @agent_session_id = nil
-    @compact_pass_run = false
     @state_mutex = Mutex.new
-    @model_call_finished_since_compact = false
     @full_prompt_buffer = nil
     @show_prompt = show_prompt
     @verification_mode = false
-  end
-
-  def reset_agent_session
-    @agent_session_id = nil
-    @compact_pass_run = false
-    @model_call_finished_since_compact = false
-  end
-
-  def resume_with_session_id(id)
-    @agent_session_id = id
   end
 
   def test_runner_running?(pid = nil)
@@ -176,12 +161,15 @@ class AgentExecutor
     "\n\nFinal summary from previous agent run:\n#{summary.to_s.strip}"
   end
 
+  MAX_PREVIOUS_REQUESTS = 5
+
   def history_section(current_request: nil)
     history = @session_tracker&.get_session_request_history(exclude_equal: current_request) || []
     return nil if history.empty?
 
+    history = history.last(MAX_PREVIOUS_REQUESTS).reverse
     width = [2, history.size.to_s.length].max
-    lines = history.reverse.map.with_index(1) { |req, idx| "#{idx.to_s.rjust(width)}. #{req}" }
+    lines = history.map.with_index(1) { |req, idx| "#{idx.to_s.rjust(width)}. #{req}" }
     "\n\nPrevious requests in this session:\n" + lines.join("\n")
   end
 
@@ -218,18 +206,11 @@ class AgentExecutor
     return [nil] * 5 if %w[user system].include?(type)
     return [nil] * 5 if type == 'thinking' && (json_obj['text'].nil? || json_obj['text'].empty?)
 
-    extract_session_id(json_obj)
-
     [type, extract_text_from_json(json_obj)&.to_s, json_obj['request_id'] || json_obj['stream_id'] || type,
      extract_command_from_json(json_obj),
      (extract_tool_call_info(json_obj) if %w[tool_call tool_result].include?(type))]
   rescue Oj::ParseError, JSON::ParserError
     [nil] * 5
-  end
-
-  def extract_session_id(json_obj)
-    return unless json_obj['session_id']
-    @agent_session_id ||= json_obj['session_id']
   end
 
   def extract_text_from_json(json_obj)
@@ -399,29 +380,8 @@ class AgentExecutor
       --force
     ]
     cmd << '--plan' if plan_mode
-    cmd.concat(['--resume', @agent_session_id]) if @agent_session_id && !@verification_mode
     cmd.concat(['--model', model])
     cmd
-  end
-
-  # Run agent --model auto -- /compact to reduce context when resuming; skips if auto or no session.
-  def run_compact_pass_if_needed(model)
-    return unless @agent_session_id && model != 'auto'
-    return if @compact_pass_run && !@model_call_finished_since_compact
-
-    @display.puts 'Compacting context (model auto)...'.light_black
-    cmd = build_command(model: 'auto', plan_mode: false) + ['--', '/compact']
-    Timeout.timeout(120) do
-      Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
-        stdin.close
-        stdout_stderr.read
-        wait_thr.value
-      end
-    end
-    @compact_pass_run = true
-    @model_call_finished_since_compact = false
-  rescue Timeout::Error
-    @display.puts 'Compact pass timed out; continuing with main run.'.yellow
   end
 
   def clear_full_prompt_buffer
@@ -477,7 +437,7 @@ class AgentExecutor
     lines.map { |l| l.size > 72 ? "#{l[0..68]}..." : l } + suffix
   end
 
-  RECOVERABLE_NETWORK_RETRIES = 5 # 1 initial + 5 retries = 6 total attempts
+  MAX_RECOVERABLE_RETRIES = 5 # timeout and network errors: 1 initial + up to 5 retries
 
   def retryable_error?(output)
     return false if output.to_s.empty?
@@ -517,16 +477,29 @@ class AgentExecutor
       n.include?('this error is unrecoverable')
   end
 
+  def failure_reason(output, status, stdout, timeout_reason)
+    case
+    when unrecoverable_error?(output)
+      :unrecoverable
+    when output.to_s.strip.empty?,
+         timeout_reason == :no_data,
+         (status.nil? || !status.success?) && stdout.nil?,
+         stream_json_init?(output),
+         retryable_error?(output) || output.to_s.include?('Timeout after')
+      :recoverable
+    end
+  end
+
   def run_with_timeout_monitoring(model, wrapped, new_session: false,
                                   prompt_request_reader: nil, on_prompt_request: nil,
-                                  queue_wakeup_reader: nil, defer_full_prompt: false)
+                                  defer_full_prompt: false)
     @tools_used = []
     @passthrough = test_runner_running?
     return run_without_timeout(model, wrapped, new_session: new_session) if @passthrough
 
     @state_mutex.synchronize do
       @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil,
-                 start: nil, abort_for_queue: false, queue_prompt_active: false }
+                 start: nil, queue_prompt_active: false }
     end
     monitor_thread = start_monitor_thread
     timeout_thread = start_timeout_thread
@@ -534,7 +507,7 @@ class AgentExecutor
     begin
       execute_agent_process(model, wrapped, new_session: new_session,
                             prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request,
-                            queue_wakeup_reader: queue_wakeup_reader, defer_full_prompt: defer_full_prompt)
+                            defer_full_prompt: defer_full_prompt)
     ensure
       @state_mutex.synchronize { @state[:complete] = true }
       monitor_thread&.kill
@@ -546,7 +519,6 @@ class AgentExecutor
     clear_full_prompt_buffer if new_session
     @tools_used = []
     wrapped = wrap_prompt(p, new_session: new_session, current_request: p)
-    run_compact_pass_if_needed(model)
     cmd = setup_subprocess_run(model, wrapped, plan_mode: true, new_session: new_session)
 
     begin
@@ -557,7 +529,6 @@ class AgentExecutor
         result = process_agent_output(stdout_stderr, wait_thr)
         [result[2].success?, result[0]]
       end
-      @model_call_finished_since_compact = true
       out
     rescue StandardError => e
       @display.puts "❌ Agent execution error: #{e.message}".red
@@ -567,19 +538,16 @@ class AgentExecutor
 
   def run(model, p, base_delay: 1, verification_mode: false, new_session: false,
           prompt_request_reader: nil, on_prompt_request: nil, current_request: nil,
-          queue_wakeup_reader: nil, defer_full_prompt: false)
+          defer_full_prompt: false)
     @verification_mode = verification_mode
     clear_full_prompt_buffer if new_session
     wrapped = wrap_prompt(p, new_session: new_session, current_request: current_request || p)
-    run_compact_pass_if_needed(model)
     retries = 0
     loop do
       stdout, _, status, timeout_reason = run_with_timeout_monitoring(model, wrapped,
         new_session: new_session,
         prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request,
-        queue_wakeup_reader: queue_wakeup_reader, defer_full_prompt: defer_full_prompt)
-      @model_call_finished_since_compact = true
-      return [false, '', :abort_for_queue] if timeout_reason == :abort_for_queue
+        defer_full_prompt: defer_full_prompt)
 
       output = (stdout || '').to_s
       if output.to_s.strip.empty?
@@ -594,24 +562,14 @@ class AgentExecutor
         return [true, output, nil]
       end
 
-      reason = if output.to_s.strip.empty?
-                 :recoverable
-               elsif timeout_reason == :no_data
-                 :recoverable
-               elsif (status.nil? || !status.success?) && stdout.nil?
-                 :recoverable
-               elsif stream_json_init?(output)
-                 :recoverable
-               elsif unrecoverable_error?(output)
-                 :unrecoverable
-               elsif retryable_error?(output) || output.include?('Timeout after')
-                 :recoverable
-               end
+      reason = failure_reason(output, status, stdout, timeout_reason)
 
-      if reason == :recoverable && retries < RECOVERABLE_NETWORK_RETRIES
+      if reason == :recoverable && retries < MAX_RECOVERABLE_RETRIES
         retries += 1
         delay = base_delay * (2**(retries - 1))
-        @display.puts "⚠️  Network error, retrying in #{delay}s... (#{retries}/#{RECOVERABLE_NETWORK_RETRIES})".yellow
+        msg = "⚠️  Recoverable error (timeout or network), retrying in #{delay}s... " \
+              "(#{retries}/#{MAX_RECOVERABLE_RETRIES})"
+        @display.puts msg.yellow
         sleep(delay)
         next
       end
@@ -714,6 +672,7 @@ class AgentExecutor
   end
 
   def check_timeouts
+    return if @state_mutex.synchronize { @state[:timed_out] }
     now = Time.now
     reason = @state_mutex.synchronize do
       if @state[:start] && (now - @state[:start]) >= MAX_EXECUTION_TIMEOUT
@@ -746,7 +705,7 @@ class AgentExecutor
 
   def execute_agent_process(model, wrapped, new_session: false,
                             prompt_request_reader: nil, on_prompt_request: nil,
-                            queue_wakeup_reader: nil, defer_full_prompt: false)
+                            defer_full_prompt: false)
     cmd = setup_subprocess_run(model, wrapped, new_session: new_session, defer_full_prompt: defer_full_prompt)
     Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
       now = Time.now
@@ -758,27 +717,23 @@ class AgentExecutor
       stdin.close
       if prompt_request_reader && on_prompt_request
         run_agent_with_interactive_queue(stdout_stderr, wait_thr,
-          prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request,
-          queue_wakeup_reader: queue_wakeup_reader)
+          prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request)
       else
         process_agent_output(stdout_stderr, wait_thr,
-                            prompt_request_reader: nil, on_prompt_request: nil,
-                            queue_wakeup_reader: queue_wakeup_reader)
+                            prompt_request_reader: nil, on_prompt_request: nil)
       end
     end
   end
 
   # Reader thread keeps processing agent output (updating last_chunk) while main thread runs Reline.
   # Regression: calling on_prompt_request in the read loop blocked reading and caused 60s timeout.
-  def run_agent_with_interactive_queue(stdout_stderr, wait_thr, prompt_request_reader:, on_prompt_request:,
-                                       queue_wakeup_reader:)
+  def run_agent_with_interactive_queue(stdout_stderr, wait_thr, prompt_request_reader:, on_prompt_request:)
     prompt_req_r, prompt_req_w = IO.pipe
     reader_callback = proc { prompt_req_w.write('x') rescue nil }
     result = nil
     reader_thr = Thread.new do
       result = process_agent_output(stdout_stderr, wait_thr,
-        prompt_request_reader: prompt_request_reader, on_prompt_request: reader_callback,
-        queue_wakeup_reader: queue_wakeup_reader)
+        prompt_request_reader: prompt_request_reader, on_prompt_request: reader_callback)
     end
     wait_for_prompt_requests(reader_thr, prompt_req_r, on_prompt_request)
     prompt_req_w.close rescue nil
@@ -809,22 +764,14 @@ class AgentExecutor
     cmd
   end
 
-  def process_agent_output(stdout_stderr, wait_thr, prompt_request_reader: nil, on_prompt_request: nil,
-                           queue_wakeup_reader: nil)
+  def process_agent_output(stdout_stderr, wait_thr, prompt_request_reader: nil, on_prompt_request: nil)
     raw, final, buffer = '', '', ''
     drain_prompt_pipe(prompt_request_reader) if prompt_request_reader && on_prompt_request
     read_ios = [stdout_stderr]
     read_ios << prompt_request_reader if prompt_request_reader && on_prompt_request
-    read_ios << queue_wakeup_reader if queue_wakeup_reader
     loop do
-      break_out = @state_mutex.synchronize { @state[:timed_out] || @state[:abort_for_queue] }
-      break if break_out
+      break if @state_mutex.synchronize { @state[:timed_out] }
       ready = IO.select(read_ios, nil, nil, 0.5)
-      if queue_wakeup_reader && ready && ready[0].include?(queue_wakeup_reader)
-        queue_wakeup_reader.read(1024) rescue nil
-        @state_mutex.synchronize { @state[:abort_for_queue] = true }
-        break
-      end
       if prompt_request_reader && ready && ready[0].include?(prompt_request_reader)
         skip = @state_mutex.synchronize { @state[:start] && (Time.now - @state[:start]) < 0.5 }
         next if skip
@@ -880,12 +827,8 @@ class AgentExecutor
   end
 
   def finalize_execution(raw, final, wait_thr)
-    abort_for_queue, timed_out, timeout_reason = @state_mutex.synchronize do
-      [@state && @state[:abort_for_queue], @state && @state[:timed_out], @state&.dig(:timeout_reason)]
-    end
-    if abort_for_queue
-      terminate_agent("queued request(s) added by another instance")
-      return [raw.to_s, '', Struct.new(:success?).new(false), :abort_for_queue]
+    timed_out, timeout_reason = @state_mutex.synchronize do
+      [@state && @state[:timed_out], @state&.dig(:timeout_reason)]
     end
     status = wait_thr.value rescue Struct.new(:success?).new(false)
     status = Struct.new(:success?).new(false) if timed_out

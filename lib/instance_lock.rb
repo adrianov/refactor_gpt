@@ -10,13 +10,10 @@ module InstanceLock
   rescue ArgumentError
     File.join(Dir.tmpdir, "refactor_gpt_instance_locks")
   end
-  LOCK_CHECK_INTERVAL = 0.5
   STALE_LOCK_TIMEOUT = 3600 # 1 hour - consider lock stale if older than this
 
   @current_lock_path = nil
   @lock_dir_override = nil
-
-  PENDING_DELIMITER = "\n__NEXT__\n"
 
   def self.lock_dir_override=(path)
     @lock_dir_override = path
@@ -30,31 +27,14 @@ module InstanceLock
     @lock_dir_override || LOCK_DIR
   end
 
+  def self.project_base_name
+    File.basename(Dir.pwd)
+  end
+
   def self.lock_file_path
     cwd = Dir.pwd
     lock_name = Digest::SHA256.hexdigest(cwd)
     File.join(effective_lock_dir, "#{lock_name}.lock")
-  end
-
-  def self.pending_file_path
-    lock_file_path.sub(/\.lock\z/, ".pending")
-  end
-
-  def self.append_pending_request(text)
-    return if text.to_s.strip.empty?
-
-    path = pending_file_path
-    ensure_lock_dir
-    File.open(path, "a") { |f| f.write("#{text.strip}#{PENDING_DELIMITER}") }
-  end
-
-  def self.lock_exists?
-    ensure_lock_dir
-    lock_path = lock_file_path
-    return false unless File.exist?(lock_path)
-    return true if stale_lock?(lock_path)
-
-    true
   end
 
   def self.ensure_lock_dir
@@ -67,11 +47,14 @@ module InstanceLock
     FileUtils.mkdir_p(effective_lock_dir)
   end
 
-  def self.acquire_lock(waiting_message: nil, &block)
+  def self.acquire_lock
     ensure_lock_dir
     lock_path = lock_file_path
-    wait_for_lock_release(lock_path, waiting_message: waiting_message, &block)
-    File.write(lock_path, Process.pid.to_s)
+    return nil if File.exist?(lock_path) && !stale_lock?(lock_path)
+
+    File.delete(lock_path) rescue nil if File.exist?(lock_path)
+    return nil unless try_create_lock_file(lock_path)
+
     setup_cleanup_handlers(lock_path)
     lock_path
   rescue StandardError => e
@@ -79,20 +62,11 @@ module InstanceLock
     nil
   end
 
-  def self.wait_for_lock_release(lock_path, waiting_message: nil)
-    shown = false
-    while File.exist?(lock_path)
-      if stale_lock?(lock_path)
-        File.delete(lock_path) rescue nil
-        break
-      end
-      unless shown
-        shown = true
-        warn waiting_message if waiting_message
-        yield if block_given?
-      end
-      sleep LOCK_CHECK_INTERVAL
-    end
+  def self.try_create_lock_file(lock_path)
+    File.open(lock_path, File::CREAT | File::EXCL | File::WRONLY) { |f| f.write(Process.pid.to_s) }
+    true
+  rescue Errno::EEXIST
+    nil
   end
 
   def self.stale_lock?(lock_path)
