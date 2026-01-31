@@ -526,7 +526,7 @@ class AgentExecutor
 
     @state_mutex.synchronize do
       @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil,
-                 start: nil, abort_for_queue: false }
+                 start: nil, abort_for_queue: false, queue_prompt_active: false }
     end
     monitor_thread = start_monitor_thread
     timeout_thread = start_timeout_thread
@@ -719,7 +719,8 @@ class AgentExecutor
       if @state[:start] && (now - @state[:start]) >= MAX_EXECUTION_TIMEOUT
         @state[:timeout_reason] = :max_time
         "maximum execution time (#{MAX_EXECUTION_TIMEOUT}s)"
-      elsif @state[:last_chunk] && (now - @state[:last_chunk]) >= EXECUTION_TIMEOUT
+      # Regression: do not fire no_data timeout while user is at queue prompt (Reline); agent may be silent for 60s+.
+      elsif !@state[:queue_prompt_active] && @state[:last_chunk] && (now - @state[:last_chunk]) >= EXECUTION_TIMEOUT
         @state[:timeout_reason] = :no_data
         "no data received (#{EXECUTION_TIMEOUT}s)"
       end
@@ -755,9 +756,48 @@ class AgentExecutor
       end
       stdin.write(wrapped)
       stdin.close
-      process_agent_output(stdout_stderr, wait_thr,
-                          prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request,
-                          queue_wakeup_reader: queue_wakeup_reader)
+      if prompt_request_reader && on_prompt_request
+        run_agent_with_interactive_queue(stdout_stderr, wait_thr,
+          prompt_request_reader: prompt_request_reader, on_prompt_request: on_prompt_request,
+          queue_wakeup_reader: queue_wakeup_reader)
+      else
+        process_agent_output(stdout_stderr, wait_thr,
+                            prompt_request_reader: nil, on_prompt_request: nil,
+                            queue_wakeup_reader: queue_wakeup_reader)
+      end
+    end
+  end
+
+  # Reader thread keeps processing agent output (updating last_chunk) while main thread runs Reline.
+  # Regression: calling on_prompt_request in the read loop blocked reading and caused 60s timeout.
+  def run_agent_with_interactive_queue(stdout_stderr, wait_thr, prompt_request_reader:, on_prompt_request:,
+                                       queue_wakeup_reader:)
+    prompt_req_r, prompt_req_w = IO.pipe
+    reader_callback = proc { prompt_req_w.write('x') rescue nil }
+    result = nil
+    reader_thr = Thread.new do
+      result = process_agent_output(stdout_stderr, wait_thr,
+        prompt_request_reader: prompt_request_reader, on_prompt_request: reader_callback,
+        queue_wakeup_reader: queue_wakeup_reader)
+    end
+    wait_for_prompt_requests(reader_thr, prompt_req_r, on_prompt_request)
+    prompt_req_w.close rescue nil
+    reader_thr.join
+    prompt_req_r.close rescue nil
+    result
+  end
+
+  def wait_for_prompt_requests(reader_thr, prompt_req_r, on_prompt_request)
+    while reader_thr.alive?
+      ready = IO.select([prompt_req_r], nil, nil, 0.5)
+      next unless ready && ready[0].include?(prompt_req_r)
+      prompt_req_r.read(1024) rescue nil
+      @state_mutex.synchronize { @state[:queue_prompt_active] = true }
+      begin
+        on_prompt_request.call
+      ensure
+        @state_mutex.synchronize { @state[:queue_prompt_active] = false }
+      end
     end
   end
 
@@ -793,7 +833,8 @@ class AgentExecutor
           read_ios.delete(prompt_request_reader)
           next
         end
-        Thread.new { on_prompt_request.call }
+        # Signal main thread to run Reline; this thread keeps reading so last_chunk updates and timeout does not fire.
+        on_prompt_request.call
         drain_prompt_pipe(prompt_request_reader)
         next
       end

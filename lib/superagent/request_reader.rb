@@ -7,6 +7,22 @@ require_relative 'config_path'
 require_relative '../signal_handler'
 require_relative '../prompt_reader'
 
+# Reline bug: whole_lines can contain nil when pasting; replace with ''. Pad result so modified_lines[i] is never nil.
+module RelineNilSafeBuffer
+  private
+
+  def modify_lines(before, complete)
+    before = before.to_a.map { |l| l.nil? ? '' : l.to_s }
+    result = super(before, complete)
+    n = before.size
+    while result.size < n
+      result << ''
+    end
+    result.first(n)
+  end
+end
+Reline::LineEditor.prepend(RelineNilSafeBuffer)
+
 # Handles reading user requests from argv, stdin, or interactive input. History is per-directory.
 # Reline path used when running the agent (history, editing); chunked stdin when queue-only (large paste safe).
 class RequestReader
@@ -17,7 +33,6 @@ class RequestReader
   HISTORY_SEP = "\n---\n"
   MAX_HISTORY = 100
   READ_CHUNK = 4096
-  DISPLAY_PLACEHOLDER_THRESHOLD = 8000
 
   def initialize(display)
     @display = display
@@ -61,13 +76,14 @@ class RequestReader
     content.split(HISTORY_SEP).reverse_each { |req| Reline::HISTORY << req.strip unless req.strip.empty? }
   end
 
+  # Regression: must persist to file so next run sees new requests; fsync ensures write is durable.
   def add_to_request_history(request)
     return if request.to_s.strip.empty?
 
     Reline::HISTORY << request
     path = history_file_path
     FileUtils.mkdir_p(File.dirname(path))
-    File.open(path, 'a') { |f| f.write(request + HISTORY_SEP) }
+    File.open(path, 'a') { |f| f.write(request + HISTORY_SEP); f.fsync }
     trim_history_file
   end
 
@@ -93,12 +109,16 @@ class RequestReader
     handle_interrupt(use_reline ? [] : [String.new])
   end
 
+  # Bracketed paste: \e[200~...\e[201~. Route to Reline so we don't treat escapes as content.
+  BRACKETED_PASTE_BYTES = "\e[200~".b.bytes.freeze
+
   # When stdin has data at entry: large chunk or "\n\n" → chunked read (avoids Reline hang on big paste).
-  # Small chunk → push back via pipe so Reline still sees it.
+  # Small chunk or bracketed paste → push back via pipe so Reline still sees it.
   def try_paste_then_reline
     return collect_interactive_lines unless IO.select([$stdin], nil, nil, 0)
 
     chunk = $stdin.readpartial(READ_CHUNK)
+    return collect_with_stdin_pushback(chunk) if chunk.bytesize >= 6 && chunk.bytes.first(6) == BRACKETED_PASTE_BYTES
     return read_paste_with_initial(chunk) if chunk.bytesize >= READ_CHUNK || chunk.include?("\n\n")
 
     collect_with_stdin_pushback(chunk)
@@ -148,7 +168,7 @@ class RequestReader
 
       lines << line
     end
-    (r = lines.join("\n")).to_s.strip.empty? ? nil : r
+    (r = lines.map(&:to_s).join("\n")).to_s.strip.empty? ? nil : r
   rescue Interrupt
     handle_interrupt(lines)
   ensure
@@ -172,12 +192,8 @@ class RequestReader
   end
 
   def set_reline_placeholder_proc
-    Reline.output_modifier_proc = proc do |str, complete:|
-      next str if str.bytesize <= DISPLAY_PLACEHOLDER_THRESHOLD
-
-      head = str.byteslice(0, DISPLAY_PLACEHOLDER_THRESHOLD)
-      extra = str.bytesize - DISPLAY_PLACEHOLDER_THRESHOLD
-      "#{head}\n[... #{extra} bytes ...]#{complete ? '' : "\n"}"
+    Reline.output_modifier_proc = proc do |str, **|
+      (str || '').to_s
     end
   end
 
@@ -213,7 +229,8 @@ class RequestReader
   end
 
   def read_interactive_line(lines)
-    line = Reline.readline(PromptReader.multiline_prompt(lines.empty?), true)
+    prompt = (PromptReader.multiline_prompt(lines.empty?) || '').to_s
+    line = Reline.readline(prompt.empty? ? ' ' : prompt, true)
     return nil if line.nil?
 
     line = line.to_s.strip
@@ -246,7 +263,7 @@ class RequestReader
 
   def handle_interrupt(lines)
     $stdout.puts ''
-    partial = lines.join("\n").strip
+    partial = lines.map(&:to_s).join("\n").strip
     if partial.empty?
       @display.puts 'Interrupted. No request entered. Exiting.'.yellow
     else

@@ -41,7 +41,6 @@ class Superagent
     verification_handler: nil,
     session_tracker: nil,
     auto_only: false,
-    resume_enabled: false,
     show_prompt: false
   )
     @display = display
@@ -75,13 +74,13 @@ class Superagent
     @pending_queue = PendingRequestQueue.new(@display)
     @session_outcomes = []
     @input_thread = nil
+    @in_queue_prompt = false
     @input_wakeup_writer = nil
     @queue_wakeup_reader = nil
     @queue_wakeup_writer = nil
     @prompt_request_reader = nil
     @prompt_request_writer = nil
     @auto_only = auto_only
-    @resume_enabled = resume_enabled
     @git_initialized_this_run = false
   end
 
@@ -101,11 +100,7 @@ class Superagent
     @request_reader.validate(req)
     @current_request = req
 
-    if continuation_analysis
-      apply_continuation_analysis(continuation_analysis)
-    elsif @resume_enabled
-      analyze_session_continuation(req)
-    end
+    apply_continuation_analysis(continuation_analysis) if continuation_analysis
     @agent_executor.reset_agent_session unless @session_continuation
     save_current_session(req)
     
@@ -447,27 +442,28 @@ class Superagent
     run_request_form_in_main_thread
   end
 
-  # Uses same read_interactive_silent (Reline + PASTE_THRESHOLD) as main prompt for multi-line paste behavior.
+  # Runs in main thread (executor calls on_prompt_request synchronously). @in_queue_prompt pauses pending input thread.
   def run_request_form_in_main_thread
     @display.set_output_paused(true)
     @agent_executor.emit_full_prompt_to_display if @agent_executor.respond_to?(:emit_full_prompt_to_display)
     show_request_prompt
+    @in_queue_prompt = true
     raw = @request_reader.read_interactive_silent
-    @display.set_output_paused(false)
-    @display.flush_paused_output
-    @display.reset_after_pause
-
     return unless raw
     if RequestReader.discard_command?(raw)
       @pending_queue.take_all
       @display.puts 'Queued requests discarded.'.yellow
       return
     end
-
     unless raw.to_s.strip.empty?
-      @request_reader.add_to_request_history(raw)
+      save_request_to_histories(raw)
       add_and_show_queue(@pending_queue, raw.to_s.strip, @current_request)
     end
+  ensure
+    @in_queue_prompt = false
+    @display.set_output_paused(false)
+    @display.flush_paused_output
+    @display.reset_after_pause
   end
 
   def prompt_for_new_request(previous_req)
@@ -493,12 +489,7 @@ class Superagent
   end
 
   def execute_new_request(new_req, previous_req, model_index)
-    analysis = if @resume_enabled
-                 previous_session = previous_req ? {request: previous_req} : nil
-                 @session_tracker.analyze_continuation_and_description(new_req, previous_session)
-               else
-                 {continuation: false, tags: [], description: nil}
-               end
+    analysis = {continuation: false, tags: [], description: nil}
     if analysis[:continuation] && user_disagrees_with_verification?(analysis[:tags])
       record_attempt_failure(@current_model)
     end
@@ -565,22 +556,16 @@ class Superagent
     @session_continuation = analysis[:continuation]
     @session_tags = analysis[:tags] || []
     @session_description = analysis[:description]
-    previous_session = @session_tracker.load_previous_session
-    if @session_continuation && previous_session && previous_session[:agent_session_id]
-      @agent_executor.resume_with_session_id(previous_session[:agent_session_id])
-    end
   end
 
-  def analyze_session_continuation(req)
-    previous_session = @session_tracker.load_previous_session
-    analysis = @session_tracker.analyze_continuation_and_description(req, previous_session)
-    apply_continuation_analysis(analysis)
+  def save_request_to_histories(raw)
+    @request_reader.add_to_request_history(raw)
+    @session_tracker.append_to_request_history(raw)
   end
 
   def save_current_session(req, summary = :not_provided)
     @session_tracker.save_session(
-      req, @session_description, @session_tags, @session_continuation, summary,
-      agent_session_id: @agent_executor.agent_session_id
+      req, @session_description, @session_tags, @session_continuation, summary
     )
   end
 
@@ -596,7 +581,7 @@ class Superagent
   def sanitize_request(req)
     return req if req.nil?
 
-    remove_model_mentions(req.gsub(NON_INTERACTIVE_NOTICE, "\n").strip).gsub(/\n{3,}/, "\n\n")
+    remove_model_mentions(req.gsub(NON_INTERACTIVE_NOTICE, "\n").strip)
   end
 
   def extract_model_index(req)
@@ -615,7 +600,7 @@ class Superagent
     cleaned = req.gsub(/@(\S+)/) do |match|
       models.include?($1) ? '' : match
     end
-    cleaned.gsub(/\s+/, ' ').strip
+    cleaned.strip
   end
 
   def user_disagrees_with_verification?(tags)
@@ -665,6 +650,7 @@ class Superagent
     thread_start = Time.now
     read_ios = [reader, input_io].compact
     loop do
+      sleep(0.05) while @in_queue_prompt
       drain_pending_file(queue, current_request, queue_wakeup_writer)
       ready = IO.select(read_ios, nil, nil, 0.5)
       next if ready.nil?

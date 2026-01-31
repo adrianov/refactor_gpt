@@ -112,6 +112,20 @@ class SessionTracker
     previous_session[:last_agent_summary]
   end
 
+  # Appends a request to session request_history so queue-added requests appear in "Previous requests".
+  def append_to_request_history(request)
+    return if request.nil? || request.to_s.strip.empty?
+
+    previous = load_previous_session
+    request_history = previous&.dig(:request_history).to_a + expand_combined(request)
+    session_data = (previous || {}).merge(
+      request_history: request_history,
+      timestamp: Time.now.to_i,
+      cwd: Dir.pwd
+    )
+    File.write(session_file_path, Oj.dump(session_data, mode: :compat, indent: 2))
+  end
+
   def get_session_request_history(exclude_equal: nil)
     session_data = load_previous_session
     return [] unless session_data
