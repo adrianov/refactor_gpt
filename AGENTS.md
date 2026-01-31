@@ -23,10 +23,6 @@ ruby -c path/to/file.rb
 
 **Note**: This project does not have automated tests. Manual testing involves running the individual scripts.
 
-## Prompt sources
-
-Project guidelines for the agent prompt are loaded from (when present): **AGENTS.md**, **.cursorrules**, and **REFACTOR.md**. Default refactoring instructions come from REFACTOR.md.
-
 ## Ruby Development Guidelines
 
 When working with this codebase, follow these refactoring principles:

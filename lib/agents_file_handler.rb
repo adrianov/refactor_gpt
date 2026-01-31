@@ -9,10 +9,10 @@ module AgentsFileHandler
       path = File.join(project_dir, name)
       next unless File.exist?(path)
 
-      "--- #{name} ---\n#{File.read(path).strip}"
+      File.read(path).strip
     end
     refactor_path = File.join(program_dir, 'REFACTOR.md')
-    parts << "--- REFACTOR.md ---\n#{File.read(refactor_path).strip}" if File.exist?(refactor_path)
+    parts << File.read(refactor_path).strip if File.exist?(refactor_path)
     parts.empty? ? '' : parts.join("\n\n")
   end
 
