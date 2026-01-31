@@ -222,7 +222,7 @@ class RequestReader
 
     line
   rescue StandardError => e
-    @display.puts "Error reading input: #{e.message}".yellow
+    @display.puts "Error reading input: #{(e.message || e.class.name)}".yellow
     nil
   end
 
