@@ -155,7 +155,7 @@ class Superagent
   end
 
   def initialize_run(request)
-    update_terminal_title('Initializing...')
+    update_terminal_title('Waiting for request...')
     @display.check_late_night_reminder
     @start_time = Time.now unless request
     @git_initialized_this_run = @display.suggest_git_init if request.nil?
@@ -197,7 +197,7 @@ class Superagent
     @display.display_attempt_header(model, idx, models.size)
 
     start = Time.now
-    run_opts = { new_session: !@session_continuation, defer_full_prompt: true }
+    run_opts = { new_session: !@session_continuation, defer_full_prompt: false }
     if @prompt_request_reader
       run_opts[:prompt_request_reader] = @prompt_request_reader
       run_opts[:on_prompt_request] = method(:on_prompt_request_callback)
@@ -251,6 +251,7 @@ class Superagent
 
     update_terminal_title("Verifying: #{model}")
     run_verification_with_retries(model, req)
+    @session_tracker.append_to_request_history(verification_history_text(req), type: 'verification')
     h = @verification_handler
     pass_timing[:review_time] = h.review_time
     @display.out_puts ''
@@ -302,6 +303,7 @@ class Superagent
   end
 
   def retry_verification_with_fix(model, req, pass_timing, pass_start)
+    @session_tracker.append_to_request_history('Fix after verification failure', type: 'fix')
     update_terminal_title("Retrying: #{model}")
     fix_start = Time.now
     @verification_handler.retry_with_fix(model, req)
@@ -362,7 +364,7 @@ class Superagent
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_passes_recap(@pass_timings)
-    @display.display_verification_result(true, desc, context)
+    @display.display_verification_result(true, desc, context, full_recap: @current_agent_output)
     finalize_runtime_before_display
     @display.display_total_runtime(@start_time, active_elapsed: @active_elapsed, waiting_elapsed: @waiting_elapsed)
   end
@@ -427,9 +429,10 @@ class Superagent
   end
 
   # Runs in main thread (executor calls on_prompt_request synchronously). @in_queue_prompt pauses pending input thread.
+  # Agent keeps running; output is buffered then flushed in ensure.
   def run_request_form_in_main_thread
-    @display.set_output_paused(true)
     @agent_executor.emit_full_prompt_to_display if @agent_executor.respond_to?(:emit_full_prompt_to_display)
+    @display.set_output_paused(true)
     show_request_prompt
     @in_queue_prompt = true
     raw = @request_reader.read_interactive_silent
@@ -558,6 +561,14 @@ class Superagent
 
   def save_agent_summary(summary)
     save_current_session(@current_request, summary) if summary && !summary.to_s.strip.empty? && @current_request
+  end
+
+  def verification_history_text(req)
+    s = req.to_s.strip
+    return 'Verification' if s.empty?
+    first = s.lines.first&.strip || s
+    first = "#{first[0..56]}..." if first.length > 57
+    "Verification: #{first}"
   end
 
   def prepend_gitignore_instruction(raw_req)

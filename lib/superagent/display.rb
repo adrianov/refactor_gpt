@@ -273,7 +273,8 @@ class Display
       out_puts ''
     end
 
-    def display_verification_result(verified, desc, context = '', call_failed: false)
+    def display_verification_result(verified, desc, context = '', call_failed: false, full_recap: nil)
+      display_full_recap(full_recap) if verified && full_recap.to_s.strip != ''
       prefix = if call_failed
                  'Verification call did not complete'
                else
@@ -625,6 +626,15 @@ class Display
     end
 
     private
+
+    def display_full_recap(text)
+      return if text.to_s.strip == ''
+
+      out_puts ''
+      puts 'Full recap:'.cyan
+      text.to_s.each_line { |line| out_puts body("  #{line.chomp}") }
+      out_puts ''
+    end
 
     def timestamp_str
       Time.now.strftime("[%H:%M:%S] ").colorize(TIMESTAMP_COLOR)

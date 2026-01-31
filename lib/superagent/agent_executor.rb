@@ -170,7 +170,7 @@ class AgentExecutor
     return nil if recent.nil? || recent.empty?
 
     lines = recent.each_with_index.map { |req, i| format_previous_request_line(start_num + i, width, req) }
-    "\n\nPrevious requests in this session (oldest to newest, last #{recent.size}):\n" + lines.join("\n")
+    "\n\nPrevious requests in this project (oldest to newest, last #{recent.size}):\n" + lines.join("\n")
   end
 
   def non_interactive_notice
@@ -390,11 +390,9 @@ class AgentExecutor
 
   def print_full_prompt(prompt, new_session: false)
     return unless @show_prompt
+    return if prompt.to_s.strip.empty?
 
-    if new_session
-      @full_prompt_buffer = prompt.to_s
-      return
-    end
+    @full_prompt_buffer = prompt.to_s if new_session
     @display.puts '--- Full prompt ---'.light_black
     @display.output_raw(prompt.to_s)
     @display.puts '--- End prompt ---'.light_black
@@ -413,7 +411,7 @@ class AgentExecutor
       @full_prompt_buffer = prompt.to_s
     else
       print_full_prompt(prompt, new_session: new_session)
-      @full_prompt_buffer = nil if new_session
+      @full_prompt_buffer = nil unless new_session
     end
     @display.puts "Running: #{cmd.join(' ')}".green
     excerpt_str = format_prompt_excerpt(prompt)
@@ -611,6 +609,9 @@ class AgentExecutor
       end
       @display.puts "Running: #{command}".green if command && !command.empty?
     end
+    if text && !text.to_s.empty? && (type.nil? || %w[assistant result].include?(type.to_s))
+      @full_agent_output = (@full_agent_output || '') + text.to_s + "\n"
+    end
     return final unless text && !text.empty?
 
     case type
@@ -780,6 +781,7 @@ class AgentExecutor
   end
 
   def process_agent_output(stdout_stderr, wait_thr, prompt_request_reader: nil, on_prompt_request: nil)
+    @full_agent_output = ''
     raw, final, buffer = '', '', ''
     drain_prompt_pipe(prompt_request_reader) if prompt_request_reader && on_prompt_request
     read_ios = [stdout_stderr]
@@ -847,7 +849,8 @@ class AgentExecutor
     end
     status = wait_thr.value rescue Struct.new(:success?).new(false)
     status = Struct.new(:success?).new(false) if timed_out
-    out = (final.respond_to?(:empty?) && final.empty?) ? raw : final
+    fallback = (final.respond_to?(:empty?) && final.empty?) ? raw : final
+    out = (@full_agent_output.to_s.strip != '') ? @full_agent_output.to_s : fallback
     out = out.to_s
     success_for_display = status.success? || (@verification_mode && out.to_s.strip.length > 0)
     unless @passthrough
