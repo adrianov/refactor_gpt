@@ -36,25 +36,22 @@ A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring
    cp .env.example .env
    ```
 
-2. Edit `.env` and set your API credentials:
+2. Edit `.env` and set your API credentials. Set `MODEL` (and optionally `TECHNICAL_MODEL`, `IMAGE_MODEL`). Backend is chosen from the model name (e.g. `claude-*` → Claude, `gemini-*` → Gemini, `gpt-*` → OpenAI). Configure the backend(s) you use:
 
-   **For OpenAI (GPT models):**
+   **Unified model names:**
    ```
-   OPENAI_BASE_URL=https://api.openai.com/v1
-   OPENAI_ACCESS_TOKEN=your-api-key-here
-   ```
-
-   **For Gemini 3 Flash (preferred when available):**
-   ```
-   GEMINI_BASE_URL=https://opencode.ai/zen/v1
-   GEMINI_ACCESS_TOKEN=your-api-key-here
-   GEMINI_MODEL=gemini-3-flash
+   MODEL=claude-sonnet-4-5
+   TECHNICAL_MODEL=claude-haiku-4-5
+   IMAGE_MODEL=gemini-2.0-flash-exp
    ```
 
-   **Provider Selection:**
-   - If `GEMINI_ACCESS_TOKEN` is configured, Gemini will be used by default
-   - If only `OPENAI_ACCESS_TOKEN` is configured, OpenAI will be used
-   - The `--search` flag always uses OpenAI's search model
+   **Claude** (for `claude-*` models): `CLAUDE_BASE_URL`, `CLAUDE_ACCESS_TOKEN`
+
+   **OpenAI** (for `gpt-*`, `composer-*`, `dall-e*`): `OPENAI_BASE_URL`, `OPENAI_ACCESS_TOKEN`
+
+   **Gemini** (for `gemini-*`): `GEMINI_BASE_URL`, `GEMINI_ACCESS_TOKEN`
+
+   Default model is inferred from which token is set (Claude preferred, then Gemini, then OpenAI). The `--search` flag uses OpenAI's search model.
 
    **Proxy Configuration (Optional):**
    - Set `PROXY_URL` if you need to use a proxy to access the API
