@@ -287,7 +287,7 @@ class Superagent
   def run_verification_with_retries(model, req)
     exhausted = true
     (VERIFICATION_CALL_RETRIES + 1).times do |attempt|
-      @verification_handler.run_verification(model, req, @current_agent_output)
+      with_prompt_request_polling { @verification_handler.run_verification(model, req, @current_agent_output) }
       h = @verification_handler
       unless h.call_failed && h.retryable
         exhausted = false
@@ -306,7 +306,7 @@ class Superagent
     @session_tracker.append_to_request_history('Fix after verification failure', type: 'fix')
     update_terminal_title("Retrying: #{model}")
     fix_start = Time.now
-    @verification_handler.retry_with_fix(model, req)
+    with_prompt_request_polling { @verification_handler.retry_with_fix(model, req) }
     h = @verification_handler
     pass_timing[:fix_time] = Time.now - fix_start - (h.review_time || 0)
     pass_timing[:review_time] += (h.review_time || 0)
@@ -415,6 +415,15 @@ class Superagent
     on_prompt_request_callback
   end
 
+  def with_prompt_request_polling
+    thr = Thread.new { yield }
+    while thr.alive?
+      process_prompt_request_if_pending
+      thr.join(0.1)
+    end
+    thr.join
+  end
+
   def drain_prompt_request_pipe
     return unless @prompt_request_reader
     loop do
@@ -431,9 +440,9 @@ class Superagent
   # Runs in main thread (executor calls on_prompt_request synchronously). @in_queue_prompt pauses pending input thread.
   # Agent keeps running; output is buffered then flushed in ensure.
   def run_request_form_in_main_thread
+    show_request_prompt
     @agent_executor.emit_full_prompt_to_display if @agent_executor.respond_to?(:emit_full_prompt_to_display)
     @display.set_output_paused(true)
-    show_request_prompt
     @in_queue_prompt = true
     raw = @request_reader.read_interactive_silent
     return unless raw
@@ -636,12 +645,9 @@ class Superagent
     $stdin
   end
 
-  ENTER_SIGNAL_DELAY = 0.5
-
   def run_pending_input_loop_cooked(reader, queue, current_request, buffer, input_io, prompt_request_writer = nil)
     return unless input_io
 
-    thread_start = Time.now
     read_ios = [reader, input_io].compact
     loop do
       sleep(0.05) while @in_queue_prompt
@@ -653,7 +659,7 @@ class Superagent
       line = input_io.gets
       break if line.nil?
 
-      if single_enter?(line, buffer) && (Time.now - thread_start) >= ENTER_SIGNAL_DELAY
+      if single_enter?(line, buffer)
         prompt_request_writer&.write('x')
         next
       end
