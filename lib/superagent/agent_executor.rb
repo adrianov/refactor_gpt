@@ -793,7 +793,7 @@ class AgentExecutor
           read_ios.delete(prompt_request_reader)
           next
         end
-        on_prompt_request.call
+        Thread.new { on_prompt_request.call }
         drain_prompt_pipe(prompt_request_reader)
         next
       end
