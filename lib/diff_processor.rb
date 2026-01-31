@@ -6,6 +6,8 @@ require_relative "diff_compactor"
 # newline boundaries (full lines); mid-line cut only when line exceeds threshold.
 class DiffProcessor
   FILE_TRUNCATION_SUFFIX = "\n... (file truncated due to size limit)\n"
+  # Separator between file diffs in the final assembled output (blank line between files).
+  FILE_DIFF_SEPARATOR = "\n\n"
   # Only cut in the middle of a line when the line (in slice) is longer than this (bytes).
   MAX_LINE_BEFORE_MID_CUT = 2000
 
@@ -30,15 +32,16 @@ class DiffProcessor
     sorted_files = sort_files_by_importance(file_diffs, file_statuses)
 
     included_diffs, skipped_count = collect_diffs(sorted_files, file_statuses, max_bytes)
-
-    result = included_diffs.join("\n")
-    if skipped_count > 0
-      result += "\n\n... (#{skipped_count} more file(s) skipped or truncated due to size limit)\n"
-    end
-    result
+    assemble_result(included_diffs, skipped_count)
   end
 
   private
+
+  def assemble_result(included_diffs, skipped_count)
+    result = included_diffs.join(FILE_DIFF_SEPARATOR)
+    result += "\n\n... (#{skipped_count} more file(s) skipped or truncated due to size limit)\n" if skipped_count > 0
+    result
+  end
 
   def collect_diffs(sorted_files, file_statuses, max_bytes)
     included_diffs = []

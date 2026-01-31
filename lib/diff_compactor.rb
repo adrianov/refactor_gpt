@@ -271,12 +271,7 @@ class DiffCompactor
   end
 
   def flush_trailing_skip_marker(state)
-    return unless state[:trailing_skipped_count] && state[:trailing_skipped_count] > 0
-
-    state[:result] << format_skip_marker(
-      state[:trailing_skipped_start], state[:trailing_skipped_end], state[:trailing_skipped_count]
-    )
-    state[:trailing_skipped_count] = 0
+    emit_trailing_skip_marker_if_present(state)
   end
 
   def finalize_hunk_context(state, _max_context)
@@ -297,11 +292,16 @@ class DiffCompactor
   end
 
   def append_trailing_skip_if_present(state)
+    emit_trailing_skip_marker_if_present(state)
+  end
+
+  def emit_trailing_skip_marker_if_present(state)
     return unless state[:trailing_skipped_count] && state[:trailing_skipped_count] > 0
 
     state[:result] << format_skip_marker(
       state[:trailing_skipped_start], state[:trailing_skipped_end], state[:trailing_skipped_count]
     )
+    state[:trailing_skipped_count] = 0
   end
 
   def format_skip_marker(start_line, end_line, count)
