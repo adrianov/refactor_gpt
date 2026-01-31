@@ -118,7 +118,9 @@ class Display
       exit 0
     end
 
-    def print_word(text, stream_id: nil)
+    # Appends assistant text to the line buffer and flushes complete lines. Buffers by newline
+    # so partial lines from multiple stream lines are reassembled before display.
+    def print_assistant_text(text, stream_id: nil)
       return if text.nil? || text.to_s.empty?
       return if StreamFilter.think_close_only?(text)
 
@@ -134,7 +136,7 @@ class Display
       maybe_flush_long_buffer(is_new_stream)
     end
 
-    def flush_word_buffer
+    def flush_assistant_text_buffer
       clear_thinking_indicator
       return if @text_buffer.nil? || @text_buffer.empty?
 
@@ -143,14 +145,48 @@ class Display
       @text_buffer = @text_buffer.sub(/\n{2,}\z/, "\n")
       process_complete_lines
 
-      unless @text_buffer.to_s.strip.empty?
-        ensure_timestamp if @at_start_of_line
-        out_print body(@text_buffer)
-        out_puts '' unless @text_buffer.end_with?("\n")
-        @text_buffer = ''
-        @at_start_of_line = true
-        @has_printed_in_stream = true
-        $stdout.flush
+      @text_buffer.to_s.strip.empty? ? clear_trailing_whitespace_buffer : flush_trailing_buffer_content
+    end
+
+    def clear_trailing_whitespace_buffer
+      @text_buffer = ''
+      @at_start_of_line = true
+      out_puts ''
+      $stdout.flush
+    end
+
+    def flush_trailing_buffer_content
+      ensure_timestamp if @at_start_of_line
+      out_print body(@text_buffer)
+      out_puts '' unless @text_buffer.end_with?("\n")
+      @text_buffer = ''
+      @at_start_of_line = true
+      @has_printed_in_stream = true
+      $stdout.flush
+    end
+
+    # Ensure newline after think block ends. When buffer is empty (e.g. think_close_only
+    # line), flush_assistant_text_buffer returns without outputting; output newline so next
+    # line (e.g. tool call) does not run on (regression fix).
+    def ensure_newline_after_think_close
+      flush_assistant_text_buffer
+      return if @at_start_of_line
+
+      out_puts ''
+      @at_start_of_line = true
+      $stdout.flush
+    end
+
+    # Applies display for one stream line: flushes newline when think block ends (only or trailing),
+    # then prints thinking indicator or assistant text as appropriate.
+    def apply_stream_line_display(type, text, stream_id, think_close_only:, trailing_think_close:, passthrough:)
+      ensure_newline_after_think_close if think_close_only
+      case type
+      when 'thinking'
+        print_thinking_indicator unless passthrough || think_close_only
+      when 'assistant', nil
+        print_assistant_text(text, stream_id: stream_id) unless passthrough || think_close_only
+        ensure_newline_after_think_close if trailing_think_close
       end
     end
 

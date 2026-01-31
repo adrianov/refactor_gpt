@@ -8,6 +8,7 @@ require 'timeout'
 require_relative 'agent_prompt_builder'
 require_relative 'json_stream_parser'
 require_relative 'process_descendants'
+require_relative 'stream_line_parser'
 require_relative 'run_failure_classifier'
 require_relative 'stream_filter'
 require_relative 'test_runner_detector'
@@ -24,6 +25,7 @@ class AgentExecutor
     @session_tracker = session_tracker
     @prompt_builder = AgentPromptBuilder.new(session_tracker)
     @stream_parser = JsonStreamParser.new
+    @stream_line_parser = StreamLineParser.new(json_parser: @stream_parser)
     @state_mutex = Mutex.new
     @full_prompt_buffer = nil
     @show_prompt = show_prompt
@@ -215,15 +217,20 @@ class AgentExecutor
     end
   end
 
-  def process_json_stream_line(line, final)
-    type, text, stream_id, command, tool = @stream_parser.parse(line.to_s.strip)
-    record_tool_used(tool) if tool
-    display_tool_and_command(tool, command) unless @passthrough
-    think_close = (type.nil? || type.to_s == 'assistant') && StreamFilter.think_close_only?(text)
-    accumulate_assistant_text(type, text, think_close)
-    return final unless text && !text.empty?
+  # Processes one full stream line (one JSON line from agent). Same logic can be fed from live
+  # stdout or from a file (e.g. ~/output.log) for parsing/formatting checks.
+  def process_stream_line(line, final)
+    parsed = @stream_line_parser.parse_stream_line(line)
+    record_tool_used(parsed[:tool]) if parsed[:tool]
+    display_tool_and_command(parsed[:tool], parsed[:command]) unless @passthrough
+    accumulate_assistant_text(parsed)
+    return final unless parsed[:text] && !parsed[:text].empty?
 
-    handle_stream_line_display(type, text, stream_id, think_close, final)
+    handle_stream_line_display(parsed, final)
+  end
+
+  def parse_stream_line(line)
+    @stream_line_parser.parse_stream_line(line)
   end
 
   private
@@ -255,15 +262,22 @@ class AgentExecutor
     @tools_used << tool.dup
   end
 
-  def accumulate_assistant_text(type, text, think_close)
-    return unless text && !text.to_s.empty?
-    return unless type.nil? || type.to_s == 'assistant'
-    return if think_close
+  def accumulate_assistant_text(parsed)
+    return unless accumulatable_assistant?(parsed)
 
-    stripped = StreamFilter.strip_trailing_think_close(text)
+    stripped = StreamFilter.strip_trailing_think_close(parsed[:text])
     return if stripped.to_s.strip.empty?
 
     @full_agent_output = (@full_agent_output || '') + stripped.to_s + "\n"
+  end
+
+  def accumulatable_assistant?(parsed)
+    text = parsed[:text]
+    return false unless text && !text.to_s.empty?
+    return false unless parsed[:type].nil? || parsed[:type].to_s == 'assistant'
+    return false if parsed[:think_close_only]
+
+    true
   end
 
   def display_tool_result(tool)
@@ -345,17 +359,16 @@ class AgentExecutor
     @display.puts "Running: #{command}".green if command && !command.empty?
   end
 
-  def handle_stream_line_display(type, text, stream_id, think_close, final)
-    case type
-    when 'result' then text
-    when 'thinking'
-      unless @passthrough || StreamFilter.think_close_only?(text)
-        @display.print_thinking_indicator
-      end
-      final
-    when 'assistant', nil
-      @display.print_word(text, stream_id: stream_id) unless @passthrough || think_close
-      final
+  def handle_stream_line_display(parsed, final)
+    @display.apply_stream_line_display(
+      parsed[:type], parsed[:text], parsed[:stream_id],
+      think_close_only: parsed[:think_close_only],
+      trailing_think_close: parsed[:trailing_think_close],
+      passthrough: @passthrough
+    )
+    case parsed[:type]
+    when 'result' then parsed[:text]
+    when 'thinking', 'assistant', nil then final
     else final
     end
   end
@@ -549,7 +562,7 @@ class AgentExecutor
       line = line_with_newline.to_s.strip
       buffer = buffer[(idx + 1)..-1] || ''
       $stdout.write(line_with_newline) && $stdout.flush if @passthrough
-      final = process_json_stream_line(line, final)
+      final = process_stream_line(line, final)
     end
     [buffer, final]
   end
@@ -577,7 +590,7 @@ class AgentExecutor
   end
 
   def finalize_display(success_for_display)
-    @display.flush_word_buffer
+    @display.flush_assistant_text_buffer
     display_tools_summary
     @display.display_agent_call_result(success_for_display, @tools_used.size)
   end

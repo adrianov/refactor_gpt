@@ -6,6 +6,10 @@ require_relative "agent_executor"
 require_relative "verification_handler"
 require_relative "session_tracker"
 require_relative "pending_request_queue"
+require_relative "request_history_formatter"
+require_relative "request_preparer"
+require_relative "pass_timing_builder"
+require_relative "attempt_execution"
 require_relative "auto_only_lock"
 require_relative "../completion_notifier"
 require_relative "../instance_lock"
@@ -13,14 +17,8 @@ require_relative "../../ask_gpt"
 
 # Main orchestrator class for superagent execution
 class Superagent
-  NON_INTERACTIVE_NOTICE = /
-    (?:^|\n)
-    IMPORTANT:\s+This\s+agent\s+runs\s+in\s+non-interactive\s+mode\.
-    .*?
-    (?:make\s+all\s+decisions\s+autonomously|execute\s+tasks\s+directly|without\s+requesting\s+user\s+input)
-    .*?
-    \s*
-  /mix
+  include AttemptExecution
+
   MODELS = %w[
     auto
     gemini-3-flash
@@ -31,8 +29,6 @@ class Superagent
     claude-4.5-opus
   ].freeze
   MODELS_AUTO_ONLY = %w[auto auto auto].freeze
-
-  GITIGNORE_PREPEND = "Ensure .gitignore excludes build artifacts, dependencies, and other unneeded files and folders. "
 
   def initialize(
     display: Display.new,
@@ -46,26 +42,33 @@ class Superagent
     @display = display
     @session_tracker = session_tracker || SessionTracker.new(@display)
     @request_reader = request_reader || RequestReader.new(@display)
-    @agent_executor = agent_executor || AgentExecutor.new(
-      @display,
-      session_tracker: @session_tracker,
-      show_prompt: show_prompt
-    )
-    @verification_handler = verification_handler || VerificationHandler.new(
-      @display,
-      @agent_executor,
-      session_tracker: @session_tracker
-    )
+    @agent_executor = agent_executor ||
+      AgentExecutor.new(@display, session_tracker: @session_tracker, show_prompt: show_prompt)
+    @verification_handler = verification_handler || VerificationHandler.new(@display, @agent_executor)
+    initialize_runtime_state
+    @auto_only = auto_only
+    @git_initialized_this_run = false
+  end
+
+  def initialize_runtime_state
+    initialize_runtime_timing
+    initialize_runtime_session
+  end
+
+  def initialize_runtime_timing
     @start_time = nil
     @active_elapsed = 0
     @waiting_elapsed = 0
     @active_start = nil
     @waiting_start = nil
+    @feature_start_time = nil
+    @pass_timings = []
+  end
+
+  def initialize_runtime_session
     @current_pass = nil
     @current_model = nil
     @current_model_index = 0
-    @pass_timings = []
-    @feature_start_time = nil
     @session_description = nil
     @session_tags = []
     @session_continuation = false
@@ -75,43 +78,62 @@ class Superagent
     @session_outcomes = []
     @agent_thread = nil
     @agent_result_mutex = Mutex.new
-    @auto_only = auto_only
-    @git_initialized_this_run = false
   end
 
   def run(start_model_index: 0, request: nil, continuation_analysis: nil)
     @session_outcomes ||= []
     initialize_run(request)
-    @waiting_start = Time.now if request.nil?
-    raw_req = request || @request_reader.read
-    raw_req = prepend_gitignore_instruction(raw_req) if request.nil? && @git_initialized_this_run
-    if @waiting_start
-      @waiting_elapsed += Time.now - @waiting_start
-      @waiting_start = nil
-    end
-    @request_reader.add_to_request_history(raw_req) if request.nil? && !raw_req.to_s.strip.empty?
-    model_index_from_request = extract_model_index(raw_req)
-    req = sanitize_request(raw_req)
-    @request_reader.validate(req)
+    raw_req, req = run_setup_request(request)
     @current_request = req
-
     apply_continuation_analysis(continuation_analysis) if continuation_analysis
     save_current_session(req)
 
-    start_index = determine_start_index(model_index_from_request, start_model_index)
-    @display.display_start_message(req, @session_continuation, @session_tags)
-    update_terminal_title(@session_continuation ? "↻ Continuing session" : "Running...")
-
+    start_index = run_start_index(raw_req, req, start_model_index)
     return run_plan_mode(req, start_index) if @request_reader.plan_mode
 
-    @display.display_pending_hint
+    run_start_feature
+    run_with_interactive_queue(start_index, req)
+  end
 
+  def run_setup_request(request)
+    raw_req = run_read_request(request)
+    run_accumulate_waiting_time if @waiting_start
+    @request_reader.add_to_request_history(raw_req) if request.nil? && !raw_req.to_s.strip.empty?
+    req = run_prepare_request(raw_req)
+    [raw_req, req]
+  end
+
+  def run_start_index(raw_req, req, start_model_index)
+    model_idx = RequestPreparer.extract_model_index(raw_req, models)
+    start_index = determine_start_index(model_idx, start_model_index)
+    @display.display_start_message(req, @session_continuation, @session_tags)
+    update_terminal_title(@session_continuation ? "↻ Continuing session" : "Running...")
+    start_index
+  end
+
+  def run_read_request(request)
+    @waiting_start = Time.now if request.nil?
+    raw_req = request || @request_reader.read
+    raw_req = RequestPreparer.prepend_gitignore_instruction(raw_req) if request.nil? && @git_initialized_this_run
+    raw_req
+  end
+
+  def run_accumulate_waiting_time
+    @waiting_elapsed += Time.now - @waiting_start
+    @waiting_start = nil
+  end
+
+  def run_prepare_request(raw_req)
+    req = RequestPreparer.sanitize_request(raw_req, models)
+    @request_reader.validate(req)
+    req
+  end
+
+  def run_start_feature
+    @display.display_pending_hint
     @feature_start_time = Time.now
     @pass_timings = []
     @active_start = Time.now
-
-    # Run agent in background thread, keep main thread for input (Reline requires main thread)
-    run_with_interactive_queue(start_index, req)
   end
 
   # Main thread listens for Enter key and runs Reline for queue input.
@@ -164,7 +186,7 @@ class Superagent
   # Pause agent output, show prompt, read with Reline, add to queue, resume output.
   def handle_queue_input_request
     @display.set_output_paused(true)
-    @display.flush_word_buffer
+    @display.flush_assistant_text_buffer
 
     $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
     $stdout.flush
@@ -178,25 +200,29 @@ class Superagent
   end
 
   def run_plan_mode(req, start_index = 0)
+    run_plan_mode_start
+    models[start_index..-1].each_with_index do |model, relative_idx|
+      idx = start_index + relative_idx
+      return handle_plan_success if run_plan_mode_attempt(model, idx, req)
+    end
+    handle_final_failure
+  end
+
+  def run_plan_mode_start
     @active_start = Time.now
     update_terminal_title("Planning...")
     @display.puts "Running in plan mode...".cyan
     @display.out_puts ""
+  end
 
-    models[start_index..-1].each_with_index do |model, relative_idx|
-      idx = start_index + relative_idx
-      @current_pass = idx + 1
-      @current_model = model
-      update_terminal_title("Planning: #{model}")
-      @display.display_attempt_header(model, idx, models.size)
-
-      success, output = @agent_executor.run_plan_mode(model, req, new_session: !@session_continuation)
-      return handle_plan_success if success
-
-      @display.display_agent_failure(output, nil)
-    end
-
-    handle_final_failure
+  def run_plan_mode_attempt(model, idx, req)
+    @current_pass = idx + 1
+    @current_model = model
+    update_terminal_title("Planning: #{model}")
+    @display.display_attempt_header(model, idx, models.size)
+    success, output = @agent_executor.run_plan_mode(model, req, new_session: !@session_continuation)
+    @display.display_agent_failure(output, nil) unless success
+    success
   end
 
   private
@@ -220,179 +246,6 @@ class Superagent
     @start_time = Time.now unless request
     @git_initialized_this_run = @display.suggest_git_init if request.nil?
     @display.update_git_status unless request
-  end
-
-  ATTEMPTS_PER_MODEL = 2
-
-  def execute_attempts(start_index, req)
-    @current_model_index = start_index
-    @attempt_count_per_model = {} unless @session_continuation
-    highest_index_reached = start_index
-    early_exit = nil
-    models[@current_model_index..-1].each_with_index do |model, relative_idx|
-      idx = @current_model_index + relative_idx
-      @current_pass = idx + 1
-      @current_model = model
-      highest_index_reached = idx if idx > highest_index_reached
-      next if (@attempt_count_per_model[model] || 0) >= ATTEMPTS_PER_MODEL
-
-      result = run_model_attempt(model, idx, req)
-      break if result == :success
-      if result == :switch_to_auto_only
-        @display.puts "Usage limit reached; switching to auto-only model queue.".yellow
-        execute_attempts(0, req)
-        early_exit = true
-        break
-      end
-    end
-    return if early_exit
-
-    @current_model_index = highest_index_reached
-  end
-
-  def run_model_attempt(model, idx, req)
-    attempt_number = (@attempt_count_per_model[model] || 0) + 1
-    update_terminal_title("Attempting: #{model} (attempt #{attempt_number}/#{ATTEMPTS_PER_MODEL})")
-    @display.display_attempt_header(model, idx, models.size)
-
-    start = Time.now
-    run_opts = {new_session: !@session_continuation, defer_full_prompt: false}
-    success, output, reason = @agent_executor.run(model, req, **run_opts)
-    elapsed = Time.now - start
-
-    unless success
-      return record_network_failure(model, output, elapsed, reason) || :continue
-    end
-
-    @current_implementation_time = elapsed
-    @current_agent_output = output
-    save_agent_summary(output) if output && !output.to_s.strip.empty?
-
-    result = process_verification_and_fix(model, req)
-    record_attempt_failure(model) if result != :success
-    result
-  end
-
-  def record_network_failure(model, output, implementation_time, reason = nil)
-    if @agent_executor.usage_unrecoverable?(output)
-      AutoOnlyLock.create
-      @auto_only = true
-    end
-    @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
-    @display.display_agent_failure(output, reason)
-    pass_timing = {
-      pass: @current_pass,
-      model: model,
-      implementation_time: implementation_time,
-      review_time: 0,
-      fix_time: 0,
-      total_time: implementation_time
-    }
-    @pass_timings << pass_timing
-    @display.display_pass_timing(pass_timing)
-    @auto_only ? :switch_to_auto_only : nil
-  end
-
-  def process_verification_and_fix(model, req)
-    pass_start = Time.now
-    pass_timing = {
-      pass: @current_pass,
-      model: model,
-      implementation_time: @current_implementation_time,
-      review_time: 0,
-      fix_time: 0,
-      total_time: 0
-    }
-
-    update_terminal_title("Verifying: #{model}")
-    run_verification_with_retries(model, req)
-    @session_tracker.append_to_request_history(verification_history_text(req), type: "verification")
-    h = @verification_handler
-    pass_timing[:review_time] = h.review_time
-    @display.out_puts ""
-
-    if h.call_failed
-      record_attempt_failure(model)
-      usage_output = (h.raw_output && !h.raw_output.empty?) ? h.raw_output : h.desc
-      if @agent_executor.usage_unrecoverable?(usage_output)
-        AutoOnlyLock.create
-        @auto_only = true
-      end
-      @display.display_verification_result(false, h.desc, "", call_failed: true)
-      @display.out_puts ""
-      pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
-      @pass_timings << pass_timing
-      @display.display_pass_timing(pass_timing)
-      return :switch_to_auto_only if @auto_only
-      return :continue
-    end
-
-    if h.verified
-      finalize_success(pass_timing, pass_start, h.desc, req)
-      return :success
-    end
-
-    @display.display_verification_result(false, h.desc)
-    @display.out_puts ""
-    retry_verification_with_fix(model, req, pass_timing, pass_start)
-  end
-
-  VERIFICATION_CALL_RETRIES = 2
-
-  def run_verification_with_retries(model, req)
-    exhausted = true
-    (VERIFICATION_CALL_RETRIES + 1).times do |attempt|
-      @verification_handler.run_verification(model, req, @current_agent_output)
-      h = @verification_handler
-      unless h.call_failed && h.retryable
-        exhausted = false
-        break
-      end
-      break if attempt >= VERIFICATION_CALL_RETRIES
-
-      @display.puts "Connection/network error during verification (retrying up to 3 times)...".yellow
-      @display.out_puts ""
-    end
-    h = @verification_handler
-    @verification_handler.finalize_call_failed(h.verified, h.desc, h.review_time, h.raw_output) if exhausted
-  end
-
-  def retry_verification_with_fix(model, req, pass_timing, pass_start)
-    @session_tracker.append_to_request_history("Fix after verification failure", type: "fix")
-    update_terminal_title("Retrying: #{model}")
-    fix_start = Time.now
-    @verification_handler.retry_with_fix(model, req)
-    h = @verification_handler
-    pass_timing[:fix_time] = Time.now - fix_start - (h.review_time || 0)
-    pass_timing[:review_time] += h.review_time || 0
-    @display.out_puts ""
-    save_agent_summary(h.fix_output) if h.fix_output
-
-    if h.verified
-      finalize_success(pass_timing, pass_start, h.desc, req, "after retry")
-      return :success
-    end
-
-    @last_attempt_success = false
-    @display.display_verification_result(false, h.desc, "after retry")
-    @display.out_puts ""
-    pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
-    @pass_timings << pass_timing
-    @display.display_pass_timing(pass_timing)
-    :continue
-  end
-
-  def finalize_success(pass_timing, pass_start, desc, req, context = "")
-    pass_timing[:total_time] = Time.now - pass_start + @current_implementation_time
-    @pass_timings << pass_timing
-    handle_success(desc, context)
-    # Store req for main thread to call handle_final_success (Reline requires main thread)
-    @agent_result_mutex.synchronize { @success_req = req }
-    @last_attempt_success = true
-  end
-
-  def record_attempt_failure(model)
-    @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
   end
 
   def add_active_segment
@@ -438,21 +291,25 @@ class Superagent
     pending = @pending_queue.take_all
     CompletionNotifier.notify_completion(success: true) if pending.empty?
     if pending.any?
-      combined = @pending_queue.to_combined_request(pending)
-      @display.display_pending_list(pending)
-      InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
-      unless InstanceLock.acquire_lock
-        base_name = InstanceLock.project_base_name
-        @display.puts "Another instance is already running for this project (#{base_name}). Exiting.".red
-        exit 1
-      end
-      model_index = extract_model_index(combined)
-      execute_new_request(combined, previous_req, model_index)
+      process_pending_with_requests(pending, previous_req)
     else
       InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
       add_active_segment
       prompt_for_new_request(previous_req)
     end
+  end
+
+  def process_pending_with_requests(pending, previous_req)
+    combined = @pending_queue.to_combined_request(pending)
+    @display.display_pending_list(pending)
+    InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
+    unless InstanceLock.acquire_lock
+      msg = "Another instance is already running for this project (#{InstanceLock.project_base_name}). Exiting."
+      @display.puts msg.red
+      exit 1
+    end
+    model_index = RequestPreparer.extract_model_index(combined, models)
+    execute_new_request(combined, previous_req, model_index)
   end
 
   def process_queue_input(raw)
@@ -471,24 +328,34 @@ class Superagent
     update_terminal_title("✅ Passed")
     @waiting_start = Time.now
     raw_new_req = @request_reader.read_request
-    if @waiting_start
-      @waiting_elapsed += Time.now - @waiting_start
-      @waiting_start = nil
-    end
-    unless raw_new_req.to_s.strip.empty?
-      @request_reader.add_to_request_history(raw_new_req)
-      @session_tracker.append_to_request_history(raw_new_req)
-    end
+    prompt_accumulate_waiting
+    prompt_save_history(raw_new_req) unless raw_new_req.to_s.strip.empty?
     @active_start = Time.now
     exit 0 if raw_new_req.to_s.strip.empty?
 
-    model_index = extract_model_index(raw_new_req)
-    new_req = sanitize_request(raw_new_req)
+    prompt_execute_new_request(raw_new_req, previous_req)
+  end
+
+  def prompt_accumulate_waiting
+    return unless @waiting_start
+
+    @waiting_elapsed += Time.now - @waiting_start
+    @waiting_start = nil
+  end
+
+  def prompt_save_history(raw_new_req)
+    @request_reader.add_to_request_history(raw_new_req)
+    @session_tracker.append_to_request_history(raw_new_req)
+  end
+
+  def prompt_execute_new_request(raw_new_req, previous_req)
+    model_index = RequestPreparer.extract_model_index(raw_new_req, models)
+    new_req = RequestPreparer.sanitize_request(raw_new_req, models)
     return if new_req.to_s.strip.empty?
 
     unless InstanceLock.acquire_lock
-      base_name = InstanceLock.project_base_name
-      @display.puts "Another instance is already running for this project (#{base_name}). Exiting.".red
+      msg = "Another instance is already running for this project (#{InstanceLock.project_base_name}). Exiting."
+      @display.puts msg.red
       exit 1
     end
     execute_new_request(new_req, previous_req, model_index)
@@ -575,44 +442,6 @@ class Superagent
 
   def save_agent_summary(summary)
     save_current_session(@current_request, summary) if summary && !summary.to_s.strip.empty? && @current_request
-  end
-
-  def verification_history_text(req)
-    s = req.to_s.strip
-    return "Verification" if s.empty?
-    first = s.lines.first&.strip || s
-    first = "#{first[0..56]}..." if first.length > 57
-    "Verification: #{first}"
-  end
-
-  def prepend_gitignore_instruction(raw_req)
-    base = raw_req.to_s.strip
-    base.empty? ? GITIGNORE_PREPEND.strip : "#{GITIGNORE_PREPEND}#{raw_req}"
-  end
-
-  def sanitize_request(req)
-    return req if req.nil?
-
-    remove_model_mentions(req.gsub(NON_INTERACTIVE_NOTICE, "\n").strip)
-  end
-
-  def extract_model_index(req)
-    return nil if req.nil?
-
-    req.scan(/@(\S+)/).flatten.each do |mention|
-      model_index = models.index(mention)
-      return model_index if model_index
-    end
-    nil
-  end
-
-  def remove_model_mentions(req)
-    return req if req.nil?
-
-    cleaned = req.gsub(/@(\S+)/) do |match|
-      models.include?($1) ? "" : match
-    end
-    cleaned.strip
   end
 
   def user_disagrees_with_verification?(tags)
