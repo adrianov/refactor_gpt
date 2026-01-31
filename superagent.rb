@@ -30,8 +30,7 @@ if __FILE__ == $PROGRAM_NAME
       When another instance is running, enter requests to queue; empty line to finish, /discard to exit without queueing.
       Options:
         -h, --help           Show this help
-        --resume             Resume from previous session
-        --show-prompt        Show the system prompt
+        --no-show-prompt     Do not show the system prompt (prompt is shown by default)
         --skip-midnight, --no-midnight   Skip midnight-rollover check
     HELP
     exit 0
@@ -39,9 +38,8 @@ if __FILE__ == $PROGRAM_NAME
 
   CompletionNotifier.setup_exit_hook
   skip_midnight_check = ARGV.include?('--skip-midnight') || ARGV.include?('--no-midnight')
-  resume_enabled = ARGV.include?('--resume')
-  show_prompt = ARGV.include?('--show-prompt')
-  ARGV.reject! { |a| %w[--skip-midnight --no-midnight --resume --show-prompt].include?(a) }
+  show_prompt = !ARGV.include?('--no-show-prompt')
+  ARGV.reject! { |a| %w[--skip-midnight --no-midnight --no-show-prompt].include?(a) }
 
   display = Display.new(skip_midnight_check: skip_midnight_check)
   auto_only = AutoOnlyLock.exist?
@@ -77,7 +75,7 @@ if __FILE__ == $PROGRAM_NAME
     end
 
     Superagent.new(
-      display: display, request_reader: request_reader, auto_only: auto_only, resume_enabled: resume_enabled,
+      display: display, request_reader: request_reader, auto_only: auto_only,
       show_prompt: show_prompt
     ).run
   ensure
