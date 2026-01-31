@@ -2,10 +2,12 @@
 
 require_relative "diff_compactor"
 
-# Builds and truncates unified diffs for commit planning; truncation boundary
-# uses newline then word boundary so context is not cut mid-word.
+# Builds and truncates unified diffs for commit planning. Truncation prefers
+# newline boundaries (full lines); mid-line cut only when line exceeds threshold.
 class DiffProcessor
   FILE_TRUNCATION_SUFFIX = "\n... (file truncated due to size limit)\n"
+  # Only cut in the middle of a line when the line (in slice) is longer than this (bytes).
+  MAX_LINE_BEFORE_MID_CUT = 2000
 
   CODE_EXTENSIONS = %w[
     .rb .c .h .cpp .hpp .cc .cxx .java .py .js .ts .jsx .tsx .go .rs .swift
@@ -138,23 +140,43 @@ class DiffProcessor
     result
   end
 
-  # Returns [byte_length_to_keep, add_truncation_suffix?]. Cuts at last newline
-  # before max_bytes; when no newline in first max_bytes, at last word boundary.
+  # Returns [byte_length_to_keep, add_truncation_suffix?]. Prefers cutting at
+  # last newline (full line); when no newline in range, cuts mid-line only if line is very long.
   def truncation_boundary(content, max_bytes)
-    slice = content.byteslice(0, max_bytes)
+    slice = truncation_slice(content, max_bytes)
+    cut = cut_at_newline(slice, content.bytesize, max_bytes)
+    return cut if cut
+
+    boundary_when_no_newline(slice, content.bytesize, max_bytes)
+  end
+
+  def truncation_slice(content, max_bytes)
+    content.byteslice(0, max_bytes)
+  end
+
+  # Returns [keep_byte_len, truncated?] when slice contains a newline; nil otherwise.
+  def cut_at_newline(slice, content_bytesize, max_bytes)
     last_newline = slice.rindex("\n")
-    if last_newline.nil?
-      keep_len = last_word_boundary_byte_len(slice)
-      kept = keep_len || max_bytes
-      [kept, content.bytesize > kept]
+    return nil if last_newline.nil?
+
+    [last_newline + 1, content_bytesize > max_bytes]
+  end
+
+  # [keep_byte_len, add_suffix?] when slice has no newline: short line → skip; long line → mid-line cut.
+  def boundary_when_no_newline(slice, content_bytesize, max_bytes)
+    return [slice.bytesize, false] if content_bytesize <= max_bytes
+
+    if slice.bytesize <= MAX_LINE_BEFORE_MID_CUT
+      [0, content_bytesize > 0]
     else
-      [last_newline + 1, content.bytesize > max_bytes]
+      keep_len = mid_line_cut_byte_len(slice)
+      kept = keep_len || max_bytes
+      [kept, content_bytesize > kept]
     end
   end
 
-  # Byte length to keep so the slice ends at a word boundary (last space/tab or
-  # last non-word char). Nil if no boundary found.
-  def last_word_boundary_byte_len(slice)
+  # Byte length to keep when cutting mid-line (at last word/space boundary). Nil if none.
+  def mid_line_cut_byte_len(slice)
     last_ws = slice.rindex(/\s/)
     return last_ws + 1 if last_ws
 
