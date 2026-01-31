@@ -11,6 +11,7 @@ class Display
   TIMESTAMP_COLOR = :light_blue
   BODY_COLOR = :light_black
   CURSOR = TTY::Cursor
+  SUMMARY_MARKER = /^\s*Summary of changes\s*:?\s*$/i
 
   def puts(*args)
     @at_start_of_line = true
@@ -213,8 +214,9 @@ class Display
         padding: [0, 1],
         border: :light
       )
-      out_print box
-      out_puts ''
+      $stdout.print box
+      $stdout.puts ''
+      $stdout.flush
     end
 
     # Lists queued requests; shows running request preview if any.
@@ -632,8 +634,21 @@ class Display
 
       out_puts ''
       puts 'Full recap:'.cyan
-      text.to_s.each_line { |line| out_puts body("  #{line.chomp}") }
+      lines = text.to_s.each_line.to_a
+      summary_idx = lines.index { |l| l =~ SUMMARY_MARKER }
+      print_recap_intro(lines, summary_idx)
+      print_recap_summary(lines, summary_idx) if summary_idx
       out_puts ''
+      $stdout.flush unless @output_paused
+    end
+
+    def print_recap_intro(lines, summary_idx)
+      range = summary_idx ? lines[0...summary_idx] : lines
+      range.each { |line| out_puts body("  #{line.chomp}") unless line.chomp.empty? }
+    end
+
+    def print_recap_summary(lines, summary_idx)
+      lines[summary_idx..].each { |line| out_puts body("  #{line.chomp}") }
     end
 
     def timestamp_str
