@@ -1,10 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative "lib/signal_handler"
-require_relative "lib/openai_client"
-require_relative "lib/completion_notifier"
-require_relative "lib/prompt_reader"
+require_relative "lib/loader"
 require "shellwords"
 
 # Class to interact with OpenAI API

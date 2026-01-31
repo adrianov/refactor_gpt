@@ -1,14 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative "lib/signal_handler"
-require_relative "lib/openai_client"
-require_relative "lib/agents_file_handler"
-require_relative "lib/commit_path_corrections"
-require_relative "lib/diff_processor"
-require_relative "lib/diff_compactor"
-require_relative "lib/completion_notifier"
-require_relative "lib/prompt_reader"
+require_relative "lib/loader"
 require "shellwords"
 require "ruby-progressbar"
 require "colorize"
@@ -429,6 +422,10 @@ end
 def display_commits_and_ask(commits, warnings, quality_assessment = nil, excluded_files = [])
   display_commits_result(commits, warnings, quality_assessment, excluded_files)
   get_user_confirmation
+end
+
+def current_model_display(debug_mode)
+  OpenAiClient.new(debug: debug_mode, progress_title: nil).model
 end
 
 def get_file_stats(files)
@@ -962,7 +959,7 @@ debug_mode, cli_hint, watch_mode = parse_arguments(ARGV)
 git_root = get_git_root
 Dir.chdir(git_root)
 
-puts "Model: #{OpenAiClient.new(debug: debug_mode, progress_title: nil).model}".cyan
+puts "Model: #{current_model_display(debug_mode)}".cyan
 
 recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands

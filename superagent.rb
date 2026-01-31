@@ -9,18 +9,9 @@
 # Executes agent commands across multiple AI models sequentially,
 # automatically verifying results and retrying with fix instructions when verification fails.
 
-require_relative "lib/signal_handler"
-require_relative "lib/superagent/config_path"
-require 'colorize'
-require_relative "lib/superagent/display"
-require_relative "lib/superagent/request_reader"
-require_relative "lib/superagent/agent_executor"
-require_relative "lib/superagent/verification_handler"
-require_relative "lib/superagent/superagent"
-require_relative "lib/superagent/auto_only_lock"
-require_relative "lib/completion_notifier"
-require_relative "lib/instance_lock"
-InstanceLock.lock_dir_override = SuperagentConfig::CONFIG_DIR
+require_relative "lib/loader"
+require "colorize"
+InstanceLock.lock_dir_override = ConfigPath::CONFIG_DIR
 
 if __FILE__ == $PROGRAM_NAME
   if ARGV.include?('--help') || ARGV.include?('-h')
