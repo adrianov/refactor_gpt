@@ -124,9 +124,12 @@ class SessionTracker
     new_entries = expand_combined(request, type: type)
     return if new_entries.size == 1 && last_entry_matches?(prev_list, new_entries)
 
-    request_history = prev_list + new_entries
+    write_append_session(previous, prev_list, new_entries)
+  end
+
+  def write_append_session(previous, prev_list, new_entries)
     session_data = (previous || {}).merge(
-      request_history: request_history,
+      request_history: prev_list + new_entries,
       timestamp: Time.now.to_i,
       cwd: Dir.pwd
     )
