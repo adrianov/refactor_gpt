@@ -87,7 +87,9 @@ class SessionTracker
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided,
                    request_type: DEFAULT_REQUEST_TYPE)
     previous_session = load_previous_session
-    request_history = previous_request_history_list(previous_session) + expand_combined(request, type: request_type)
+    prev_list = previous_request_history_list(previous_session)
+    new_entries = expand_combined(request, type: request_type)
+    request_history = last_entry_matches?(prev_list, new_entries) ? prev_list : prev_list + new_entries
     agent_summary = determine_agent_summary(continuation, previous_session, last_agent_summary)
 
     session_data = {
@@ -118,7 +120,11 @@ class SessionTracker
     return if request.nil? || request.to_s.strip.empty?
 
     previous = load_previous_session
-    request_history = previous_request_history_list(previous) + expand_combined(request, type: type)
+    prev_list = previous_request_history_list(previous)
+    new_entries = expand_combined(request, type: type)
+    return if new_entries.size == 1 && last_entry_matches?(prev_list, new_entries)
+
+    request_history = prev_list + new_entries
     session_data = (previous || {}).merge(
       request_history: request_history,
       timestamp: Time.now.to_i,
@@ -169,6 +175,16 @@ class SessionTracker
     end
 
     segments.map { |seg| { type: type, text: seg.sub(/\A\d+\.\s+/, '') } }
+  end
+
+  def last_entry_matches?(prev_list, new_entries)
+    return false if prev_list.empty? || new_entries.size != 1
+
+    entry_equal(prev_list.last, new_entries.first)
+  end
+
+  def entry_equal(a, b)
+    a[:type].to_s == b[:type].to_s && a[:text].to_s.strip == b[:text].to_s.strip
   end
 
   def ensure_session_dir

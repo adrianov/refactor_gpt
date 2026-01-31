@@ -58,10 +58,18 @@ class RequestReader
   end
 
   def read_interactive(use_reline: true)
-    @display.puts REQUEST_PROMPT.cyan
-    $stdout.puts ''
+    read_request(use_reline: use_reline)
+  end
 
+  # Single entry point for getting a request from the user (with or without output collection).
+  def read_request(use_reline: true)
+    print_request_prompt
     read_interactive_silent(use_reline: use_reline)
+  end
+
+  def print_request_prompt
+    $stdout.puts "\n#{REQUEST_PROMPT}\n\n"
+    $stdout.flush
   end
 
   def load_request_history
@@ -79,6 +87,7 @@ class RequestReader
   # Regression: must persist to file so next run sees new requests; fsync ensures write is durable.
   def add_to_request_history(request)
     return if request.to_s.strip.empty?
+    return if Reline::HISTORY.any? && Reline::HISTORY.last.to_s.strip == request.to_s.strip
 
     Reline::HISTORY << request
     path = history_file_path

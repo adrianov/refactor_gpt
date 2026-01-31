@@ -401,11 +401,6 @@ class Superagent
     end
   end
 
-  def show_request_prompt
-    $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
-    $stdout.flush
-  end
-
   def process_prompt_request_if_pending
     return unless @prompt_request_reader
     return unless IO.select([@prompt_request_reader], nil, nil, 0)
@@ -437,14 +432,14 @@ class Superagent
     run_request_form_in_main_thread
   end
 
-  # Runs in main thread (executor calls on_prompt_request synchronously). @in_queue_prompt pauses pending input thread.
-  # Agent keeps running; output is buffered then flushed in ensure.
+  # Runs in main thread (executor calls on_prompt_request synchronously). @in_queue_prompt pauses pending input.
+  # Pause output, flush in-flight streaming into buffer, show prompt and read; after queue, ensure flushes.
   def run_request_form_in_main_thread
-    show_request_prompt
-    @agent_executor.emit_full_prompt_to_display if @agent_executor.respond_to?(:emit_full_prompt_to_display)
     @display.set_output_paused(true)
     @in_queue_prompt = true
-    raw = @request_reader.read_interactive_silent
+    @display.flush_word_buffer
+    @agent_executor.emit_full_prompt_to_display if @agent_executor.respond_to?(:emit_full_prompt_to_display)
+    raw = @request_reader.read_request
     return unless raw
     if RequestReader.discard_command?(raw)
       @pending_queue.take_all
@@ -464,15 +459,16 @@ class Superagent
 
   def prompt_for_new_request(previous_req)
     update_terminal_title('✅ Passed')
-    show_request_prompt
-
     @waiting_start = Time.now
-    raw_new_req = @request_reader.read_interactive_silent
+    raw_new_req = @request_reader.read_request
     if @waiting_start
       @waiting_elapsed += Time.now - @waiting_start
       @waiting_start = nil
     end
-    @request_reader.add_to_request_history(raw_new_req) unless raw_new_req.to_s.strip.empty?
+    unless raw_new_req.to_s.strip.empty?
+      @request_reader.add_to_request_history(raw_new_req)
+      @session_tracker.append_to_request_history(raw_new_req)
+    end
     @active_start = Time.now
     exit 0 if raw_new_req.to_s.strip.empty?
 
