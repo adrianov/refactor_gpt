@@ -446,7 +446,7 @@ class Superagent
   end
 
   def default_continuation_analysis
-    {continuation: false, tags: [], description: nil}
+    {continuation: false, tags: [], description: nil, continuation_id: nil}
   end
 
   def execute_new_request(new_req, _previous_req, model_index, continuation_analysis: nil)

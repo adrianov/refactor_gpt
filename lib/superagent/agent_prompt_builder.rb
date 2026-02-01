@@ -124,8 +124,9 @@ class AgentPromptBuilder
   private
 
   def continuation_request_header(analysis)
+    cont_value = analysis[:continuation_id] || 'NEW'
     [
-      "[#{Time.now.strftime('%H:%M:%S')}] CONTINUATION: #{analysis[:continuation] ? 'YES' : 'NO'}",
+      "[#{Time.now.strftime('%H:%M:%S')}] CONTINUATION: #{cont_value}",
       "TAGS: #{format_continuation_tags(analysis[:tags])}",
       format_continuation_description(analysis[:description]),
       ''

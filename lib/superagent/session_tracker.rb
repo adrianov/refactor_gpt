@@ -70,6 +70,19 @@ class SessionTracker
     load_sessions.select { |session| !session_expired?(session) }
   end
 
+  # Sessions ordered newest first, for display and continuation prompt (1-based index = id).
+  def active_sessions_newest_first
+    active_sessions.reverse
+  end
+
+  # Returns session at 1-based numerical id (1 = newest), or nil.
+  def session_by_numerical_id(id)
+    return nil unless id.is_a?(Integer) && id >= 1
+
+    list = active_sessions_newest_first
+    list[id - 1]
+  end
+
   # Returns sessions ordered by failure count (lowest first), useful for model selection.
   def sessions_by_failure_count
     active_sessions.sort_by { |session| session[:failure_count] || 0 }
@@ -111,29 +124,32 @@ class SessionTracker
     end
   end
 
-  def analyze_continuation_and_description(new_request, previous_session)
+  def analyze_continuation_and_description(new_request, _previous_session = nil)
     client = create_ask_client
-    default = {continuation: false, tags: [], description: default_description(new_request)}
+    default = {continuation: false, tags: [], description: default_description(new_request), continuation_id: nil}
     return default unless client
 
-    prompt, title = continuation_prompt_and_title(new_request, previous_session)
-    run_continuation_query(client, prompt, title, new_request, previous_session)
+    sessions_newest_first = active_sessions_newest_first
+    return default if sessions_newest_first.empty?
+
+    prompt, title = continuation_prompt_and_title(new_request, sessions_newest_first)
+    run_continuation_query(client, prompt, title, new_request, sessions_newest_first)
   rescue StandardError => e
     @display.puts "Warning: Failed to analyze: #{e.message}".yellow
     default
   end
 
-  def run_continuation_query(client, prompt, title, new_request, previous_session)
+  def run_continuation_query(client, prompt, title, new_request, sessions_newest_first)
     response = query_ask_client(client, prompt, title: title)
     @display.puts response.light_black if response && !response.to_s.strip.empty?
-    result = parse_continuation_and_description_response(response, previous_session)
+    result = parse_continuation_and_description_response(response, sessions_newest_first, new_request)
     result[:description] = description_or_default(result[:description], new_request)
     result
   end
 
-  def continuation_prompt_and_title(new_request, previous_session)
-    prompt = build_analysis_and_description_prompt(new_request, previous_session)
-    title = previous_session ? "Analyzing continuation" : "Classifying request"
+  def continuation_prompt_and_title(new_request, sessions_newest_first)
+    prompt = build_analysis_and_description_prompt(new_request, sessions_newest_first)
+    title = sessions_newest_first.any? ? "Analyzing continuation" : "Classifying request"
     [prompt, title]
   end
 
@@ -488,33 +504,35 @@ class SessionTracker
     HEREDOC
   end
 
-  def build_continuation_analysis_prompt(new_req, previous_req)
+  # Builds continuation-analysis prompt. Args: new_req (request text), sessions_newest_first (list, 1-based ID).
+  def build_continuation_analysis_prompt(new_req, sessions_newest_first)
+    session_lines = sessions_newest_first.each_with_index.map do |s, i|
+      desc = (s[:description] || s[:request].to_s[0..80]).to_s.strip
+      "#{i + 1}. #{desc}"
+    end.join("\n")
     <<~HEREDOC
-      Classify the new request relative to the last request.
-
-      Last request (the feature or task just implemented):
-      #{previous_req}
+      Existing sessions (newest first, by numerical ID):
+      #{session_lines}
 
       New request:
       #{new_req}
 
       Tasks:
-      1. CONTINUATION: Answer YES only if the new request concerns the **same** feature or task as the last (e.g. extending it or fixing a defect in it). Answer NO if the new request is a different feature, unrelated work, or explicitly starts a new session.
-      2. TAGS: From the list below, pick tags that apply. Use #bug, #regression, or #hotfix only when the new request fixes a defect or implementation flaw in what was just implemented. Use other tags when extending the same feature or when starting something new.
+      1. CONTINUATION: Answer with a session ID (e.g. CONTINUATION: 1) to continue that session if the new request concerns the **same** feature or task (e.g. extending it or fixing a defect in it). Answer CONTINUATION: NEW if the new request is a different feature, unrelated work, or explicitly starts a new session.
+      2. TAGS: From the list below, pick tags that apply. Use #bug, #regression, or #hotfix only when the new request fixes a defect. Use other tags when extending the same feature or when starting something new.
          #{TAGS_LIST.gsub("\n", "\n         ")}
 
       Documentation: When the requests refer to an external product, API, or documented feature, use web fetch to consult the official documentation for that topic so you can classify continuation and tags accurately.
 
       Response format (required):
-      CONTINUATION: YES or NO
+      CONTINUATION: <number> or NEW
       TAGS: comma-separated tags (e.g., #bug, #feature) or NONE
 
-      Examples (last request was "add login with email and password"):
-      - "fix the bug where login fails when email has spaces" → CONTINUATION: YES, TAGS: #bug
-      - "also add 'forgot password'" → CONTINUATION: YES, TAGS: #feature
-      - "add a user dashboard" → CONTINUATION: NO, TAGS: #feature
-      - "fix login error" (unrelated project) → CONTINUATION: NO, TAGS: #bug
-      - "the validation we added is wrong, fix it" → CONTINUATION: YES, TAGS: #bug
+      Examples (session 1 = "add login with email and password"):
+      - "fix the bug where login fails when email has spaces" → CONTINUATION: 1, TAGS: #bug
+      - "also add 'forgot password'" → CONTINUATION: 1, TAGS: #feature
+      - "add a user dashboard" → CONTINUATION: NEW, TAGS: #feature
+      - "the validation we added is wrong, fix it" → CONTINUATION: 1, TAGS: #bug
     HEREDOC
   end
 
@@ -529,12 +547,12 @@ class SessionTracker
     HEREDOC
   end
 
-  def build_analysis_and_description_prompt(new_request, previous_session)
-    if previous_session
+  def build_analysis_and_description_prompt(new_request, sessions_newest_first)
+    if sessions_newest_first.any?
       append_description_task(
-        build_continuation_analysis_prompt(new_request, previous_session[:request]).to_s.strip,
+        build_continuation_analysis_prompt(new_request, sessions_newest_first).to_s.strip,
         3,
-        "CONTINUATION: YES or NO\nTAGS: comma-separated tags or NONE\nDESCRIPTION: one sentence summary"
+        "CONTINUATION: <number> or NEW\nTAGS: comma-separated tags or NONE\nDESCRIPTION: one sentence summary"
       )
     else
       append_description_task(
@@ -559,21 +577,32 @@ class SessionTracker
     end
   end
 
-  def parse_continuation_and_description_response(response, previous_session)
-    default = {continuation: false, tags: [], description: nil}
+  # Returns hash :continuation, :tags, :description, :continuation_id. continuation_id nil = new session (header NEW).
+  def parse_continuation_and_description_response(response, sessions_newest_first, new_request)
+    default = {continuation: false, tags: [], description: nil, continuation_id: nil}
     return default unless response
 
-    continuation = false
-    if previous_session
-      continuation_match = response.match(/CONTINUATION:\s*(YES|NO)/i)
-      continuation = continuation_match && continuation_match[1].upcase == "YES"
-    end
+    cont, cont_id, desc = parse_continuation_and_desc(response, sessions_newest_first)
+    description = (desc.nil? || desc.to_s.strip.empty?) ? default_description(new_request) : desc
     tags_match = response.match(/TAGS:\s*(.+?)(?:\n|$)/i)
     tags_text = tags_match ? tags_match[1].to_s.strip : ""
     tags = extract_tags(tags_text)
-    description = extract_description_from_response(response)
+    {continuation: cont, tags: tags, description: description, continuation_id: cont_id}
+  end
 
-    {continuation: continuation, tags: tags, description: description}
+  def parse_continuation_and_desc(response, sessions_newest_first)
+    return [false, nil, extract_description_from_response(response)] unless sessions_newest_first.any?
+
+    num_match = response.match(/CONTINUATION:\s*(\d+)/i)
+    if num_match
+      id = num_match[1].to_i
+      session = session_by_numerical_id(id)
+      if session
+        desc = session[:description] || session[:request].to_s[0..99]
+        return [true, id, desc]
+      end
+    end
+    [false, nil, extract_description_from_response(response)]
   end
 
   def extract_description_from_response(response)
