@@ -82,7 +82,7 @@ class TestRecapFormatter < Minitest::Test
   end
 
   def test_format_recap_for_prompt_does_not_remove_summary_newlines
-    text = <<~TEXT.strip
+    text = (<<~TEXT
       Intro line.
 
       Summary of changes:
@@ -90,6 +90,7 @@ class TestRecapFormatter < Minitest::Test
       - Compute median.
       - If median < 2, return unchanged.
     TEXT
+    ).strip
     out = RecapFormatter.format_recap_for_prompt(text)
     summary_part = out.split(RecapFormatter::INTRO_SUMMARY_SEPARATOR, 2).last
     assert_includes summary_part, "\n**lib/context_window.rb**",

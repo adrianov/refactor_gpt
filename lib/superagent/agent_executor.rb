@@ -40,12 +40,13 @@ class AgentExecutor
     RunFailureClassifier.usage_unrecoverable?(output)
   end
 
-  def wrap_prompt(p, new_session: false, current_request: nil)
+  def wrap_prompt(p, new_session: false, current_request: nil, continuation_analysis: nil)
     @prompt_builder.wrap_prompt(
       p,
       new_session: new_session,
       current_request: current_request,
-      verification_mode: @verification_mode
+      verification_mode: @verification_mode,
+      continuation_analysis: continuation_analysis
     )
   end
 
@@ -60,7 +61,7 @@ class AgentExecutor
   def tool_command_completed?(tool)
     tool[:name]&.match?(/^(run|execute|command)/i) &&
       tool[:subtype] == 'completed' &&
-      tool[:result].to_s.strip != ''
+      (tool[:result] && !tool[:result].to_s.strip.empty?)
   end
 
   def build_command(model:, plan_mode: false)
@@ -81,7 +82,7 @@ class AgentExecutor
   end
 
   def print_full_prompt(prompt, new_session: false)
-    return unless show_full_prompt? && !prompt.to_s.strip.empty?
+    return unless show_full_prompt? && (prompt && !prompt.to_s.strip.empty?)
 
     @full_prompt_buffer = prompt.to_s if new_session
     @display.puts '--- Full prompt ---'.light_black
@@ -90,7 +91,7 @@ class AgentExecutor
   end
 
   def emit_full_prompt_to_display
-    return unless show_full_prompt? && !@full_prompt_buffer.to_s.strip.empty?
+    return unless show_full_prompt? && (@full_prompt_buffer && !@full_prompt_buffer.to_s.strip.empty?)
 
     @display.puts '--- Full prompt ---'.light_black
     @display.output_raw(@full_prompt_buffer.to_s)
@@ -98,7 +99,7 @@ class AgentExecutor
   end
 
   def display_command(cmd, prompt, new_session: false, defer_full_prompt: false)
-    if defer_full_prompt && show_full_prompt? && !prompt.to_s.strip.empty?
+    if defer_full_prompt && show_full_prompt? && (prompt && !prompt.to_s.strip.empty?)
       @full_prompt_buffer = prompt.to_s
     else
       print_full_prompt(prompt, new_session: new_session)
@@ -153,10 +154,10 @@ class AgentExecutor
     end
   end
 
-  def run_plan_mode(model, p, new_session: false)
+  def run_plan_mode(model, p, new_session: false, continuation_analysis: nil)
     clear_full_prompt_buffer if new_session
     reset_run_tool_state
-    wrapped = wrap_prompt(p, new_session: new_session, current_request: p)
+    wrapped = wrap_prompt(p, new_session: new_session, current_request: p, continuation_analysis: continuation_analysis)
     cmd = setup_subprocess_run(model, wrapped, plan_mode: true, new_session: new_session)
     run_plan_subprocess(cmd, wrapped)
   rescue StandardError => e
@@ -166,10 +167,11 @@ class AgentExecutor
 
   def run(model, p, base_delay: 1, verification_mode: false, new_session: false,
           prompt_request_reader: nil, on_prompt_request: nil, current_request: nil,
-          defer_full_prompt: false)
+          defer_full_prompt: false, continuation_analysis: nil)
     @verification_mode = verification_mode
     clear_full_prompt_buffer if new_session
-    wrapped = wrap_prompt(p, new_session: new_session, current_request: current_request || p)
+    wrapped = wrap_prompt(p, new_session: new_session, current_request: current_request || p,
+                         continuation_analysis: continuation_analysis)
     retries = 0
     loop do
       result = run_one_attempt(model, wrapped, retries, base_delay,
@@ -236,10 +238,10 @@ class AgentExecutor
   private
 
   def run_success?(output, status)
-    return false if output.to_s.strip.empty?
+    return false if output.nil? || output.to_s.strip.empty?
     return false if verification_retry_condition?(output)
 
-    status&.success? || (@verification_mode && output.to_s.strip.length > 0)
+    status&.success? || (@verification_mode && (output && !output.to_s.strip.empty?))
   end
 
   def verification_retry_condition?(output)
@@ -554,26 +556,40 @@ class AgentExecutor
 
     raw += remaining
     buffer += remaining
-    buffer, final = process_buffer(buffer, final)
+    buffer, final = process_buffer(buffer, final, flush_remaining: true)
     [raw, final, buffer]
   end
 
-  def process_buffer(buffer, final)
-    while (idx = buffer.index("\n"))
-      line_with_newline = buffer[0..idx]
-      line = line_with_newline.to_s.strip
+  def process_buffer(buffer, final, flush_remaining: false)
+    sep = JsonStreamParser::LINE_SEP
+    while (idx = buffer.index(sep))
+      line_with_sep = buffer[0..idx]
       buffer = buffer[(idx + 1)..-1] || ''
-      $stdout.write(line_with_newline) && $stdout.flush if @passthrough
+      final = process_one_jsonl_line(line_with_sep, final)
+    end
+    if flush_remaining && (buffer && !buffer.to_s.strip.empty?)
+      line = buffer.to_s.strip
+      write_passthrough_line(line + sep)
       final = process_stream_line(line, final)
+      buffer = ''
     end
     [buffer, final]
+  end
+
+  def process_one_jsonl_line(line_with_sep, final)
+    write_passthrough_line(line_with_sep)
+    process_stream_line(line_with_sep.to_s.strip, final)
+  end
+
+  def write_passthrough_line(line)
+    $stdout.write(line) && $stdout.flush if @passthrough
   end
 
   def finalize_execution(raw, final, wait_thr)
     timed_out, timeout_reason = finalize_execution_state
     status = finalize_execution_status(wait_thr, timed_out)
     out = finalize_output(raw, final)
-    finalize_display(status.success? || (@verification_mode && !out.to_s.strip.empty?)) unless @passthrough
+    finalize_display(status.success? || (@verification_mode && (out && !out.to_s.strip.empty?))) unless @passthrough
     [out, '', status, timeout_reason]
   end
 
@@ -588,7 +604,7 @@ class AgentExecutor
 
   def finalize_output(raw, final)
     fallback = (final.respond_to?(:empty?) && final.empty?) ? raw : final
-    (@full_agent_output.to_s.strip != '') ? @full_agent_output.to_s : fallback.to_s
+    (@full_agent_output && !@full_agent_output.to_s.strip.empty?) ? @full_agent_output.to_s : fallback.to_s
   end
 
   def display_tools_summary

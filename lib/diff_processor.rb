@@ -219,10 +219,10 @@ class DiffProcessor
   def parse_file_statuses(status_output)
     statuses = {}
     status_output.lines.each do |line|
-      next if line.strip.empty? || line.start_with?("##")
+      next if line.nil? || line.to_s.strip.empty? || line.start_with?("##")
 
       status_flag = line[0..1]
-      file_path = line[3..]&.strip
+      file_path = line[3..] && line[3..].to_s.strip
       next if file_path.nil? || file_path.empty?
 
       if file_path.include?(" -> ")

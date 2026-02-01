@@ -6,7 +6,7 @@ class AssistantTextAccumulator
     return current_output unless accumulatable?(parsed)
 
     stripped = StreamFilter.strip_trailing_think_close(parsed[:text])
-    return current_output if stripped.to_s.strip.empty?
+    return current_output if stripped.nil? || stripped.to_s.strip.empty?
 
     (current_output || '') + stripped.to_s + "\n"
   end

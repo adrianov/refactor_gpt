@@ -20,11 +20,19 @@ class AgentPromptBuilder
     @session_tracker = session_tracker
   end
 
-  def wrap_prompt(p, new_session: false, current_request: nil, verification_mode: false)
+  def wrap_prompt(p, new_session: false, current_request: nil, verification_mode: false, continuation_analysis: nil)
+    user_content = format_user_request_content(p, continuation_analysis)
     rest = context_parts(new_session).compact.join
     history = verification_mode ? nil : history_section(current_request: current_request)
     summary = summary_section
-    p + (history.to_s + summary.to_s + rest)
+    user_content + (history.to_s + summary.to_s + rest)
+  end
+
+  # Single place to build the user request block sent to the agent. Prepends CONTINUATION/TAGS/DESCRIPTION when present.
+  def format_user_request_content(request_text, continuation_analysis)
+    return request_text.to_s if continuation_analysis.nil? || continuation_analysis.empty?
+
+    continuation_request_header(continuation_analysis) + request_text.to_s
   end
 
   def user_context_section
@@ -39,26 +47,26 @@ class AgentPromptBuilder
 
   def git_status_section(new_session)
     return nil unless new_session
-    out = `git status 2>#{File::NULL}`.to_s.strip
+    out = `git status 2>#{File::NULL}`.strip
     return nil if out.empty?
     "\n\nGit status:\n#{out}"
   end
 
   def git_log_section(new_session)
     return nil unless new_session
-    out = `git log -10 --pretty=format:'%h %s' 2>#{File::NULL}`.to_s.strip
+    out = `git log -10 --pretty=format:'%h %s' 2>#{File::NULL}`.strip
     return nil if out.empty?
     "\n\nLast 10 git log entries (newest first):\n#{out}"
   end
 
   def git_diff_section(new_session)
     return nil unless new_session
-    format_truncated_section('Git diff', `git diff 2>#{File::NULL}`.to_s.strip)
+    format_truncated_section('Git diff', `git diff 2>#{File::NULL}`.strip)
   end
 
   def working_tree_section(new_session)
     return nil unless new_session
-    format_truncated_section('Working tree (bfs --nohidden)', `bfs --nohidden 2>#{File::NULL}`.to_s.strip)
+    format_truncated_section('Working tree (bfs --nohidden)', `bfs --nohidden 2>#{File::NULL}`.strip)
   end
 
   def guidelines_section(always_include: false)
@@ -112,8 +120,19 @@ class AgentPromptBuilder
 
   private
 
+  def continuation_request_header(analysis)
+    lines = []
+    lines << "[#{Time.now.strftime('%H:%M:%S')}] CONTINUATION: #{analysis[:continuation] ? 'YES' : 'NO'}"
+    tags = analysis[:tags] || []
+    lines << "TAGS: #{tags.empty? ? 'NONE' : tags.join(', ')}"
+    desc = analysis[:description]
+    lines << "DESCRIPTION: #{desc}" if desc && !desc.to_s.strip.empty?
+    lines << ''
+    lines.join("\n")
+  end
+
   def format_truncated_section(label, content, max_lines: CONTEXT_MAX_LINES)
-    return nil if content.to_s.strip.empty?
+    return nil if content.nil? || content.to_s.strip.empty?
 
     lines = content.split("\n", -1)
     truncated = lines.size > max_lines

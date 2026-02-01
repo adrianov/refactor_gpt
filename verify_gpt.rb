@@ -67,11 +67,11 @@ class Verify
   def build_user_content(user_request, status_output, diff_output)
     content_parts = [
       "User request: #{user_request}\n\n",
-      "Here is the git status:\n#{status_output.strip}\n\n"
+      "Here is the git status:\n#{status_output.to_s.strip}\n\n"
     ]
 
-    unless diff_output.strip.empty?
-      content_parts << "Here is the git diff for all changes:\n#{diff_output.strip}\n"
+    unless diff_output.nil? || diff_output.to_s.strip.empty?
+      content_parts << "Here is the git diff for all changes:\n#{diff_output.to_s.strip}\n"
     end
 
     content_parts.join("\n")
@@ -135,11 +135,11 @@ def parse_arguments(args)
 end
 
 def read_feature_request_from_stdin
-  $stdin.read.strip unless $stdin.tty?
+  $stdin.read.to_s.strip unless $stdin.tty?
 end
 
 def get_feature_request(args)
-  feature_request = args.reject { |arg| arg == "--debug" }.join(" ").strip
+  feature_request = args.reject { |arg| arg == "--debug" }.join(" ").to_s.strip
   return feature_request unless feature_request.empty?
 
   stdin_request = read_feature_request_from_stdin
@@ -149,49 +149,88 @@ def get_feature_request(args)
 end
 
 def parse_response(response)
-  return [false, response] if response.nil? || response.strip.empty?
+  return result_unparseable(response) if response.nil? || response.to_s.strip.empty?
 
-  normalized = response.strip
+  normalized = response.to_s.strip
+  verdict = response_verdict(normalized)
+  return result_parsed_yes(normalized) if verdict == :yes
+  return result_parsed_no(normalized) if verdict == :no
+
+  result_unparseable(response)
+end
+
+def result_unparseable(raw_llm_response)
+  {
+    verified: false,
+    display_message: 'LLM response could not be parsed',
+    raw_response: raw_llm_response
+  }
+end
+
+def result_parsed(verified, brief_description)
+  { verified: verified, display_message: brief_description, raw_response: nil }
+end
+
+def result_parsed_yes(normalized)
+  brief = extract_brief_after_yes(normalized)
+  result_parsed(true, brief.empty? ? "Verification passed" : brief)
+end
+
+def result_parsed_no(normalized)
+  brief = extract_brief_after_no(normalized)
+  result_parsed(false, brief.empty? ? "Verification failed" : brief)
+end
+
+MAX_BRIEF_LENGTH = 200
+
+def extract_brief_after_yes(normalized)
+  match = normalized.match(/\bYES\s*:?\s*(.*)/im)
+  brief = match ? match[1].to_s.strip : ''
+  first_line_brief(brief)
+end
+
+def extract_brief_after_no(normalized)
+  match = normalized.match(/\bNO\s*:?\s*(.*)/im)
+  brief = match ? match[1].to_s.strip : ''
+  first_line_brief(brief)
+end
+
+def first_line_brief(text)
+  line = text.each_line.first
+  line = line ? line.to_s.strip : ''
+  line.length > MAX_BRIEF_LENGTH ? "#{line[0, MAX_BRIEF_LENGTH]}..." : line
+end
+
+def response_verdict(normalized)
   upcased = normalized.upcase
-
-  return parse_yes_response(normalized) if upcased.start_with?("YES")
-  return parse_no_response(normalized) if upcased.start_with?("NO")
+  return :yes if upcased.start_with?("YES")
+  return :no if upcased.start_with?("NO")
 
   yes_match = upcased.match(/\bYES\s*:?/i)
   no_match = upcased.match(/\bNO\s*:?/i)
+  return :no if no_match && (yes_match.nil? || no_match.begin(0) < yes_match.begin(0))
+  return :yes if yes_match && (no_match.nil? || yes_match.begin(0) < no_match.begin(0))
 
-  return parse_no_response(normalized) if no_match && (yes_match.nil? || no_match.begin(0) < yes_match.begin(0))
-  return parse_yes_response(normalized) if yes_match && (no_match.nil? || yes_match.begin(0) < no_match.begin(0))
-
-  [false, response]
+  nil
 end
 
-def parse_no_response(normalized)
-  match = normalized.match(/\bNO\s*:?\s*(.*)/im)
-  description = match ? match[1].strip : ""
-  [false, description.empty? ? "Verification failed" : description]
-end
-
-def parse_yes_response(normalized)
-  match = normalized.match(/\bYES\s*:?\s*(.*)/im)
-  description = match ? match[1].strip : ""
-  [true, description.empty? ? "Verification passed" : description]
-end
-
-def display_result(verified, description)
-  if verified
-    puts "YES: #{description}"
+def display_result(result)
+  if result[:verified]
+    puts "YES: #{result[:display_message]}"
     exit 0
-  else
-    puts "NO: Unable to parse assessment response. The LLM response did not contain YES or NO."
-    if description && !description.strip.empty?
-      puts "\nActual LLM response:"
-      # Use multiline output for the actual response to ensure it's fully visible
-      description.each_line { |line| puts line.chomp }
-      puts "\nFull response length: #{description.length} characters"
-    end
-    exit 1
   end
+
+  puts "NO: Unable to parse assessment response. The LLM response did not contain YES or NO."
+  print_actual_llm_response_block(result[:raw_response] || result[:display_message])
+  exit 1
+end
+
+def print_actual_llm_response_block(content)
+  return if content.nil? || content.to_s.strip.empty?
+
+  puts "\nActual LLM response:"
+  content.each_line { |line| puts line.chomp }
+  puts "\nFull response length: #{content.length} characters"
 end
 
 def prepare_untracked_files(project_root: PROJECT_ROOT)
@@ -247,5 +286,5 @@ status_output = run_cmd("git status --porcelain --branch")
     diff_output
   )
 
-  verified, description = parse_response(response)
-  display_result(verified, description)
+  result = parse_response(response)
+  display_result(result)

@@ -4,8 +4,10 @@ require 'oj'
 require 'json'
 
 # Parses stream-json lines from agent output into type, text, stream_id, command, and tool_info.
-# Extracted from AgentExecutor to reduce class length and ABC.
+# Stream format: one JSON object per line (JSONL). Use LINE_SEP when splitting or writing lines.
 class JsonStreamParser
+  LINE_SEP = "\n"
+
   def parse(line)
     return [nil] * 5 if line.nil? || line.to_s.strip.empty?
 
@@ -50,7 +52,7 @@ class JsonStreamParser
 
   def assistant_text(json_obj)
     content = json_obj.dig('message', 'content')
-    return content if content.is_a?(String) && !content.to_s.strip.empty?
+    return content if content.is_a?(String) && (content && !content.to_s.strip.empty?)
 
     text = assistant_text_from_array(content)
     return text if text && !text.to_s.strip.empty?
@@ -134,7 +136,7 @@ class JsonStreamParser
     s = cmd.to_s
     return false unless command_length_ok?(s)
     return false unless s.match?(/^[a-zA-Z0-9_\-\.\/\s\:\;\,\|\&\<\>\(\)\"\']+$/)
-    return false if s.strip !~ /\s/ && !s.include?('/') && !s.match?(/^\-+\w/)
+    return false if s.to_s.strip !~ /\s/ && !s.include?('/') && !s.match?(/^\-+\w/)
 
     command_looks_executable?(s)
   end

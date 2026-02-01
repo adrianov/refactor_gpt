@@ -16,19 +16,24 @@ module RequestPreparer
 
   module_function
 
+  # Single point for normalizing user request text. Change here when adjusting strip/trim behavior.
+  def normalized_request_text(raw)
+    raw.to_s.strip
+  end
+
   def prepend_gitignore_instruction(raw_req)
-    base = raw_req.to_s.strip
-    base.empty? ? GITIGNORE_PREPEND.strip : "#{GITIGNORE_PREPEND}#{raw_req}"
+    base = normalized_request_text(raw_req)
+    base.empty? ? GITIGNORE_PREPEND.to_s.strip : "#{GITIGNORE_PREPEND}#{raw_req}"
   end
 
   def sanitize_request(req, models)
     return req if req.nil?
-    remove_model_mentions(req.gsub(NON_INTERACTIVE_NOTICE, "\n").strip, models)
+    remove_model_mentions(req.gsub(NON_INTERACTIVE_NOTICE, "\n").to_s.strip, models)
   end
 
   # Returns model index when token is a valid model hint, else nil. Exact match first, then word-boundary in model name.
   def model_index_for_token(token, models)
-    return nil if token.to_s.strip.empty?
+    return nil if token.nil? || token.to_s.strip.empty?
     idx = models.index(token)
     return idx if idx
     re = /\b#{Regexp.escape(token)}\b/
@@ -58,7 +63,7 @@ module RequestPreparer
 
     MODEL_HINT_SOURCES.reduce(req) do |text, (_, remover)|
       send(remover, text, models)
-    end.strip
+    end.to_s.strip
   end
 
   def remove_at_mentions(req, models)

@@ -49,7 +49,7 @@ class VerificationHandler
   end
 
   def parse_res(res)
-    return [false, res] if Utility.blank?(res)
+    return [false, res] if res.nil? || res.to_s.strip.empty?
 
     line_info = extract_final_verdict_line(res)
     return [false, res] unless line_info
@@ -63,7 +63,7 @@ class VerificationHandler
       match = line.match(/\A\s*(YES|NO):\s*(.*)\z/im)
       next unless match
 
-      return { verdict: match[1].casecmp('no').zero? ? :no : :yes, text: Utility.trim(line) }
+      return { verdict: match[1].casecmp('no').zero? ? :no : :yes, text: line.to_s.strip }
     end
     nil
   end
@@ -72,7 +72,7 @@ class VerificationHandler
     m = line.match(/\A\s*NO:\s*(.*)\z/im)
     return [false, 'Failed'] unless m
 
-    desc = Utility.trim(m[1])
+    desc = m[1].to_s.strip
     [false, desc.empty? ? 'Failed' : remove_duplicates(desc)]
   end
 
@@ -80,7 +80,7 @@ class VerificationHandler
     m = line.match(/\A\s*YES:\s*(.*)\z/im)
     return [true, 'Passed'] unless m
 
-    desc = Utility.trim(m[1])
+    desc = m[1].to_s.strip
     [true, desc.empty? ? 'Passed' : desc]
   end
 
@@ -99,7 +99,7 @@ class VerificationHandler
   def check_and_strip(text, first, second)
     return text if second.length < 10
 
-    duplicate_detected?(first, second) ? Utility.trim(text.to_s[0, text.length / 2]) : text
+    duplicate_detected?(first, second) ? text.to_s[0, text.length / 2].to_s.strip : text
   end
 
   def duplicate_detected?(first, second)
@@ -178,7 +178,8 @@ class VerificationHandler
   def set_verification_failure(output, reason)
     normalized = verification_response_for_parsing(output)
     @verified = false
-    @desc = Utility.blank?(normalized) ? 'Verification call failed (no response)' : Utility.trim(normalized.lines.first)
+    blank = normalized.nil? || normalized.to_s.strip.empty?
+    @desc = blank ? 'Verification call failed (no response)' : normalized.lines.first.to_s.strip
     @call_failed = true
     @retryable = reason == :recoverable
     @raw_output = output.to_s

@@ -31,7 +31,7 @@ module TestRunnerDetector
   end
 
   def line_matches_runner?(line, runner)
-    return false if line.to_s.strip.empty?
+    return false if line.nil? || line.to_s.strip.empty?
 
     comm, args = line.split(nil, 2)
     return false if args.nil? || !%w[ruby node python].include?(comm)
@@ -41,7 +41,7 @@ module TestRunnerDetector
   end
 
   def process_matches_runner?(pid, runner)
-    cmdline = `ps -p #{pid} -o args= 2>/dev/null`.to_s.strip
+    cmdline = `ps -p #{pid} -o args= 2>/dev/null`.strip
     cmdline.include?(runner)
   end
 end

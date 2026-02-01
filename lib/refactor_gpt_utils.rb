@@ -44,14 +44,14 @@ class ResponseParser
         warn "Warning: Parsed file '#{filename}' was not in expected files: #{expected_paths.join(", ")}"
       end
 
-      if content.strip.empty?
+      if content.nil? || content.to_s.strip.empty?
         warn "Warning: Empty content for file '#{filename}'"
       end
     end
   end
 
   def self.extract_json(text)
-    return nil if text.nil? || text.strip.empty?
+    return nil if text.nil? || text.to_s.strip.empty?
 
     # First, try to find a JSON block in markdown
     json_match = text.match(/```(?:json)?\s*(\{.*?\})\s*```/m)

@@ -18,7 +18,7 @@ module LlmRouter
   DEFAULT_GEMINI_MODEL = 'gemini-3-flash'
 
   def self.backend_for_model(name)
-    return nil if name.to_s.strip.empty?
+    return nil if name.nil? || name.to_s.strip.empty?
 
     n = name.to_s.strip
     return :claude if n.match?(CLAUDE_PREFIX)
@@ -70,12 +70,14 @@ module LlmRouter
   end
 
   def self.token_set?(env, key)
-    env[key].to_s.strip != ''
+    v = env[key]
+    v && !v.to_s.strip.empty?
   end
 
   def self.technical_model(env_vars = nil)
     env = env_vars || ENV
-    env['TECHNICAL_MODEL'].to_s.strip != '' ? env['TECHNICAL_MODEL'].to_s.strip : model_from_env(env, key: 'MODEL')
+    tech = env['TECHNICAL_MODEL']
+    (tech && !tech.to_s.strip.empty?) ? tech.to_s.strip : model_from_env(env, key: 'MODEL')
   end
 
   def self.image_model(env_vars = nil)

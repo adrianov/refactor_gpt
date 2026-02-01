@@ -28,9 +28,9 @@ class GitExplainer
 
   def build_user_content(status_output, diff_output, recent_commits, recent_commands)
     content_parts = [
-      "Here is the git status:\n#{status_output.strip}\n\n",
-      "Here is the git diff for all changes:\n#{diff_output.strip}\n\n",
-      "Here are the last 15 git commit one-line messages (most recent first):\n#{recent_commits.strip}\n\n"
+      "Here is the git status:\n#{status_output.to_s.strip}\n\n",
+      "Here is the git diff for all changes:\n#{diff_output.to_s.strip}\n\n",
+      "Here are the last 15 git commit one-line messages (most recent first):\n#{recent_commits.to_s.strip}\n\n"
     ]
 
     unless recent_commands.empty?

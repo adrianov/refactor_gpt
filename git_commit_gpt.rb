@@ -571,7 +571,7 @@ end
 
 def display_quality_assessment(assessment)
   direction = assessment["direction"]&.downcase
-  explanation = assessment["explanation"]&.strip
+  explanation = assessment["explanation"] && assessment["explanation"].to_s.strip
 
   return if !direction || !explanation
 

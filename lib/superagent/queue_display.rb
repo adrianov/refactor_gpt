@@ -34,7 +34,7 @@ class QueueDisplay
   private
 
   def print_running_preview(current_request)
-    return if current_request.to_s.strip.empty?
+    return if current_request.nil? || current_request.to_s.strip.empty?
     @display.puts "Running: #{pending_request_preview(current_request)}".cyan
   end
 end

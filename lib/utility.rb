@@ -65,10 +65,10 @@ module Utility
   def self.contains_tables?(text)
     lines = text.split("\n")
     lines.each_with_index do |line, index|
-      next unless line.strip.match?(/\|.*\|/)
+      next unless trim(line).match?(/\|.*\|/)
 
       next_line = lines[index + 1]
-      return true if next_line&.strip&.match?(/^[\|\s:-\|]+$/) && next_line.include?("-")
+      return true if next_line && trim(next_line).match?(/^[\|\s:-\|]+$/) && next_line.include?("-")
     end
     false
   end
@@ -132,12 +132,22 @@ module Utility
     FLAG_MAPPING.values.map { |k| [k, false] }.to_h
   end
 
+  def self.trim(str)
+    str.to_s.strip
+  end
+
+  def self.blank?(str)
+    str.nil? || trim(str).empty?
+  end
+
+  def self.present?(str)
+    !blank?(str)
+  end
+
   def self.read_stdin_question
     input = $stdin.read
-    if input.nil? || input.strip.empty?
-      exit 0
-    end
-    [input.strip]
+    exit 0 if blank?(input)
+    [trim(input)]
   end
 
   def self.load_env_vars
@@ -146,7 +156,7 @@ module Utility
 
     File.foreach(env_file_path).with_object({}) do |line, h|
       key, value = line.split("=", 2)
-      h[key.strip] = value.strip if key && value
+      h[trim(key)] = trim(value) if present?(key) && value
     end
   end
 

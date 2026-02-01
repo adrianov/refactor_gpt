@@ -259,7 +259,7 @@ user_instruction)
   end
 
   def refactor_output_format_instruction
-    <<~HEREDOC.strip
+    (<<~HEREDOC
       Return refactored files using this format:
       <full_file_contents_to_replace filename="[REPLACE_WITH_ACTUAL_FILE_PATH]">complete file content</full_file_contents_to_replace>
 
@@ -288,11 +288,12 @@ user_instruction)
       CRITICAL: DO NOT create new files. Only refactor the files provided in the prompt.
       If you think a new file is needed, refactor the existing code instead.
     HEREDOC
+    ).strip
   end
 
   # Instruction for how to refactor (behavior only). Edit this when improving wording for humans/LLMs.
   def refactor_behavior_instruction
-    <<~HEREDOC.strip
+    (<<~HEREDOC
       Apply changes that make code easier to edit and understand for both humans and LLMs:
       improve structure and remove duplication; use clear, literal names; keep methods and
       blocks small and focused; prefer explicit logic over clever or implicit code; keep
@@ -302,6 +303,7 @@ user_instruction)
       suggest purely stylistic changes (quote style, alternative method names). Only make
       necessary structural improvements.
     HEREDOC
+    ).strip
   end
 
   def build_refactor_prompt(file_codes, user_instruction)

@@ -21,7 +21,7 @@ class Display
 
   def puts(*args)
     @at_start_of_line = true
-    return if args.empty? || args.first.to_s.strip.empty?
+    return if args.empty? || (args.first.nil? || args.first.to_s.strip.empty?)
 
     ts = timestamp_str
     str = args.first.is_a?(String) ? format_with_timestamp(args[0], ts) : args[0].to_s
@@ -131,7 +131,7 @@ class Display
       return nil if StreamFilter.think_close_only?(text)
 
       stripped = StreamFilter.strip_trailing_think_close(text)
-      stripped.to_s.strip.empty? ? nil : stripped.to_s
+      (stripped.nil? || stripped.to_s.strip.empty?) ? nil : stripped.to_s
     end
 
     def print_one_assistant_line(text)
@@ -318,16 +318,16 @@ class Display
       elsif reason == :recoverable
         'connection/network error (retryable, will retry up to 5 times)'
       else
-        first_line = output.to_s.strip.lines.first&.strip
+        first_line = (first = output.to_s.strip.lines.first) && first.to_s.strip
         first_line && first_line.length <= 80 ? first_line : 'see output below'
       end
     end
 
     def display_all_attempts_failed(original_request = nil)
       puts 'All attempts failed.'.red
-      return if original_request.to_s.strip.empty?
+      return if original_request.nil? || original_request.to_s.strip.empty?
 
-      preview = original_request.to_s.strip.lines.first(5).join.rstrip
+      preview = RequestPreparer.normalized_request_text(original_request).lines.first(5).join.rstrip
       puts "Original query: #{preview}".yellow
     end
 

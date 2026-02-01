@@ -133,7 +133,7 @@ class GeminiClient
   end
 
   def parse_stream_line(line)
-    line = line.strip
+    line = line.to_s.strip
     return nil if line.empty?
 
     json_str = line.start_with?("data: ") ? line.sub(/^data: /, "").strip : line
@@ -341,7 +341,7 @@ class GeminiClient
   end
 
   def parse_stream_line_to_json(line)
-    line = line.strip
+    line = line.to_s.strip
     return nil if line.empty?
 
     json_str = line.start_with?("data: ") ? line.sub(/^data: /, "").strip : line

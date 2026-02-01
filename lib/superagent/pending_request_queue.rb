@@ -10,10 +10,10 @@ class PendingRequestQueue
   end
 
   def add(request)
-    return if request.to_s.strip.empty?
+    return if request.nil? || request.to_s.strip.empty?
 
     @mutex.synchronize do
-      @queue << request.to_s.strip
+      @queue << RequestPreparer.normalized_request_text(request)
       @display.puts "Queued (#{@queue.size}): #{request_preview(request)}".light_blue
     end
   end

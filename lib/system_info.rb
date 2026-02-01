@@ -38,7 +38,7 @@ class SystemInfo
     when "Ubuntu"
       return "" unless File.exist?("/etc/os-release")
 
-      File.read("/etc/os-release").match(/^VERSION="?([^"\n]+)"?/)&.[](1)&.strip || ""
+      File.read("/etc/os-release").match(/^VERSION="?([^"\n]+)"?/)&.[](1).to_s.strip || ""
     when "Windows" then `wmic os get Version /value 2>NUL`.split("=").last.to_s.strip
     else ""
     end

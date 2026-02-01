@@ -65,7 +65,7 @@ module AskClientInstructions
     system_info = SystemInfo.to_s
     date_info = SystemInfo.date_info
 
-    result = system_instr.strip
+    result = system_instr.to_s.strip
     result += "\n\nUser environment:\n#{system_info}" unless system_info.empty?
     result += "\nCurrent date/time: #{date_info}" unless date_info.empty?
     result

@@ -13,7 +13,7 @@ class VerificationDisplay
 
   # raw_recap: raw agent output from Superagent#current_recap_text; do not compact.
   def display_verification_result(verified, desc, context = '', call_failed: false, raw_recap: nil)
-    display_full_recap(raw_recap) if verified && raw_recap.to_s.strip != ''
+    display_full_recap(raw_recap) if verified && (raw_recap && !raw_recap.to_s.strip.empty?)
     prefix = verification_prefix(verified, call_failed)
     suffix = context.empty? ? '' : " #{context}"
     render_verification_message(prefix, suffix, desc, verified, context)
@@ -40,7 +40,7 @@ class VerificationDisplay
   # raw_recap: same as display_verification_result (Superagent#current_recap_text; do not compact).
   def display_full_recap(raw_recap)
     text = RecapFormatter.prepare_recap_for_display(raw_recap)
-    return if text.strip == ''
+    return if text.nil? || text.to_s.strip.empty?
 
     @display.out_puts ''
     @display.puts 'Full recap:'.cyan

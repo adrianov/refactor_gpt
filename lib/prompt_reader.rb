@@ -22,7 +22,7 @@ module PromptReader
       line = Reline.readline(multiline_prompt(lines.empty?), true)
       return nil if line.nil?
 
-      line = line.strip
+      line = line.to_s.strip
       if line.empty?
         break unless lines.empty?
 

@@ -10,7 +10,7 @@ class SessionTracker
   MAX_SESSION_AGE = 86400 # 24 hours
   MAX_SESSIONS = 50
 
-  TAGS_LIST = <<~TAGS.strip
+  TAGS_LIST = (<<~TAGS
     - #bug: Fixing a defect or error in the code
     - #regression: Fixing a bug that was previously resolved but has been reintroduced
     - #hotfix: Urgent bug fix requiring immediate deployment
@@ -31,6 +31,7 @@ class SessionTracker
     - #config: Configuration or environment changes
     - #migration: Database or system migration tasks
   TAGS
+  ).strip
 
   def initialize(display)
     @display = display
@@ -132,7 +133,7 @@ class SessionTracker
   end
 
   def description_or_default(description, request)
-    description.to_s.strip.empty? ? default_description(request) : description
+    (description.nil? || description.to_s.strip.empty?) ? default_description(request) : description
   end
 
   DEFAULT_REQUEST_TYPE = 'implementation'
@@ -207,8 +208,8 @@ class SessionTracker
     list = previous_request_history_list(session_data)
     return list if exclude_equal.nil? || exclude_equal.to_s.strip.empty?
 
-    exclude = exclude_equal.to_s.strip
-    list.reject { |req| req[:text].to_s.strip == exclude }
+    exclude = RequestPreparer.normalized_request_text(exclude_equal)
+    list.reject { |req| RequestPreparer.normalized_request_text(req[:text]) == exclude }
   end
 
   def get_last_agent_summary
@@ -236,7 +237,7 @@ class SessionTracker
   end
 
   def valid_request?(request)
-    request.is_a?(String) && !request.strip.empty?
+    request.is_a?(String) && (request && !request.to_s.strip.empty?)
   end
 
   def valid_timestamp?(timestamp)
@@ -330,7 +331,11 @@ class SessionTracker
   end
 
   def entry_equal(a, b)
-    a[:type].to_s == b[:type].to_s && a[:text].to_s.strip == b[:text].to_s.strip
+    return false unless a[:type].to_s == b[:type].to_s
+
+    norm_a = RequestPreparer.normalized_request_text(a[:text])
+    norm_b = RequestPreparer.normalized_request_text(b[:text])
+    norm_a == norm_b
   end
 
   def ensure_session_dir
@@ -471,13 +476,13 @@ class SessionTracker
   def build_analysis_and_description_prompt(new_request, previous_session)
     if previous_session
       append_description_task(
-        build_continuation_analysis_prompt(new_request, previous_session[:request]).strip,
+        build_continuation_analysis_prompt(new_request, previous_session[:request]).to_s.strip,
         3,
         "CONTINUATION: YES or NO\nTAGS: comma-separated tags or NONE\nDESCRIPTION: one sentence summary"
       )
     else
       append_description_task(
-        build_classification_prompt(new_request).strip,
+        build_classification_prompt(new_request).to_s.strip,
         2,
         "TAGS: comma-separated tags or NONE\nDESCRIPTION: one sentence summary"
       )
@@ -524,7 +529,7 @@ class SessionTracker
   def extract_tags(tags_text)
     return [] if tags_text.empty? || tags_text.upcase == "NONE"
 
-    tags_text.split(",").map(&:strip).select { |tag| tag.start_with?("#") }
+    tags_text.split(",").map { |tag| tag.to_s.strip }.select { |tag| tag.start_with?("#") }
   end
 
   def extract_description(response)
@@ -534,7 +539,7 @@ class SessionTracker
     description = description.gsub(/^(Description:|Session:)\s*/i, '')
     description = description.split("\n").first
     description = description[0..99] if description && description.length > 100
-    description&.to_s&.strip
+    description.nil? ? nil : description.to_s.strip
   end
 
 end

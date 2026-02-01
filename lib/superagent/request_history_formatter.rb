@@ -14,10 +14,10 @@ module RequestHistoryFormatter
   module_function
 
   def truncated_first_line(req, max_len = PREVIOUS_REQUEST_PROMPT_LEN)
-    s = req.to_s.strip
+    s = RequestPreparer.normalized_request_text(req)
     return nil if s.empty?
 
-    first = s.lines.first&.strip || s
+    first = (s.lines.first ? s.lines.first.to_s.strip : nil) || s
     first = "#{first[0..(max_len - 1)]}..." if first.length > max_len
     first
   end
@@ -37,6 +37,6 @@ module RequestHistoryFormatter
 
   def refactor_entry(req)
     first = truncated_first_line(req)
-    first.to_s.strip.empty? ? "—" : first
+    (first.nil? || first.to_s.strip.empty?) ? "—" : first
   end
 end

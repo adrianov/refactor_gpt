@@ -176,7 +176,8 @@ class DiffCompactor
     content = extract_line_content(line)
     return false if content.nil? || content.empty?
 
-    content.strip.start_with?("class ", "module ") || content.strip == "end"
+    t = content.to_s.strip
+    t.start_with?("class ", "module ") || t == "end"
   end
 
   def extract_line_content(line)

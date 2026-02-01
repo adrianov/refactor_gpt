@@ -75,7 +75,7 @@ class Superagent
     save_current_session(req)
 
     start_index = run_start_index(raw_req, req, start_model_index)
-    return run_plan_mode(req, start_index) if @request_reader.plan_mode
+    return run_plan_mode(req, start_index, continuation_analysis: @continuation_analysis) if @request_reader.plan_mode
 
     run_start_feature
     run_with_interactive_queue(start_index, req)
@@ -84,7 +84,7 @@ class Superagent
   def run_setup_request(request)
     raw_req = run_read_request(request)
     run_accumulate_waiting_time if @waiting_start
-    @request_reader.add_to_request_history(raw_req) if request.nil? && !raw_req.to_s.strip.empty?
+    @request_reader.add_to_request_history(raw_req) if request.nil? && (raw_req && !raw_req.to_s.strip.empty?)
     req = run_prepare_request(raw_req)
     [raw_req, req]
   end
@@ -200,11 +200,11 @@ class Superagent
     @display.reset_after_pause
   end
 
-  def run_plan_mode(req, start_index = 0)
+  def run_plan_mode(req, start_index = 0, continuation_analysis: nil)
     run_plan_mode_start
     models[start_index..-1].each_with_index do |model, relative_idx|
       idx = start_index + relative_idx
-      return handle_plan_success if run_plan_mode_attempt(model, idx, req)
+      return handle_plan_success if run_plan_mode_attempt(model, idx, req, continuation_analysis: continuation_analysis)
     end
     handle_final_failure
   end
@@ -216,12 +216,13 @@ class Superagent
     @display.out_puts ""
   end
 
-  def run_plan_mode_attempt(model, idx, req)
+  def run_plan_mode_attempt(model, idx, req, continuation_analysis: nil)
     @current_pass = idx + 1
     @current_model = model
     update_terminal_title("Planning: #{model}")
     @display.display_attempt_header(model, idx, models.size)
-    success, output = @agent_executor.run_plan_mode(model, req, new_session: !@session_continuation)
+    success, output = @agent_executor.run_plan_mode(model, req, new_session: !@session_continuation,
+                                                    continuation_analysis: continuation_analysis)
     @display.display_agent_failure(output, nil) unless success
     success
   end
@@ -363,10 +364,10 @@ class Superagent
       @display.puts "Failure count reset.".yellow
       return
     end
-    return if raw.to_s.strip.empty?
+    return if raw.nil? || raw.to_s.strip.empty?
 
     save_request_to_histories(raw)
-    add_and_show_queue(@pending_queue, raw.to_s.strip, @current_request)
+    add_and_show_queue(@pending_queue, RequestPreparer.normalized_request_text(raw), @current_request)
   end
 
   def prompt_for_new_request(previous_req)
@@ -376,9 +377,9 @@ class Superagent
     prompt_accumulate_waiting
     return prompt_handle_reset(previous_req) if RequestReader.reset_command?(raw_new_req)
 
-    prompt_save_history(raw_new_req) unless raw_new_req.to_s.strip.empty?
+    prompt_save_history(raw_new_req) unless raw_new_req.nil? || raw_new_req.to_s.strip.empty?
     @active_start = Time.now
-    exit 0 if raw_new_req.to_s.strip.empty?
+    exit 0 if raw_new_req.nil? || raw_new_req.to_s.strip.empty?
 
     prompt_execute_new_request(raw_new_req, previous_req)
   end
@@ -404,7 +405,7 @@ class Superagent
   def prompt_execute_new_request(raw_new_req, previous_req)
     model_index = model_index_from_request_text(raw_new_req)
     new_req = RequestPreparer.sanitize_request(raw_new_req, models)
-    return if new_req.to_s.strip.empty?
+    return if new_req.nil? || new_req.to_s.strip.empty?
 
     unless InstanceLock.acquire_lock
       msg = "Another instance is already running for this project (#{InstanceLock.project_base_name}). Exiting."
@@ -507,6 +508,7 @@ class Superagent
   end
 
   def apply_continuation_analysis(analysis)
+    @continuation_analysis = analysis
     @session_continuation = analysis[:continuation]
     @session_tags = analysis[:tags] || []
     @session_description = analysis[:description]
@@ -524,13 +526,13 @@ class Superagent
   end
 
   def save_agent_summary(summary)
-    save_current_session(@current_request, summary) if summary && !summary.to_s.strip.empty? && @current_request
+    save_current_session(@current_request, summary) if (summary && !summary.to_s.strip.empty?) && @current_request
   end
 
   def add_and_show_queue(queue, raw_new, current_request = nil)
-    return if raw_new.to_s.strip.empty?
+    return if raw_new.nil? || raw_new.to_s.strip.empty?
 
-    queue.add(raw_new.to_s.strip)
+    queue.add(RequestPreparer.normalized_request_text(raw_new))
     list = queue.snapshot
     @display.display_pending_list(list, current_request: current_request) unless list.empty?
   end

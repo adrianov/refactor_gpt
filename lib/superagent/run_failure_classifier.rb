@@ -14,8 +14,9 @@ module RunFailureClassifier
   end
 
   def stream_json_init?(output)
+    return false if output.nil? || output.to_s.strip.empty?
+
     s = output.to_s.strip
-    return false if s.empty?
     return true if s.start_with?('{') && s.include?('"type"') && s.include?('"system"')
 
     false
@@ -57,7 +58,7 @@ module RunFailureClassifier
   end
 
   def failure_reason_recoverable?(output, status, stdout, timeout_reason)
-    output.to_s.strip.empty? ||
+    (output.nil? || output.to_s.strip.empty?) ||
       timeout_reason == :no_data ||
       ((status.nil? || !status.success?) && stdout.nil?) ||
       stream_json_init?(output) ||

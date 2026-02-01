@@ -54,7 +54,7 @@ class RequestReader
   end
 
   def read_from_stdin
-    $stdin.read.strip
+    RequestPreparer.normalized_request_text($stdin.read)
   end
 
   def read_interactive(use_reline: true)
@@ -76,22 +76,21 @@ class RequestReader
   # Load once per process when history is empty; avoids re-reading file on every queue prompt (Reline slowness).
   def load_request_history
     return unless Reline::HISTORY.empty?
-    return unless File.exist?(@history_file_path)
 
-    content = File.read(@history_file_path)
-    return if content.strip.empty?
+    entries = read_history_entries_from_file
+    return if entries.empty?
 
-    content.split(HISTORY_SEP).reverse_each do |req|
-      s = req.strip
-      Reline::HISTORY << s unless s.empty? || !history_entry_ok?(s)
+    history_entries_in_reline_order(entries).each do |s|
+      Reline::HISTORY << s if history_entry_ok?(s)
     end
   end
 
   # Regression: must persist to file so next run sees new requests; fsync ensures write is durable.
   def add_to_request_history(request)
-    return if request.to_s.strip.empty?
+    return if request.nil? || request.to_s.strip.empty?
     return unless history_entry_ok?(request)
-    return if Reline::HISTORY.any? && Reline::HISTORY.last.to_s.strip == request.to_s.strip
+    norm_last = RequestPreparer.normalized_request_text(Reline::HISTORY.last)
+    return if Reline::HISTORY.any? && norm_last == RequestPreparer.normalized_request_text(request)
 
     Reline::HISTORY << request
     append_request_to_history_file(request)
@@ -188,7 +187,7 @@ class RequestReader
   end
 
   def lines_to_result(lines)
-    r = lines.map(&:to_s).join("\n").to_s.strip
+    r = RequestPreparer.normalized_request_text(lines.map(&:to_s).join("\n"))
     r.empty? ? nil : r
   end
 
@@ -283,8 +282,8 @@ class RequestReader
 
   def handle_interrupt(lines)
     $stdout.puts ''
-    partial = lines.map(&:to_s).join("\n").strip
-    if partial.empty?
+    partial = lines.map(&:to_s).join("\n")
+    if partial.nil? || partial.to_s.strip.empty?
       @display.puts 'Interrupted. No request entered. Exiting.'.yellow
     else
       @display.puts 'Interrupted. Request so far:'.yellow
@@ -302,11 +301,11 @@ class RequestReader
   end
 
   def self.discard_command?(str)
-    str.to_s.strip == DISCARD_CMD
+    RequestPreparer.normalized_request_text(str) == DISCARD_CMD
   end
 
   def self.reset_command?(str)
-    str.to_s.strip == RESET_CMD
+    RequestPreparer.normalized_request_text(str) == RESET_CMD
   end
 
   def validate(req)
@@ -316,6 +315,24 @@ class RequestReader
   end
 
   private
+
+  # Returns normalized, non-empty entries in file order (oldest first).
+  def read_history_entries_from_file
+    return [] unless File.exist?(@history_file_path)
+
+    content = File.read(@history_file_path)
+    return [] if content.nil? || content.to_s.strip.empty?
+
+    content.split(HISTORY_SEP).filter_map do |req|
+      s = RequestPreparer.normalized_request_text(req)
+      s if s && !s.empty?
+    end
+  end
+
+  def history_entries_in_reline_order(entries)
+    # Reline expects chronological order (oldest first); Up then shows newest first. Do not reverse.
+    entries
+  end
 
   def history_entry_ok?(text)
     text.to_s.lines.size <= MAX_HISTORY_LINES

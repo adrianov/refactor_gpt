@@ -42,7 +42,8 @@ module AttemptExecution
   def run_model_attempt(model, idx, req)
     run_model_attempt_start(model, idx)
     start = Time.now
-    run_opts = { new_session: !@session_continuation, defer_full_prompt: false }
+    run_opts = { new_session: !@session_continuation, defer_full_prompt: false,
+                 continuation_analysis: @continuation_analysis }
     success, output, reason = @agent_executor.run(model, req, **run_opts)
     elapsed = Time.now - start
 
