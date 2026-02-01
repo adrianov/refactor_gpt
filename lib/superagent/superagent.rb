@@ -12,6 +12,7 @@ class Superagent
     composer-1
     sonnet-4.5
     opus-4.5
+    sonnet-4.5-thinking
   ].freeze
   MODELS_AUTO_ONLY = Array.new(3, MODELS.first).freeze
 
