@@ -4,7 +4,6 @@
 require_relative "lib/loader"
 require "shellwords"
 require "colorize"
-require "reline"
 
 class GitExplainer
   include AgentsFileHandler
@@ -158,22 +157,7 @@ def initialize_conversation_messages(initial_explanation)
 end
 
 def get_user_question
-  lines = []
-
-  loop do
-    line = Reline.readline(PromptReader.multiline_prompt(lines.empty?), true)
-    return nil if line.nil?
-
-    line = line.strip
-    if line.empty?
-      break unless lines.empty?
-      return nil
-    end
-
-    lines << line
-  end
-
-  lines.join("\n")
+  PromptReader.read_multiline
 end
 
 def process_user_question(explainer, messages, question)

@@ -122,23 +122,7 @@ def get_question(args)
 end
 
 def get_interactive_question
-  lines = []
-
-  loop do
-    line = Reline.readline(PromptReader.multiline_prompt(lines.empty?), true)
-    return nil if line.nil?
-
-    line = line.strip
-    if line.empty?
-      break unless lines.empty?
-
-      return nil
-    end
-
-    lines << line
-  end
-
-  lines.join("\n")
+  PromptReader.read_multiline
 end
 
 def get_piped_question

@@ -77,7 +77,7 @@ class AgentPromptBuilder
     summary = @session_tracker&.get_last_agent_summary
     return nil if summary.nil? || summary.to_s.strip.empty?
 
-    "\n\nFinal summary from previous agent run:\n#{summary.to_s.strip}"
+    "\n\nFinal summary from previous agent run:\n#{RecapFormatter.format_recap_for_prompt(summary)}"
   end
 
   # Builds "Previous requests" prompt block: last N entries, direct order (oldest to newest),
