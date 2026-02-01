@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Encapsulates the attempt loop and verification/refactor flow for superagent runs.
-# Pass order: implementation; refactor once when changed .rb > 800 or .mm > 2000; then verification.
+# Pass order: implementation; refactor once when changed files meet RefactorNeededCheck thresholds; then verification.
 module AttemptExecution
   ATTEMPTS_PER_MODEL = 2
   VERIFICATION_CALL_RETRIES = 2
@@ -44,7 +44,9 @@ module AttemptExecution
     success, output, elapsed, reason = run_implementation(model, idx, req)
     return run_model_attempt_on_failure(model, output, elapsed, reason) unless success
 
-    run_refactor_step(model, req) if refactor_needed_for_pass?(req)
+    changed = RefactorNeededCheck.changed_files(Dir.pwd)
+    triggering = RefactorNeededCheck.files_triggering_refactor(changed)
+    run_refactor_step(model, req, triggering) if triggering.any?
     result = process_verification_and_fix(model, req)
     record_attempt_failure(model) if result != :success
     result
@@ -62,11 +64,6 @@ module AttemptExecution
     [success, output, elapsed, reason]
   end
 
-  # True when any changed .rb exceeds 800 lines or any changed .mm exceeds 2000 (no LLM).
-  def refactor_needed_for_pass?(_req = nil)
-    changed = RefactorNeededCheck.changed_files(Dir.pwd)
-    RefactorNeededCheck.refactor_needed?(changed)
-  end
 
   def run_model_attempt_start(model, idx)
     attempt_number = (@attempt_count_per_model[model] || 0) + 1
@@ -156,12 +153,12 @@ module AttemptExecution
     @verification_handler.finalize_call_failed(h.verified, h.desc, h.review_time, h.raw_output) if exhausted
   end
 
-  def run_refactor_step(model, req)
+  def run_refactor_step(model, req, triggering_files = [])
     @pass_refactor_time = 0
     @session_tracker.append_to_request_history(RequestHistoryFormatter.refactor_entry(req), type: "refactor")
     update_terminal_title("Refactoring: #{model}")
     refactor_start = Time.now
-    refactor_ok = @verification_handler.run_refactor(model, req)
+    refactor_ok = @verification_handler.run_refactor(model, req, triggering_files: triggering_files)
     @pass_refactor_time = (Time.now - refactor_start) if refactor_ok
     save_refactor_summary_if_present if refactor_ok
   end
