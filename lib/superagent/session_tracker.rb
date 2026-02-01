@@ -1,13 +1,14 @@
 # frozen_string_literal: true
 
 require 'oj'
-require 'digest'
 require 'fileutils'
 
-# Tracks session information and detects continuation
+# Tracks session state per project (directory). Many sessions per project; continuation uses latest session.
+# Each session: request, history, continuation, failure_count (model selection). /reset clears failure_count.
 class SessionTracker
   SESSION_DIR = ConfigPath::CONFIG_DIR
   MAX_SESSION_AGE = 86400 # 24 hours
+  MAX_SESSIONS = 50
 
   TAGS_LIST = <<~TAGS.strip
     - #bug: Fixing a defect or error in the code
@@ -37,13 +38,67 @@ class SessionTracker
   end
 
   def load_previous_session
-    session_file = find_latest_session_file
-    return nil unless session_file
+    list = load_sessions
+    return nil if list.empty?
 
-    session_data = read_session_file(session_file)
-    return nil unless session_data && !session_expired?(session_data)
+    last = list.last
+    return nil unless last && !session_expired?(last)
 
-    session_data
+    last
+  end
+
+  # Session used for continuation analysis and prompt history/summary (latest non-expired session).
+  def session_for_continuation_analysis
+    load_previous_session
+  end
+
+  # Returns all non-expired sessions for this project, ordered by most recent first.
+  def active_sessions
+    load_sessions.select { |session| !session_expired?(session) }
+  end
+
+  # Finds the best matching session for a new request based on recency and content similarity.
+  # Prioritizes recent sessions with similar tags or descriptions.
+  def find_best_matching_session(_new_request)
+    sessions = active_sessions
+    return nil if sessions.empty?
+
+    # Simple heuristic: prefer recent sessions, but could be enhanced with AI analysis
+    # For now, return most recent as the continuation detection happens via AI analysis
+    sessions.first
+  end
+
+  # Returns sessions ordered by failure count (lowest first), useful for model selection.
+  def sessions_by_failure_count
+    active_sessions.sort_by { |session| session[:failure_count] || 0 }
+  end
+
+  # Gets the failure count for a specific session, defaulting to 0 if not found.
+  def failure_count_for_session(session)
+    return 0 unless session
+    session[:failure_count] || 0
+  end
+
+  def load_sessions
+    file = sessions_file_path
+    return [] unless File.exist?(file)
+
+    data = read_sessions_file(file)
+    return [] unless data
+
+    normalize_sessions_list(data)
+  end
+
+  def increment_failure_count
+    modify_last_session do |session|
+      session[:failure_count] = (session[:failure_count] || 0) + 1
+    end
+  end
+
+  def reset_failure_count
+    modify_last_session do |session|
+      session[:failure_count] = 0
+    end
   end
 
   def analyze_continuation_and_description(new_request, previous_session)
@@ -85,25 +140,14 @@ class SessionTracker
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided,
                    request_type: DEFAULT_REQUEST_TYPE)
     previous_session = load_previous_session
-    prev_list = previous_request_history_list(previous_session)
-    new_entries = expand_combined(request, type: request_type)
-    request_history = last_entry_matches?(prev_list, new_entries) ? prev_list : prev_list + new_entries
-    agent_summary = determine_agent_summary(continuation, previous_session, last_agent_summary)
-
-    session_data = {
-      request: request,
-      description: description,
-      tags: tags,
-      continuation: continuation,
-      request_history: request_history,
-      last_agent_summary: agent_summary,
-      timestamp: Time.now.to_i,
-      cwd: Dir.pwd
-    }
-
-    session_file = session_file_path
-    File.write(session_file, Oj.dump(session_data, mode: :compat, indent: 2))
-    cleanup_old_sessions
+    ctx = session_save_context(previous_session, request, continuation, last_agent_summary, request_type)
+    session_data = build_session_data(
+      request: request, description: description, tags: tags, continuation: continuation,
+      request_history: ctx[:request_history], last_agent_summary: ctx[:agent_summary],
+      failure_count: ctx[:failure_count]
+    )
+    list = determine_session_save_strategy(load_sessions, session_data, continuation)
+    write_sessions(list.last(MAX_SESSIONS))
   end
 
   def determine_agent_summary(_continuation, previous_session, last_agent_summary)
@@ -126,16 +170,38 @@ class SessionTracker
   end
 
   def write_append_session(previous, prev_list, new_entries)
-    session_data = (previous || {}).merge(
-      request_history: prev_list + new_entries,
+    sessions = load_sessions
+    return if sessions.empty?
+
+    updated_session = merge_request_history_into_session(
+      session_with_default_failure_count(previous || sessions[-1] || {}),
+      prev_list + new_entries
+    )
+    sessions[-1] = updated_session
+    write_sessions(sessions)
+  end
+
+  def build_session_data(request:, description:, tags:, continuation:, request_history:, last_agent_summary:,
+                         failure_count: 0)
+    session_data = {
+      request: request,
+      description: description,
+      tags: tags,
+      continuation: continuation,
+      request_history: request_history,
+      last_agent_summary: last_agent_summary,
+      failure_count: failure_count,
       timestamp: Time.now.to_i,
       cwd: Dir.pwd
-    )
-    File.write(session_file_path, Oj.dump(session_data, mode: :compat, indent: 2))
+    }
+
+    raise "Invalid session structure" unless validate_session_structure(session_data)
+
+    session_data
   end
 
   def get_session_request_history(exclude_equal: nil)
-    session_data = load_previous_session
+    session_data = session_for_continuation_analysis
     return [] unless session_data
 
     list = previous_request_history_list(session_data)
@@ -146,13 +212,92 @@ class SessionTracker
   end
 
   def get_last_agent_summary
-    session_data = load_previous_session
+    session_data = session_for_continuation_analysis
     return nil unless session_data
 
     session_data[:last_agent_summary]
   end
 
   private
+
+  def session_with_default_failure_count(session)
+    return {} unless session.is_a?(Hash)
+
+    session.key?(:failure_count) ? session : session.merge(failure_count: 0)
+  end
+
+  def validate_session_structure(session)
+    return false unless session.is_a?(Hash)
+    return false unless valid_request?(session[:request])
+    return false unless valid_timestamp?(session[:timestamp])
+
+    set_session_defaults(session)
+    true
+  end
+
+  def valid_request?(request)
+    request.is_a?(String) && !request.strip.empty?
+  end
+
+  def valid_timestamp?(timestamp)
+    timestamp.is_a?(Integer) && timestamp > 0
+  end
+
+  def set_session_defaults(session)
+    session[:failure_count] ||= 0
+    session[:request_history] ||= []
+    session[:tags] ||= []
+    session[:continuation] ||= false
+  end
+
+  def build_request_history_context(previous_session, request, request_type)
+    prev_list = previous_request_history_list(previous_session)
+    new_entries = expand_combined(request, type: request_type)
+    last_entry_matches?(prev_list, new_entries) ? prev_list : prev_list + new_entries
+  end
+
+  def determine_agent_summary_context(continuation, previous_session, last_agent_summary)
+    determine_agent_summary(continuation, previous_session, last_agent_summary)
+  end
+
+  def calculate_failure_count_context(continuation, previous_session)
+    continuation && previous_session ? (previous_session[:failure_count] || 0) : 0
+  end
+
+  def determine_session_save_strategy(current_sessions, new_session_data, continuation)
+    if continuation && current_sessions.any?
+      # Replace the last session with the new continuation session
+      current_sessions[0..-2] + [new_session_data]
+    else
+      # Append as a new session
+      current_sessions + [new_session_data]
+    end
+  end
+
+  def merge_request_history_into_session(base_session, new_history_entries)
+    base_session.merge(
+      request_history: new_history_entries,
+      timestamp: Time.now.to_i,
+      cwd: Dir.pwd,
+      failure_count: base_session[:failure_count] || 0
+    )
+  end
+
+  def modify_last_session
+    sessions = load_sessions
+    return if sessions.empty?
+
+    yield sessions.last
+    write_sessions(sessions)
+  end
+
+  def session_save_context(previous_session, request, continuation, last_agent_summary, request_type)
+    {
+      request_history: build_request_history_context(previous_session, request, request_type),
+      agent_summary: determine_agent_summary_context(continuation, previous_session, last_agent_summary),
+      failure_count: calculate_failure_count_context(continuation, previous_session)
+    }
+  end
 
   def previous_request_history_list(session)
     (session&.dig(:request_history) || []).map { |el| normalize_request_entry(el) }
@@ -192,19 +337,11 @@ class SessionTracker
     FileUtils.mkdir_p(SESSION_DIR)
   end
 
-  def session_file_path
-    cwd_hash = Digest::SHA256.hexdigest(Dir.pwd)
-    File.join(SESSION_DIR, "#{cwd_hash}.json")
+  def sessions_file_path
+    File.join(SESSION_DIR, "#{ConfigPath.project_id}.json")
   end
 
-  def find_latest_session_file
-    session_file = session_file_path
-    return session_file if File.exist?(session_file)
-
-    nil
-  end
-
-  def read_session_file(file_path)
+  def read_sessions_file(file_path)
     return nil unless File.exist?(file_path)
 
     content = File.read(file_path)
@@ -213,6 +350,30 @@ class SessionTracker
     nil
   rescue StandardError
     nil
+  end
+
+  def normalize_sessions_list(data)
+    raw = if data.is_a?(Array)
+            data
+          elsif data.is_a?(Hash) && data[:sessions].is_a?(Array)
+            data[:sessions]
+          elsif data.is_a?(Hash) && data.key?(:request)
+            [data]
+          else
+            []
+          end
+    raw.select { |s| s.is_a?(Hash) }.map do |session|
+      normalized = session_with_default_failure_count(session)
+      validate_session_structure(normalized) ? normalized : nil
+    end.compact
+  end
+
+  def write_sessions(list)
+    ensure_session_dir
+    # Clean up expired sessions and limit to max sessions
+    active_sessions = list.select { |session| !session_expired?(session) }.last(MAX_SESSIONS)
+    payload = { sessions: active_sessions.map { |s| s.is_a?(Hash) ? s : {} } }
+    File.write(sessions_file_path, Oj.dump(payload, mode: :compat, indent: 2))
   end
 
   def session_expired?(session_data)
@@ -376,16 +537,4 @@ class SessionTracker
     description&.to_s&.strip
   end
 
-  def cleanup_old_sessions
-    return unless Dir.exist?(SESSION_DIR)
-
-    Dir.glob(File.join(SESSION_DIR, '*.json')).each do |file|
-      begin
-        session_data = read_session_file(file)
-        File.delete(file) if session_data.nil? || session_expired?(session_data)
-      rescue StandardError
-        # Ignore errors during cleanup
-      end
-    end
-  end
 end
