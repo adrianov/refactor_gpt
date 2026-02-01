@@ -76,6 +76,14 @@ class TestVerificationParsing < Minitest::Test
     assert_equal false, verified
   end
 
+  def test_yes_after_cut_off_newline_whole_text_fallback
+    # Newline before YES was lost (e.g. stream boundary), verdict appears after . or **
+    response = 'Summary.- **PageBoxView**: uses scaleNone. **YES: The changes implement the cutoff fix.**'
+    verified, desc = @handler.parse_res(response)
+    assert_equal true, verified, "cut-off YES should be detected by whole-text fallback"
+    assert_match(/changes implement/, desc)
+  end
+
   def test_second_line_yes_counts
     assert_parse("Preamble text\nYES: it works", true, /it works/)
   end
