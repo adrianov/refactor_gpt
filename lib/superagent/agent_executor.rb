@@ -6,7 +6,8 @@ require 'oj'
 require 'rbconfig'
 require 'timeout'
 
-# Handles agent command execution with retry logic
+# Handles agent command execution with retry logic.
+# rubocop:disable Metrics/ClassLength -- slightly over after extracting SameToolErrorTracker for unit testability
 class AgentExecutor
   EXECUTION_TIMEOUT = 60
   MAX_EXECUTION_TIMEOUT = 600
@@ -15,6 +16,7 @@ class AgentExecutor
   def initialize(display, session_tracker: nil, show_prompt: true)
     @display = display
     @tools_used = []
+    @same_tool_error_tracker = SameToolErrorTracker.new
     @session_tracker = session_tracker
     @prompt_builder = AgentPromptBuilder.new(session_tracker)
     @stream_parser = JsonStreamParser.new
@@ -126,7 +128,7 @@ class AgentExecutor
   def run_with_timeout_monitoring(model, wrapped, new_session: false,
                                   prompt_request_reader: nil, on_prompt_request: nil,
                                   defer_full_prompt: false)
-    @tools_used = []
+    reset_run_tool_state
     @passthrough = test_runner_running?
     return run_without_timeout(model, wrapped, new_session: new_session) if @passthrough
 
@@ -150,7 +152,7 @@ class AgentExecutor
 
   def run_plan_mode(model, p, new_session: false)
     clear_full_prompt_buffer if new_session
-    @tools_used = []
+    reset_run_tool_state
     wrapped = wrap_prompt(p, new_session: new_session, current_request: p)
     cmd = setup_subprocess_run(model, wrapped, plan_mode: true, new_session: new_session)
     run_plan_subprocess(cmd, wrapped)
@@ -196,7 +198,7 @@ class AgentExecutor
   end
 
   def run_without_timeout(model, wrapped, new_session: false)
-    @tools_used = []
+    reset_run_tool_state
     cmd = setup_subprocess_run(model, wrapped, new_session: new_session)
     begin
       Open3.popen2e(*cmd) do |stdin, stdout_stderr, wait_thr|
@@ -214,7 +216,7 @@ class AgentExecutor
   # Processes one full stream line from the agent output.
   def process_stream_line(line, final)
     parsed = @stream_line_parser.parse_stream_line(line)
-    record_tool_used(parsed[:tool]) if parsed[:tool]
+    record_tool_outcome(parsed[:tool]) if parsed[:tool]
     display_tool_and_command(parsed[:tool], parsed[:command]) unless @passthrough
     @full_agent_output = @assistant_accumulator.accumulate(parsed, @full_agent_output)
     return final unless parsed[:text] && !parsed[:text].empty?
@@ -249,6 +251,25 @@ class AgentExecutor
     return nil unless run_success?(output, status)
 
     [true, output, nil]
+  end
+
+  def record_tool_outcome(tool)
+    record_tool_used(tool)
+    on_tool_completed(tool) if (tool[:subtype] || tool['subtype']).to_s == 'completed'
+  end
+
+  def reset_run_tool_state
+    @tools_used = []
+    @same_tool_error_tracker.reset
+  end
+
+  # Interrupt when same tool + same params fails 3 times in a row.
+  def on_tool_completed(tool)
+    key = ToolOutcome.invocation_key(tool)
+    return if key.nil? || @state_mutex.synchronize { @state[:timed_out] }
+    return unless @same_tool_error_tracker.record(key, error: ToolOutcome.tool_result_error?(tool)) == :interrupt
+
+    terminate_agent('same tool and parameters failed 3 times', cause: :interrupt)
   end
 
   def record_tool_used(tool)
@@ -396,15 +417,16 @@ class AgentExecutor
     return if @state_mutex.synchronize { @state[:timed_out] }
 
     reason = compute_timeout_reason
-    terminate_agent(reason) if reason
+    terminate_agent(reason, cause: :timeout) if reason
   end
 
-  def terminate_agent(reason)
+  def terminate_agent(reason, cause: :timeout)
     pid, complete = @state_mutex.synchronize do
       @state[:timed_out] = true
       [@state[:pid], @state[:complete]]
     end
-    @display.puts "❌ Agent timed out after #{reason}".red
+    message = cause == :timeout ? "Agent timed out after #{reason}" : "Agent interrupted: #{reason}"
+    @display.puts "❌ #{message}".red
     return unless pid
     begin
       Process.kill('TERM', pid)
@@ -579,3 +601,4 @@ class AgentExecutor
     @display.out_puts ''
   end
 end
+# rubocop:enable Metrics/ClassLength
