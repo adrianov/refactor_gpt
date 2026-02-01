@@ -11,6 +11,14 @@ class Display
   BODY_COLOR = :light_black
   CURSOR = TTY::Cursor
 
+  # Optional stats shown after run time. Each [key, label, format_type]: key in stats hash, label for output.
+  # format_type :duration => format_duration(value), only if value >= 1; nil => show value when present.
+  OPTIONAL_RUNTIME_STAT_LINES = [
+    [:waiting_elapsed, 'Waiting for input', :duration],
+    [:model, 'Model', nil],
+    [:current_dir, 'Current dir', nil]
+  ].freeze
+
   def puts(*args)
     @at_start_of_line = true
     return if args.empty? || args.first.to_s.strip.empty?
@@ -267,13 +275,28 @@ class Display
       out_puts ''
     end
 
-    def display_total_runtime(start_time, active_elapsed: nil, waiting_elapsed: nil)
-      return unless start_time
+    # stats: :start_time, :active_elapsed, :waiting_elapsed; optional keys in OPTIONAL_RUNTIME_STAT_LINES.
+    def display_total_runtime(stats)
+      return unless stats && stats[:start_time]
 
-      active = active_elapsed
-      active = Time.now - start_time if active.nil?
+      active = stats[:active_elapsed]
+      active = Time.now - stats[:start_time] if active.nil?
       puts "Run time: #{format_duration(active)}".cyan
-      puts "Waiting for input: #{format_duration(waiting_elapsed)}".cyan if waiting_elapsed && waiting_elapsed >= 1
+      print_optional_runtime_stats(stats)
+    end
+
+    def print_optional_runtime_stats(stats)
+      OPTIONAL_RUNTIME_STAT_LINES.each do |key, label, format_type|
+        value = stats[key]
+        next if value.nil?
+        if format_type == :duration
+          next unless value >= 1
+          puts "#{label}: #{format_duration(value)}".cyan
+        else
+          next unless value
+          puts "#{label}: #{value}".cyan
+        end
+      end
     end
 
     def display_agent_failure(output = nil, reason = nil)
