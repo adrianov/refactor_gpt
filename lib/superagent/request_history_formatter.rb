@@ -2,13 +2,14 @@
 
 # Formats request text for session history lines (verification, refactor, etc.).
 # Used by Superagent to build history entry text without duplicating truncation logic.
+# Display preview lengths (recap and queue): increase RECAP_PREVIEW_LEN / QUEUE_PREVIEW_LEN for less compact previews.
 module RequestHistoryFormatter
   # Max length for previous-request text stored in session and shown in "Previous requests" prompt.
   PREVIOUS_REQUEST_PROMPT_LEN = 300
-  # Preview length for recap sections (Completed/Failed/Queued). Increase to reduce truncation.
-  RECAP_PREVIEW_LEN = 120
-  # Preview length for queue and running-request lines. Increase to reduce truncation.
-  QUEUE_PREVIEW_LEN = 100
+  # Recap sections (Completed/Failed/Queued): one-line preview max length.
+  RECAP_PREVIEW_LEN = 200
+  # Queue and running-request lines: one-line preview max length.
+  QUEUE_PREVIEW_LEN = 160
 
   module_function
 

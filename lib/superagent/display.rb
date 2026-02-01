@@ -240,7 +240,7 @@ class Display
       @queue_display.display_pending_list(requests, current_request: current_request)
     end
 
-    # Single-line preview for queue/running: first line of text, truncated to 60 chars.
+    # Single-line preview for queue/running: first line, truncated to RequestHistoryFormatter::QUEUE_PREVIEW_LEN.
     def pending_request_preview(text)
       @queue_display.pending_request_preview(text)
     end
