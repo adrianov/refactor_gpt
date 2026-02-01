@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
-# Request sanitization and model index extraction. Extracted to keep Superagent under length limit.
+# Request sanitization and model hint (tag) extraction. Parses @token in request text;
+# resolution in model_index_for_token: exact match, then word-boundary in model name (e.g. @sonnet → sonnet-4.5).
 module RequestPreparer
   NON_INTERACTIVE_NOTICE = /
     (?:^|\n)
@@ -11,6 +12,8 @@ module RequestPreparer
     \s*
   /mix
   GITIGNORE_PREPEND = "Ensure .gitignore excludes build artifacts, dependencies, and other unneeded files and folders. "
+  # Regex for @-mentions in request text. Capture group is the token (e.g. @sonnet → "sonnet").
+  MODEL_HINT_PATTERN = /@(\S+)/.freeze
 
   module_function
 
@@ -24,19 +27,28 @@ module RequestPreparer
     remove_model_mentions(req.gsub(NON_INTERACTIVE_NOTICE, "\n").strip, models)
   end
 
+  # Returns model index when token is a valid model hint, else nil. Exact match first, then word-boundary in model name.
+  def model_index_for_token(token, models)
+    return nil if token.to_s.strip.empty?
+    idx = models.index(token)
+    return idx if idx
+    re = /\b#{Regexp.escape(token)}\b/
+    models.index { |name| name =~ re }
+  end
+
   def extract_model_index(req, models)
     return nil if req.nil?
-    req.scan(/@(\S+)/).flatten.each do |mention|
-      model_index = models.index(mention)
-      return model_index if model_index
+    req.scan(MODEL_HINT_PATTERN).flatten.each do |token|
+      idx = model_index_for_token(token, models)
+      return idx if idx
     end
     nil
   end
 
   def remove_model_mentions(req, models)
     return req if req.nil?
-    cleaned = req.gsub(/@(\S+)/) do |match|
-      models.include?($1) ? "" : match
+    cleaned = req.gsub(MODEL_HINT_PATTERN) do
+      model_index_for_token(Regexp.last_match(1), models) ? '' : Regexp.last_match(0)
     end
     cleaned.strip
   end

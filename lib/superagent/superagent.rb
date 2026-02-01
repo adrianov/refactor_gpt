@@ -4,6 +4,7 @@
 class Superagent
   include AttemptExecution
 
+  # Single source for model queue. @-mention hints (tags) resolve in RequestPreparer: exact match, then word-boundary.
   MODELS = %w[
     auto
     grok
@@ -12,7 +13,7 @@ class Superagent
     sonnet-4.5
     opus-4.5
   ].freeze
-  MODELS_AUTO_ONLY = %w[auto auto auto].freeze
+  MODELS_AUTO_ONLY = Array.new(3, MODELS.first).freeze
 
   def initialize(
     display: Display.new,
@@ -88,7 +89,7 @@ class Superagent
   end
 
   def run_start_index(raw_req, req, start_model_index)
-    model_idx = RequestPreparer.extract_model_index(raw_req, models)
+    model_idx = model_index_from_request_text(raw_req)
     start_index = determine_start_index(model_idx, start_model_index)
     @display.display_start_message(req, @session_continuation, @session_tags)
     update_terminal_title(@session_continuation ? "↻ Continuing session" : "Running...")
@@ -221,6 +222,11 @@ class Superagent
     @auto_only ? MODELS_AUTO_ONLY : MODELS
   end
 
+  # Session model hint from request text (e.g. @sonnet). Used to set queue start for this run.
+  def model_index_from_request_text(raw_text)
+    RequestPreparer.extract_model_index(raw_text, models)
+  end
+
   def determine_start_index(model_index_from_request, start_model_index)
     if @session_continuation
       model_index_from_request ? [model_index_from_request, @current_model_index].max : @current_model_index
@@ -257,6 +263,17 @@ class Superagent
     add_waiting_segment
   end
 
+  # Hash for display_total_runtime. Add optional keys here and in Display::OPTIONAL_RUNTIME_STAT_LINES.
+  def runtime_stats_for_display
+    {
+      start_time: @start_time,
+      active_elapsed: @active_elapsed,
+      waiting_elapsed: @waiting_elapsed,
+      model: @current_model,
+      current_dir: Dir.pwd
+    }
+  end
+
   # Raw agent output; do not compact (display and verification preserve formatting).
   def current_recap_text
     @current_agent_output
@@ -269,7 +286,7 @@ class Superagent
     @display.display_passes_recap(@pass_timings)
     @display.display_verification_result(true, desc, context, raw_recap: current_recap_text)
     finalize_runtime_before_display
-    @display.display_total_runtime(@start_time, active_elapsed: @active_elapsed, waiting_elapsed: @waiting_elapsed)
+    @display.display_total_runtime(runtime_stats_for_display)
   end
 
   def handle_final_success(previous_req = nil)
@@ -303,7 +320,7 @@ class Superagent
       @display.puts msg.red
       exit 1
     end
-    model_index = RequestPreparer.extract_model_index(combined, models)
+    model_index = model_index_from_request_text(combined)
     execute_new_request(combined, previous_req, model_index)
   end
 
@@ -344,7 +361,7 @@ class Superagent
   end
 
   def prompt_execute_new_request(raw_new_req, previous_req)
-    model_index = RequestPreparer.extract_model_index(raw_new_req, models)
+    model_index = model_index_from_request_text(raw_new_req)
     new_req = RequestPreparer.sanitize_request(raw_new_req, models)
     return if new_req.to_s.strip.empty?
 
@@ -389,7 +406,7 @@ class Superagent
 
   def handle_plan_success
     finalize_runtime_before_display
-    @display.display_total_runtime(@start_time, active_elapsed: @active_elapsed, waiting_elapsed: @waiting_elapsed)
+    @display.display_total_runtime(runtime_stats_for_display)
     @display.display_git_status
     CompletionNotifier.notify_completion(success: true)
     update_terminal_title(true)
@@ -405,7 +422,7 @@ class Superagent
     @display.display_all_attempts_failed(@current_request)
     display_done_requests_recap_if_any
     finalize_runtime_before_display
-    @display.display_total_runtime(@start_time, active_elapsed: @active_elapsed, waiting_elapsed: @waiting_elapsed)
+    @display.display_total_runtime(runtime_stats_for_display)
     save_current_session(@current_request) if @current_request
     CompletionNotifier.notify_completion(success: false) if no_queued
     update_terminal_title(false)
