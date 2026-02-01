@@ -28,7 +28,6 @@ end
 class NetworkResourceError < StandardError
 end
 
-require_relative "agents_file_handler"
 
 class GeminiClient
   include AgentsFileHandler

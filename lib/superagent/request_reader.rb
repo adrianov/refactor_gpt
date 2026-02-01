@@ -3,9 +3,6 @@
 require 'digest'
 require 'fileutils'
 require 'reline'
-require_relative 'config_path'
-require_relative '../signal_handler'
-require_relative '../prompt_reader'
 
 # Reline bug: whole_lines can contain nil when pasting; replace with ''. Pad result so modified_lines[i] is never nil.
 module RelineNilSafeBuffer
@@ -29,7 +26,7 @@ class RequestReader
   REQUEST_PROMPT = 'Enter request (press Enter twice to submit):'
   DISCARD_CMD = '/discard'
   PASTE_THRESHOLD = 0.2
-  HISTORY_DIR = SuperagentConfig::CONFIG_DIR
+  HISTORY_DIR = ConfigPath::CONFIG_DIR
   HISTORY_SEP = "\n---\n"
   MAX_HISTORY = 100
   MAX_HISTORY_LINES = 25

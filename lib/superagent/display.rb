@@ -1,12 +1,5 @@
 # frozen_string_literal: true
 
-require_relative '../prompt_reader'
-require_relative 'pass_timing_display'
-require_relative 'verification_display'
-require_relative 'outcome_display'
-require_relative 'queue_display'
-require_relative 'stream_filter'
-require_relative 'tool_call_formatter'
 require 'tty-box'
 require 'tty-cursor'
 
@@ -17,7 +10,6 @@ class Display
   TIMESTAMP_COLOR = :light_blue
   BODY_COLOR = :light_black
   CURSOR = TTY::Cursor
-  SUMMARY_MARKER = /^\s*Summary of changes\s*:?\s*$/i
 
   def puts(*args)
     @at_start_of_line = true

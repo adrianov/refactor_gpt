@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-require_relative 'json_stream_parser'
-require_relative 'stream_filter'
-
 # Parses one raw stream-json line into a structured hash (type, text, stream_id, command,
 # tool, think_close_only, trailing_think_close).
 class StreamLineParser

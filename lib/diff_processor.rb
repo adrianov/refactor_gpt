@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative "diff_compactor"
-
 # Builds and truncates unified diffs for commit planning. Truncation prefers
 # newline boundaries (full lines); mid-line cut only when line exceeds threshold.
 class DiffProcessor

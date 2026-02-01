@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'rbconfig'
-require_relative 'process_descendants'
 
 # Detects whether a test runner (rspec, minitest, etc.) is running; used to disable execution timeout.
 module TestRunnerDetector

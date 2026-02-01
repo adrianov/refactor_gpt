@@ -3,12 +3,10 @@
 require 'oj'
 require 'digest'
 require 'fileutils'
-require_relative 'config_path'
-require_relative '../../ask_gpt'
 
 # Tracks session information and detects continuation
 class SessionTracker
-  SESSION_DIR = SuperagentConfig::CONFIG_DIR
+  SESSION_DIR = ConfigPath::CONFIG_DIR
   MAX_SESSION_AGE = 86400 # 24 hours
 
   TAGS_LIST = <<~TAGS.strip

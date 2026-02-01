@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 # Renders verification result and full recap to the display. Extracted to keep Display under length limit.
+# Recap is split into intro (lines before summary marker) and summary (marker to end); layout is in display_full_recap.
 class VerificationDisplay
-  SUMMARY_MARKER = /^\s*Summary of changes\s*:?\s*$/i
+  RECAP_INDENT = '  '
 
   def initialize(display)
     @display = display
@@ -25,7 +26,7 @@ class VerificationDisplay
   def render_verification_message(prefix, suffix, desc, verified, context)
     if desc && !desc.empty?
       @display.puts "#{prefix}#{suffix}:".send(verified ? :green : :yellow)
-      desc.each_line { |line| @display.out_puts @display.body("  #{line.chomp}") }
+      desc.each_line { |line| @display.out_puts @display.body("#{RECAP_INDENT}#{line.chomp}") }
     elsif verified
       @display.puts "#{prefix}#{suffix}! Success.".send(:green)
     else
@@ -38,20 +39,21 @@ class VerificationDisplay
 
     @display.out_puts ''
     @display.puts 'Full recap:'.cyan
-    lines = text.to_s.each_line.to_a
-    summary_idx = lines.index { |l| l =~ SUMMARY_MARKER }
-    print_recap_intro(lines, summary_idx)
-    print_recap_summary(lines, summary_idx) if summary_idx
+    intro_lines, summary_lines = RecapFormatter.parse_recap_sections(text.to_s)
+    print_recap_lines(intro_lines, skip_empty: true, blank_after_each: false)
+    if summary_lines
+      @display.out_puts ''
+      print_recap_lines(summary_lines, skip_empty: false)
+    end
     @display.out_puts ''
     $stdout.flush unless @display.output_paused
   end
 
-  def print_recap_intro(lines, summary_idx)
-    range = summary_idx ? lines[0...summary_idx] : lines
-    range.each { |line| @display.out_puts @display.body("  #{line.chomp}") unless line.chomp.empty? }
-  end
-
-  def print_recap_summary(lines, summary_idx)
-    lines[summary_idx..].each { |line| @display.out_puts @display.body("  #{line.chomp}") }
+  def print_recap_lines(lines, skip_empty: false, blank_after_each: false)
+    lines.each do |line|
+      next if skip_empty && line.empty?
+      @display.out_puts @display.body("#{RECAP_INDENT}#{line}")
+      @display.out_puts '' if blank_after_each
+    end
   end
 end

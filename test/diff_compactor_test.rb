@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
-require_relative "../lib/diff_compactor"
+require_relative "../lib/loader"
 
 class TestDiffCompactor < Minitest::Test
   def setup

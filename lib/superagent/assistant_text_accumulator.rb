@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative 'stream_filter'
-
 # Accumulates assistant text from parsed stream lines for full agent output (verification, etc.).
 class AssistantTextAccumulator
   def accumulate(parsed, current_output)

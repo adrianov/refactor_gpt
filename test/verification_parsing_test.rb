@@ -1,9 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require 'minitest/autorun'
-require_relative '../lib/superagent/verification_handler'
-require_relative '../lib/superagent/display'
+require "minitest/autorun"
+require_relative "../lib/loader"
 
 class TestVerificationParsing < Minitest::Test
   def setup

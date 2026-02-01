@@ -1,20 +1,5 @@
 # frozen_string_literal: true
 
-require_relative "display"
-require_relative "request_reader"
-require_relative "agent_executor"
-require_relative "verification_handler"
-require_relative "session_tracker"
-require_relative "pending_request_queue"
-require_relative "request_history_formatter"
-require_relative "request_preparer"
-require_relative "pass_timing_builder"
-require_relative "attempt_execution"
-require_relative "auto_only_lock"
-require_relative "../completion_notifier"
-require_relative "../instance_lock"
-require_relative "../../ask_gpt"
-
 # Main orchestrator class for superagent execution
 class Superagent
   include AttemptExecution

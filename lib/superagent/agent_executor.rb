@@ -5,14 +5,6 @@ require 'json'
 require 'oj'
 require 'rbconfig'
 require 'timeout'
-require_relative 'agent_prompt_builder'
-require_relative 'assistant_text_accumulator'
-require_relative 'json_stream_parser'
-require_relative 'process_descendants'
-require_relative 'stream_line_parser'
-require_relative 'run_failure_classifier'
-require_relative 'stream_filter'
-require_relative 'test_runner_detector'
 
 # Handles agent command execution with retry logic
 class AgentExecutor

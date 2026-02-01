@@ -8,6 +8,7 @@
 #
 # Executes agent commands across multiple AI models sequentially,
 # automatically verifying results and retrying with fix instructions when verification fails.
+# Only lib/loader is required; do not load root _gpt scripts (ask_gpt, etc.).
 
 require_relative "lib/loader"
 require "colorize"

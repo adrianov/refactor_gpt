@@ -29,8 +29,6 @@ end
 class NetworkResourceError < StandardError
 end
 
-require_relative "agents_file_handler"
-
 # Unified OpenAI client with proxy support for all GPT utilities
 class OpenAiClient
   include AgentsFileHandler

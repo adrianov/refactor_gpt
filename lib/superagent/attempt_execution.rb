@@ -6,6 +6,7 @@ module AttemptExecution
   VERIFICATION_CALL_RETRIES = 2
 
   def execute_attempts(start_index, req)
+    @current_request = req
     @current_model_index = start_index
     @attempt_count_per_model = {} unless @session_continuation
     @pass_refactor_time = nil
@@ -180,10 +181,10 @@ module AttemptExecution
     update_terminal_title("Retrying: #{model}")
     fix_start = Time.now
     @verification_handler.retry_with_fix(model, req)
-    retry_verification_after_fix(pass_timing, fix_start)
+    retry_verification_after_fix(pass_timing, fix_start, req)
   end
 
-  def retry_verification_after_fix(pass_timing, fix_start)
+  def retry_verification_after_fix(pass_timing, fix_start, req)
     h = @verification_handler
     pass_timing[:fix_time] = Time.now - fix_start - (h.review_time || 0)
     pass_timing[:review_time] += h.review_time || 0

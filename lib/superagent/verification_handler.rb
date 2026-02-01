@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-require_relative "../agents_file_handler"
-require_relative "agent_prompt_builder"
-
 # Handles verification prompts and response parsing. After run_verification, retry_with_fix, or run_refactor,
 # callers read the last outcome via verified, desc, review_time, call_failed, retryable, raw_output,
 # fix_output, refactor_output.
