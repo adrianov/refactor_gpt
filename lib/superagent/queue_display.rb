@@ -16,9 +16,7 @@ class QueueDisplay
   end
 
   def pending_request_preview(text)
-    preview = text.to_s.strip.lines.first&.chomp
-    preview = preview[0..60] + '...' if preview && preview.length > 60
-    preview || ''
+    RequestHistoryFormatter.queue_preview(text)
   end
 
   def display_session_type(continuation, tags)

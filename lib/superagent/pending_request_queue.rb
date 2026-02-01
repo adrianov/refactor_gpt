@@ -43,10 +43,6 @@ class PendingRequestQueue
   private
 
   def request_preview(text)
-    return '' if text.to_s.strip.empty?
-
-    preview = text.to_s.strip.lines.first&.chomp
-    preview = preview[0..60] + '...' if preview && preview.length > 60
-    preview || ''
+    RequestHistoryFormatter.queue_preview(text)
   end
 end
