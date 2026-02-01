@@ -52,4 +52,21 @@ class TestSameToolErrorTracker < Minitest::Test
     assert_equal :ok, tracker.record('key', error: true)
     assert_equal :interrupt, tracker.record('key', error: true)
   end
+
+  # Ensures parser output (tool_call NDJSON → tool hash) still feeds the safeguard: same tool+args
+  # failing 3 times in a row triggers :interrupt.
+  def test_interrupt_after_three_same_tool_errors_with_parser_tool_shape
+    line = '{"type":"tool_call","subtype":"completed","tool_call":' \
+           '{"runCommandToolCall":{"args":{"path":"/tmp"},"result":{"error":"failed"}}}}'
+    parsed = StreamLineParser.new.parse_stream_line(line)
+    tool = parsed[:tool]
+    assert tool, 'parser must produce tool for tool_call line'
+    key = ToolOutcome.invocation_key(tool)
+    assert key, 'invocation key must be built from parser tool'
+    assert ToolOutcome.tool_result_error?(tool), 'parser tool with result.error must be treated as error'
+    tracker = SameToolErrorTracker.new
+    assert_equal :ok, tracker.record(key, error: true)
+    assert_equal :ok, tracker.record(key, error: true)
+    assert_equal :interrupt, tracker.record(key, error: true)
+  end
 end
