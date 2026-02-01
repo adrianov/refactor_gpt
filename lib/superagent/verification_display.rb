@@ -6,8 +6,6 @@ class VerificationDisplay
   RECAP_INDENT = '  '
   RECAP_INTRO_SKIP_EMPTY = true
   RECAP_INTRO_BLANK_AFTER_EACH = true
-  RECAP_SUMMARY_SKIP_EMPTY = false
-  RECAP_SUMMARY_BLANK_AFTER_EACH = true
 
   def initialize(display)
     @display = display
@@ -43,16 +41,18 @@ class VerificationDisplay
 
     @display.out_puts ''
     @display.puts 'Full recap:'.cyan
-    intro_lines, summary_lines = RecapFormatter.parse_recap_sections(text.to_s)
-    print_recap_lines(intro_lines, skip_empty: RECAP_INTRO_SKIP_EMPTY, blank_after_each: RECAP_INTRO_BLANK_AFTER_EACH)
-    if summary_lines
-      @display.out_puts ''
-      print_recap_lines(
-        summary_lines, skip_empty: RECAP_SUMMARY_SKIP_EMPTY, blank_after_each: RECAP_SUMMARY_BLANK_AFTER_EACH
-      )
-    end
+    sections = RecapFormatter.parse_recap_sections(text.to_s)
+    print_recap_lines(
+      sections.intro_lines, skip_empty: RECAP_INTRO_SKIP_EMPTY, blank_after_each: RECAP_INTRO_BLANK_AFTER_EACH
+    )
+    print_summary_raw(sections.summary_raw) if sections.summary_raw
     @display.out_puts ''
     $stdout.flush unless @display.output_paused
+  end
+
+  def print_summary_raw(raw)
+    @display.out_puts ''
+    raw.each_line { |line| @display.out_puts @display.body("#{RECAP_INDENT}#{line.chomp}") }
   end
 
   def print_recap_lines(lines, skip_empty: false, blank_after_each: false)

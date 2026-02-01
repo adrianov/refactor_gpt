@@ -8,29 +8,29 @@ class RecapFormatter
   # Prompt spacing: increase for less compact summary in the next prompt.
   INTRO_JOIN = "\n\n"                    # Between intro lines
   INTRO_SUMMARY_SEPARATOR = "\n\n"       # Between intro block and summary block
-  SUMMARY_LINE_JOIN = "\n\n"            # Between summary lines (blank line for readability)
+
+  # Value object: intro_lines (array), summary_lines (array or nil), summary_raw (string or nil).
+  # summary_raw is the summary section with original newlines preserved (for display and prompt).
+  RecapSections = Struct.new(:intro_lines, :summary_lines, :summary_raw, keyword_init: true)
 
   def self.parse_recap_sections(text)
     lines = text.to_s.each_line.map(&:chomp)
     summary_idx = lines.index { |l| l =~ SUMMARY_MARKER }
     intro = summary_idx ? lines[0...summary_idx] : lines
-    summary = summary_idx ? lines[summary_idx..] : nil
-    [intro, summary]
+    summary_lines = summary_idx ? lines[summary_idx..] : nil
+    summary_raw = summary_lines&.join("\n")
+    RecapSections.new(intro_lines: intro, summary_lines: summary_lines, summary_raw: summary_raw)
   end
 
   def self.format_intro_for_prompt(intro_lines)
     intro_lines.to_a.reject(&:empty?).join(INTRO_JOIN)
   end
 
-  def self.format_summary_for_prompt(summary_lines)
-    summary_lines.to_a.join(SUMMARY_LINE_JOIN)
-  end
-
   def self.format_recap_for_prompt(text)
-    intro, summary = parse_recap_sections(text.to_s.strip)
-    formatted_intro = format_intro_for_prompt(intro)
-    return formatted_intro if summary.nil? || summary.empty?
+    sections = parse_recap_sections(text.to_s.strip)
+    formatted_intro = format_intro_for_prompt(sections.intro_lines)
+    return formatted_intro if sections.summary_raw.nil? || sections.summary_raw.empty?
 
-    formatted_intro + INTRO_SUMMARY_SEPARATOR + format_summary_for_prompt(summary)
+    formatted_intro + INTRO_SUMMARY_SEPARATOR + sections.summary_raw
   end
 end
