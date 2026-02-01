@@ -1,11 +1,11 @@
 # frozen_string_literal: true
 
 # Renders verification result and full recap to the display. Extracted to keep Display under length limit.
-# Recap layout: intro and summary options below; set BLANK_AFTER_EACH to true for less compact display.
+# Recap layout: intro and summary preserve LLM newlines; no extra blank after each intro line.
 class VerificationDisplay
   RECAP_INDENT = '  '
-  RECAP_INTRO_SKIP_EMPTY = true
-  RECAP_INTRO_BLANK_AFTER_EACH = true
+  RECAP_INTRO_SKIP_EMPTY = false
+  RECAP_INTRO_BLANK_AFTER_EACH = false
 
   def initialize(display)
     @display = display
@@ -61,9 +61,13 @@ class VerificationDisplay
 
   def print_recap_lines(lines, skip_empty: false, blank_after_each: false)
     lines.each do |line|
-      next if skip_empty && line.empty?
-      @display.out_puts @display.body("#{RECAP_INDENT}#{line}")
-      @display.out_puts '' if blank_after_each
+      if line.empty?
+        next if skip_empty
+        @display.out_puts ''
+      else
+        @display.out_puts @display.body("#{RECAP_INDENT}#{line}")
+        @display.out_puts '' if blank_after_each
+      end
     end
   end
 end
