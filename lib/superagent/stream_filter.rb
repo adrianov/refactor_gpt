@@ -23,6 +23,6 @@ module StreamFilter
   # True when stream line ends with think-close (so display should ensure newline after printing).
   def self.trailing_think_close?(text)
     return false if text.nil? || text.to_s.empty?
-    strip_trailing_think_close(text.to_s) != text.to_s
+    text.to_s.gsub(/\p{C}+/, '').match?(THINK_CLOSE_TAIL)
   end
 end

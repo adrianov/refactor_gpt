@@ -156,17 +156,17 @@ class Display
       flush_assistant_text_buffer
     end
 
-    # Applies display for one stream line: flushes newline when think block ends (only or trailing),
-    # then prints thinking indicator or assistant text as appropriate.
+    # Applies display for one stream line: show thinking indicator or assistant text when not think-close-only;
+    # ensure newline once when line is think-close-only or has trailing think-close.
     def apply_stream_line_display(type, text, stream_id, think_close_only:, trailing_think_close:, passthrough:)
-      ensure_newline_after_think_close if think_close_only
-      case type
-      when 'thinking'
-        print_thinking_indicator unless passthrough || think_close_only
-      when 'assistant', nil
-        print_assistant_text(text, stream_id: stream_id) unless passthrough || think_close_only
-        ensure_newline_after_think_close if trailing_think_close
+      unless think_close_only
+        show = !passthrough
+        case type
+        when 'thinking' then print_thinking_indicator if show
+        when 'assistant', nil then print_assistant_text(text, stream_id: stream_id) if show
+        end
       end
+      ensure_newline_after_think_close if think_close_only || trailing_think_close
     end
 
     def reset_stream_tracking
