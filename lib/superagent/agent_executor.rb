@@ -221,10 +221,12 @@ class AgentExecutor
   # Processes one full stream line from the agent output.
   def process_stream_line(line, final)
     parsed = @stream_line_parser.parse_stream_line(line)
+    capture_last_result_for_recap(parsed)
     record_tool_outcome(parsed[:tool]) if parsed[:tool]
     display_tool_and_command(parsed[:tool], parsed[:command]) unless @passthrough
     @full_agent_output = @assistant_accumulator.accumulate(parsed, @full_agent_output)
-    return final unless parsed[:text] && !parsed[:text].empty?
+    content = display_content_for(parsed)
+    return final unless content && !content.empty?
 
     handle_stream_line_display(parsed, final)
   end
@@ -233,6 +235,10 @@ class AgentExecutor
     @display.flush_assistant_text_buffer
     display_tools_summary
     @display.display_agent_call_result(success_for_display, @tools_used.size)
+  end
+
+  def last_recap_result
+    @last_result_for_recap
   end
 
   private
@@ -256,6 +262,15 @@ class AgentExecutor
     return nil unless run_success?(output, status)
 
     [true, output, nil]
+  end
+
+  def display_content_for(parsed)
+    parsed[:type].to_s == 'result' ? parsed[:result] : parsed[:text]
+  end
+
+  # Session recap uses type=result and the :result field only, not :text.
+  def capture_last_result_for_recap(parsed)
+    @last_result_for_recap = parsed[:result] if parsed[:type].to_s == 'result' && parsed[:result]
   end
 
   def record_tool_outcome(tool)
@@ -363,14 +378,15 @@ class AgentExecutor
   end
 
   def handle_stream_line_display(parsed, final)
+    content = display_content_for(parsed)
     @display.apply_stream_line_display(
-      parsed[:type], parsed[:text], parsed[:stream_id],
+      parsed[:type], content, parsed[:stream_id],
       think_close_only: parsed[:think_close_only],
       trailing_think_close: parsed[:trailing_think_close],
       passthrough: @passthrough
     )
     case parsed[:type]
-    when 'result' then parsed[:text]
+    when 'result' then parsed[:result]
     when 'thinking', 'assistant', nil then final
     else final
     end
@@ -505,6 +521,7 @@ class AgentExecutor
 
   def process_agent_output(stdout_stderr, wait_thr, prompt_request_reader: nil, on_prompt_request: nil)
     @full_agent_output = ''
+    @last_result_for_recap = nil
     raw, final, buffer = '', '', ''
     drain_prompt_pipe(prompt_request_reader) if prompt_request_reader && on_prompt_request
     read_ios = [stdout_stderr]
