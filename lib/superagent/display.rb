@@ -18,10 +18,12 @@ class Display
     [:model, 'Model', nil],
     [:current_dir, 'Current dir', nil]
   ].freeze
+  THINK_CLOSE_ONLY = /\A\s*`*\s*<\/think>\s*`*\s*\z/i
+  THINK_CLOSE_TAIL = /\s*`*\s*<\/think>\s*`*\s*\z/i
 
   def puts(*args)
     @at_start_of_line = true
-    return if args.empty? || (args.first.nil? || args.first.to_s.strip.empty?)
+    return if args.empty? || (args.first.nil? || args.first.to_s.empty?)
 
     ts = timestamp_str
     str = args.first.is_a?(String) ? format_with_timestamp(args[0], ts) : args[0].to_s
@@ -128,10 +130,20 @@ class Display
 
     def normalized_assistant_text(text)
       return nil if text.nil? || text.to_s.empty?
-      return nil if StreamFilter.think_close_only?(text)
+      return nil if think_close_only?(text)
 
-      stripped = StreamFilter.strip_trailing_think_close(text)
-      (stripped.nil? || stripped.to_s.strip.empty?) ? nil : stripped.to_s
+      stripped = strip_trailing_think_close(text)
+      (stripped.nil? || stripped.to_s.empty?) ? nil : stripped.to_s
+    end
+
+    def think_close_only?(text)
+      return false if text.nil? || text.to_s.strip.empty?
+      text.to_s.strip.gsub(/\p{C}+/, '').match?(THINK_CLOSE_ONLY)
+    end
+
+    def strip_trailing_think_close(text)
+      return text if text.nil? || text.to_s.empty?
+      text.to_s.gsub(/\p{C}+/, '').sub(THINK_CLOSE_TAIL, '')
     end
 
     def print_one_assistant_line(text)
