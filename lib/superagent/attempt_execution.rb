@@ -1,9 +1,11 @@
 # frozen_string_literal: true
 
 # Encapsulates the attempt loop and verification/refactor flow for superagent runs.
+# Pass order: implementation; refactor once when changed .rb > 800 or .mm > 2000; then verification.
 module AttemptExecution
   ATTEMPTS_PER_MODEL = 2
   VERIFICATION_CALL_RETRIES = 2
+  MAX_AUTOMATED_FIXES = 1
 
   def execute_attempts(start_index, req)
     @current_request = req
@@ -25,7 +27,6 @@ module AttemptExecution
       @current_model = model
       next if (@attempt_count_per_model[model] || 0) >= ATTEMPTS_PER_MODEL
 
-      run_refactor_at_pass_start(model, req, run_for_this_pass: true)
       result = run_model_attempt(model, idx, req)
       return [true, highest_index_reached] if result == :success
       return [handle_switch_to_auto_only(req), highest_index_reached] if result == :switch_to_auto_only
@@ -40,19 +41,31 @@ module AttemptExecution
   end
 
   def run_model_attempt(model, idx, req)
+    success, output, elapsed, reason = run_implementation(model, idx, req)
+    return run_model_attempt_on_failure(model, output, elapsed, reason) unless success
+
+    run_refactor_step(model, req) if refactor_needed_for_pass?(req)
+    result = process_verification_and_fix(model, req)
+    record_attempt_failure(model) if result != :success
+    result
+  end
+
+  # Runs implementation step only (agent run, no verification). Returns success, output, elapsed, reason.
+  def run_implementation(model, idx, req)
     run_model_attempt_start(model, idx)
     start = Time.now
     run_opts = { new_session: !@session_continuation, defer_full_prompt: false,
                  continuation_analysis: @continuation_analysis }
     success, output, reason = @agent_executor.run(model, req, **run_opts)
     elapsed = Time.now - start
+    run_model_attempt_on_success(output, elapsed) if success
+    [success, output, elapsed, reason]
+  end
 
-    return run_model_attempt_on_failure(model, output, elapsed, reason) unless success
-
-    run_model_attempt_on_success(output, elapsed)
-    result = process_verification_and_fix(model, req)
-    record_attempt_failure(model) if result != :success
-    result
+  # True when any changed .rb exceeds 800 lines or any changed .mm exceeds 2000 (no LLM).
+  def refactor_needed_for_pass?(_req = nil)
+    changed = RefactorNeededCheck.changed_files(Dir.pwd)
+    RefactorNeededCheck.refactor_needed?(changed)
   end
 
   def run_model_attempt_start(model, idx)
@@ -142,9 +155,7 @@ module AttemptExecution
     @verification_handler.finalize_call_failed(h.verified, h.desc, h.review_time, h.raw_output) if exhausted
   end
 
-  def run_refactor_at_pass_start(model, req, run_for_this_pass: false)
-    return unless run_for_this_pass
-
+  def run_refactor_step(model, req)
     @pass_refactor_time = 0
     @session_tracker.append_to_request_history(RequestHistoryFormatter.refactor_entry(req), type: "refactor")
     update_terminal_title("Refactoring: #{model}")
@@ -178,6 +189,7 @@ module AttemptExecution
     @auto_only = true
   end
 
+  # Allow one automated fix with the same model (MAX_AUTOMATED_FIXES) before moving to next model.
   def retry_verification_with_fix(model, req, pass_timing)
     @session_tracker.append_to_request_history("Fix after verification failure", type: "fix")
     update_terminal_title("Retrying: #{model}")
