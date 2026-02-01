@@ -13,12 +13,19 @@ module ToolOutcome
     result_has_error_key?(result)
   end
 
+  # True only when result has an error field with a truthy value (e.g. "message").
+  # Treats error: null, error: false, and missing key as success to avoid false-positive interrupts.
   def self.result_has_error_key?(result)
     return false if result.nil?
-    return result.key?('error') || result.key?(:error) if result.is_a?(Hash)
+    return error_value_truthy?(result) if result.is_a?(Hash)
 
     parsed = parse_result_string(result)
-    parsed.is_a?(Hash) && (parsed.key?('error') || parsed.key?(:error))
+    parsed.is_a?(Hash) && error_value_truthy?(parsed)
+  end
+
+  def self.error_value_truthy?(hash)
+    v = hash['error'] || hash[:error]
+    !v.nil? && v != false
   end
 
   # Stable key for deduplication: same name + same arguments => same key.
