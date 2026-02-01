@@ -255,11 +255,11 @@ user_instruction)
   end
 
   def build_system_instruction
-    base_system_instruction
+    [refactor_output_format_instruction, refactor_behavior_instruction].join("\n\n")
   end
 
-  def base_system_instruction
-    <<~HEREDOC
+  def refactor_output_format_instruction
+    <<~HEREDOC.strip
       Return refactored files using this format:
       <full_file_contents_to_replace filename="[REPLACE_WITH_ACTUAL_FILE_PATH]">complete file content</full_file_contents_to_replace>
 
@@ -287,12 +287,20 @@ user_instruction)
 
       CRITICAL: DO NOT create new files. Only refactor the files provided in the prompt.
       If you think a new file is needed, refactor the existing code instead.
+    HEREDOC
+  end
 
-      Preserve all existing comments unless they describe code you change or
-      you implement a TODO. When making bug fixes or applying specific requested
-      changes, keep the diff as small as possible (minimal changed lines).
-      Never suggest purely stylistic changes (quote style, alternative method
-      names). Only make necessary structural improvements.
+  # Instruction for how to refactor (behavior only). Edit this when improving wording for humans/LLMs.
+  def refactor_behavior_instruction
+    <<~HEREDOC.strip
+      Apply changes that make code easier to edit and understand for both humans and LLMs:
+      improve structure and remove duplication; use clear, literal names; keep methods and
+      blocks small and focused; prefer explicit logic over clever or implicit code; keep
+      formatting and structure consistent so readers and tools can parse reliably.
+      Preserve all existing comments unless they describe code you change or you implement
+      a TODO. When making bug fixes or requested changes, keep the diff minimal. Never
+      suggest purely stylistic changes (quote style, alternative method names). Only make
+      necessary structural improvements.
     HEREDOC
   end
 
