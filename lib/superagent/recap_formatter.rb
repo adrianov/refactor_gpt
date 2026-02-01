@@ -2,12 +2,13 @@
 
 # Parses and formats agent recap text for display and prompts.
 # Recap is split into intro (lines before summary marker) and summary (marker to end).
-# Intro is compact (no blank lines); summary keeps newlines. Shared by VerificationDisplay and AgentPromptBuilder.
-# To show less compact prompt summary: use a longer INTRO_JOIN (e.g. "\n\n") in format_intro_compact.
+# Shared by VerificationDisplay and AgentPromptBuilder. Spacing is controlled by constants below.
 class RecapFormatter
   SUMMARY_MARKER = /^\s*Summary of (changes?|what changed|what was fixed)\s*:?\s*/i
-  # Separator between intro lines when formatting for prompt; "\n" = compact, "\n\n" = less compact.
-  INTRO_JOIN = "\n\n"
+  # Prompt spacing: increase for less compact summary in the next prompt.
+  INTRO_JOIN = "\n\n"                    # Between intro lines
+  INTRO_SUMMARY_SEPARATOR = "\n\n"       # Between intro block and summary block
+  SUMMARY_LINE_JOIN = "\n\n"            # Between summary lines (blank line for readability)
 
   def self.parse_recap_sections(text)
     lines = text.to_s.each_line.map(&:chomp)
@@ -17,19 +18,19 @@ class RecapFormatter
     [intro, summary]
   end
 
-  def self.format_intro_compact(intro_lines)
+  def self.format_intro_for_prompt(intro_lines)
     intro_lines.to_a.reject(&:empty?).join(INTRO_JOIN)
   end
 
-  def self.format_summary_preserve_newlines(summary_lines)
-    summary_lines.to_a.join("\n")
+  def self.format_summary_for_prompt(summary_lines)
+    summary_lines.to_a.join(SUMMARY_LINE_JOIN)
   end
 
   def self.format_recap_for_prompt(text)
     intro, summary = parse_recap_sections(text.to_s.strip)
-    compact_intro = format_intro_compact(intro)
-    return compact_intro if summary.nil? || summary.empty?
+    formatted_intro = format_intro_for_prompt(intro)
+    return formatted_intro if summary.nil? || summary.empty?
 
-    compact_intro + "\n\n" + format_summary_preserve_newlines(summary)
+    formatted_intro + INTRO_SUMMARY_SEPARATOR + format_summary_for_prompt(summary)
   end
 end

@@ -1,9 +1,13 @@
 # frozen_string_literal: true
 
 # Renders verification result and full recap to the display. Extracted to keep Display under length limit.
-# Recap is split into intro (lines before summary marker) and summary (marker to end); layout is in display_full_recap.
+# Recap layout: intro and summary options below; set BLANK_AFTER_EACH to true for less compact display.
 class VerificationDisplay
   RECAP_INDENT = '  '
+  RECAP_INTRO_SKIP_EMPTY = true
+  RECAP_INTRO_BLANK_AFTER_EACH = true
+  RECAP_SUMMARY_SKIP_EMPTY = false
+  RECAP_SUMMARY_BLANK_AFTER_EACH = true
 
   def initialize(display)
     @display = display
@@ -40,10 +44,12 @@ class VerificationDisplay
     @display.out_puts ''
     @display.puts 'Full recap:'.cyan
     intro_lines, summary_lines = RecapFormatter.parse_recap_sections(text.to_s)
-    print_recap_lines(intro_lines, skip_empty: true, blank_after_each: false)
+    print_recap_lines(intro_lines, skip_empty: RECAP_INTRO_SKIP_EMPTY, blank_after_each: RECAP_INTRO_BLANK_AFTER_EACH)
     if summary_lines
       @display.out_puts ''
-      print_recap_lines(summary_lines, skip_empty: false)
+      print_recap_lines(
+        summary_lines, skip_empty: RECAP_SUMMARY_SKIP_EMPTY, blank_after_each: RECAP_SUMMARY_BLANK_AFTER_EACH
+      )
     end
     @display.out_puts ''
     $stdout.flush unless @display.output_paused
