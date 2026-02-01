@@ -20,9 +20,10 @@ class AgentPromptBuilder
     @session_tracker = session_tracker
   end
 
-  def wrap_prompt(p, new_session: false, current_request: nil, verification_mode: false, continuation_analysis: nil)
+  def wrap_prompt(p, new_session: false, current_request: nil, verification_mode: false,
+                  continuation_analysis: nil, fix_stage: false)
     user_content = format_user_request_content(p, continuation_analysis)
-    rest = context_parts(new_session).compact.join
+    rest = context_parts(new_session, fix_stage: fix_stage).compact.join
     session_desc = continuation_analysis&.dig(:description)
     history = verification_mode ? nil : history_section(
       current_request: current_request, session_description: session_desc
@@ -72,8 +73,8 @@ class AgentPromptBuilder
     format_truncated_section('Working tree (bfs --nohidden)', `bfs --nohidden 2>#{File::NULL}`.strip)
   end
 
-  def guidelines_section(always_include: false)
-    raw = read_agents_files.to_s.strip
+  def guidelines_section(always_include: false, fix_stage: false)
+    raw = fix_stage ? read_agents_files_with_dev.to_s.strip : read_agents_files.to_s.strip
     default = default_refactor_instructions.to_s.strip
     content = if raw.empty?
                 default.empty? ? '' : "Project guidelines:\n#{default}"
@@ -107,11 +108,14 @@ class AgentPromptBuilder
     "Proceed with implementation based on the available context and your best judgment."
   end
 
-  def context_parts(new_session)
+  def context_parts(new_session, fix_stage: false)
     parts = []
     if new_session
       parts << non_interactive_notice
-      parts << guidelines_section(always_include: true)
+      parts << guidelines_section(always_include: true, fix_stage: false)
+    end
+    if fix_stage
+      parts << guidelines_section(always_include: true, fix_stage: true)
     end
     parts << user_context_section
     parts << git_status_section(new_session)
@@ -151,6 +155,11 @@ class AgentPromptBuilder
     "\n\n#{label} (max #{max_lines} lines):\n#{text}"
   end
 
+  def read_dev_md
+    path = File.join(Dir.pwd, 'DEV.md')
+    File.exist?(path) ? File.read(path).strip : ''
+  end
+
   def read_agents_files
     root = Dir.pwd
     parts = %w[AGENTS.md .cursorrules].filter_map do |name|
@@ -160,6 +169,13 @@ class AgentPromptBuilder
       File.read(path).strip
     end
     parts.empty? ? '' : parts.join("\n\n")
+  end
+
+  # Fix stage: DEV.md first, then AGENTS.md and .cursorrules.
+  def read_agents_files_with_dev
+    dev = read_dev_md
+    rest = read_agents_files
+    [dev, rest].reject(&:empty?).join("\n\n")
   end
 
   def default_refactor_instructions

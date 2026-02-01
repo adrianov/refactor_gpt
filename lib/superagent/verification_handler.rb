@@ -224,7 +224,7 @@ class VerificationHandler
     @display.puts "Retrying #{model} with fix...".blue
     $stdout.puts ''
 
-    success, fix_out = @agent_executor.run(model, fix_prompt, current_request: req)
+    success, fix_out = @agent_executor.run(model, fix_prompt, current_request: req, fix_stage: true)
     unless success
       @verified = false
       @desc = nil

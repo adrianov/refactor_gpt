@@ -40,13 +40,14 @@ class AgentExecutor
     RunFailureClassifier.usage_unrecoverable?(output)
   end
 
-  def wrap_prompt(p, new_session: false, current_request: nil, continuation_analysis: nil)
+  def wrap_prompt(p, new_session: false, current_request: nil, continuation_analysis: nil, fix_stage: false)
     @prompt_builder.wrap_prompt(
       p,
       new_session: new_session,
       current_request: current_request,
       verification_mode: @verification_mode,
-      continuation_analysis: continuation_analysis
+      continuation_analysis: continuation_analysis,
+      fix_stage: fix_stage
     )
   end
 
@@ -169,12 +170,12 @@ class AgentExecutor
 
   def run(model, p, base_delay: 1, verification_mode: false, new_session: false,
           prompt_request_reader: nil, on_prompt_request: nil, current_request: nil,
-          defer_full_prompt: false, continuation_analysis: nil)
+          defer_full_prompt: false, continuation_analysis: nil, fix_stage: false)
     @verification_mode = verification_mode
     clear_full_prompt_buffer if new_session
     wrapped = PromptCompactor.compact(
       wrap_prompt(p, new_session: new_session, current_request: current_request || p,
-                  continuation_analysis: continuation_analysis)
+                  continuation_analysis: continuation_analysis, fix_stage: fix_stage)
     )
     retries = 0
     loop do
