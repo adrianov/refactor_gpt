@@ -39,7 +39,7 @@ class VerificationDisplay
 
   # raw_recap: same as display_verification_result (Superagent#current_recap_text; do not compact).
   def display_full_recap(raw_recap)
-    text = raw_recap.to_s
+    text = RecapFormatter.prepare_recap_for_display(raw_recap)
     return if text.strip == ''
 
     @display.out_puts ''

@@ -21,6 +21,33 @@ class TestRecapFormatter < Minitest::Test
     assert_equal ['Only intro.', 'No summary marker here.'], sections.intro_lines
   end
 
+  def test_summary_marker_matches_what_was_implemented
+    text = "Intro.\nSummary of what was implemented:\n- Item one"
+    sections = RecapFormatter.parse_recap_sections(text)
+    assert sections.summary_lines, 'Summary block should be detected for "what was implemented"'
+    assert_equal ['Summary of what was implemented:', '- Item one'], sections.summary_lines
+  end
+
+  def test_normalize_recap_newlines_inserts_newline_after_compact_header
+    compact = "Summary of what was implemented:### 1. **Superagent**"
+    normalized = RecapFormatter.normalize_recap_newlines(compact)
+    assert_includes normalized, "Summary of what was implemented:\n###"
+    sections = RecapFormatter.parse_recap_sections(normalized)
+    assert sections.summary_lines
+    assert_equal 'Summary of what was implemented:', sections.summary_lines.first
+    assert sections.summary_lines[1].start_with?('###')
+  end
+
+  def test_prepare_recap_for_display_normalizes_and_wraps
+    compact = "Summary of what was implemented:### 1."
+    out = RecapFormatter.prepare_recap_for_display(compact)
+    assert_includes out, "Summary of what was implemented:\n###"
+    long = 'a ' * 60
+    wrapped = RecapFormatter.prepare_recap_for_display(long)
+    wrapped.lines.each { |l| assert l.chomp.length <= RecapFormatter::DISPLAY_LINE_WIDTH, 'Line should be wrapped' }
+    assert wrapped.lines.count > 1, 'Long line should be split into multiple'
+  end
+
   def test_format_recap_for_prompt_includes_intro_and_summary
     text = "Intro.\n\nSummary of changes:\n- A\n- B"
     out = RecapFormatter.format_recap_for_prompt(text)
