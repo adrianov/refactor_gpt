@@ -353,16 +353,25 @@ class Superagent
       @display.puts msg.red
       exit 1
     end
-    execute_new_request(new_req, previous_req, model_index)
+    analysis = continuation_analysis_for_new_request(raw_new_req, previous_req)
+    execute_new_request(new_req, previous_req, model_index, continuation_analysis: analysis)
   end
 
-  def execute_new_request(new_req, _previous_req, model_index)
-    analysis = {continuation: false, tags: [], description: nil}
-    if analysis[:continuation] && user_disagrees_with_verification?(analysis[:tags])
-      record_attempt_failure(@current_model)
-    end
+  def continuation_analysis_for_new_request(raw_new_req, _previous_req)
+    previous_session = @session_tracker.load_previous_session
+    @session_tracker.analyze_continuation_and_description(raw_new_req, previous_session)
+  rescue StandardError => e
+    @display.puts "Warning: Continuation analysis failed: #{e.message}".yellow
+    default_continuation_analysis
+  end
 
-    start_index = analysis[:continuation] ? [model_index || 0, @current_model_index].max : (model_index || 0)
+  def default_continuation_analysis
+    {continuation: false, tags: [], description: nil}
+  end
+
+  def execute_new_request(new_req, _previous_req, model_index, continuation_analysis: nil)
+    analysis = continuation_analysis || default_continuation_analysis
+    start_index = start_index_for_new_request(analysis, model_index)
     start_index = [[start_index, 0].max, models.size - 1].min
 
     display_continuation_message(analysis, start_index)
@@ -372,8 +381,9 @@ class Superagent
   end
 
   def display_continuation_message(analysis, start_index)
+    tags = analysis[:tags] || []
     continuation_text = analysis[:continuation] ? "continuation" : "new request"
-    tags_text = analysis[:tags].empty? ? "" : " [#{analysis[:tags].join(", ")}]"
+    tags_text = tags.empty? ? "" : " [#{tags.join(", ")}]"
     @display.puts "\nStarting #{continuation_text}#{tags_text} from #{models[start_index]}...\n\n".yellow
   end
 
@@ -439,8 +449,12 @@ class Superagent
     save_current_session(@current_request, summary) if summary && !summary.to_s.strip.empty? && @current_request
   end
 
-  def user_disagrees_with_verification?(tags)
-    tags.any? { |tag| %w[#bug #regression #hotfix].include?(tag) }
+  def start_index_for_new_request(analysis, model_index)
+    if analysis[:continuation]
+      [model_index || 0, @current_model_index].max
+    else
+      model_index || 0
+    end
   end
 
   def add_and_show_queue(queue, raw_new, current_request = nil)

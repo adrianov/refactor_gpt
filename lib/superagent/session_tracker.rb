@@ -270,32 +270,29 @@ class SessionTracker
 
   def build_continuation_analysis_prompt(new_req, previous_req)
     <<~HEREDOC
-      Analyze the relationship between two requests and classify the new request.
+      Classify the new request relative to the last request.
 
-      Last request:
+      Last request (the feature just implemented):
       #{previous_req}
 
       New request:
       #{new_req}
 
       Tasks:
-      1. Determine if the new request continues the previous work (YES) or starts a new session (NO)
-      2. Identify applicable tags from the following list:
+      1. CONTINUATION: Answer YES only if the new request is about the **same** feature or task as the last request (either extending it or fixing a bug/implementation flaw in it). Answer NO if the new request is a different feature, unrelated work, or starts a new session.
+      2. TAGS: From the list below, pick tags that apply. Use #bug, #regression, or #hotfix **only** when the new request is specifically about fixing a defect or implementation flaw in what was just implemented. Use other tags when extending the same feature or when starting something new.
          #{TAGS_LIST.gsub("\n", "\n         ")}
 
       Response format (required):
       CONTINUATION: YES or NO
-      TAGS: comma-separated tags (e.g., #bug, #improvement) or NONE
+      TAGS: comma-separated tags (e.g., #bug, #feature) or NONE
 
-      Examples:
-      - "fix login error" → CONTINUATION: NO, TAGS: #bug
-      - "login broke again after the update" → CONTINUATION: NO, TAGS: #regression
-      - "also add email validation" → CONTINUATION: YES, TAGS: #feature
-      - "optimize database queries" → CONTINUATION: NO, TAGS: #improvement, #performance
-      - "refactor user service" → CONTINUATION: NO, TAGS: #refactoring
-      - "update README with new API endpoints" → CONTINUATION: NO, TAGS: #docs
-      - "plan the authentication system architecture" → CONTINUATION: NO, TAGS: #plan
-      - "investigate why the server is crashing" → CONTINUATION: NO, TAGS: #investigation, #debug
+      Examples (last request was "add login with email and password"):
+      - "fix the bug where login fails when email has spaces" → CONTINUATION: YES, TAGS: #bug
+      - "also add 'forgot password'" → CONTINUATION: YES, TAGS: #feature
+      - "add a user dashboard" → CONTINUATION: NO, TAGS: #feature
+      - "fix login error" (unrelated project) → CONTINUATION: NO, TAGS: #bug
+      - "the validation we added is wrong, fix it" → CONTINUATION: YES, TAGS: #bug
     HEREDOC
   end
 
