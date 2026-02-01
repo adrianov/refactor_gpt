@@ -14,6 +14,16 @@ require_relative "lib/loader"
 require "colorize"
 InstanceLock.lock_dir_override = ConfigPath::CONFIG_DIR
 
+# Option strings stripped from ARGV by parse_superagent_cli_options. Add new flags here when adding options.
+SUPERAGENT_CLI_STRIP_FLAGS = %w[--skip-midnight --no-midnight --debug].freeze
+
+def parse_superagent_cli_options
+  skip_midnight_check = ARGV.include?('--skip-midnight') || ARGV.include?('--no-midnight')
+  show_full_prompt = ARGV.include?('--debug')
+  ARGV.reject! { |a| SUPERAGENT_CLI_STRIP_FLAGS.include?(a) }
+  { skip_midnight_check: skip_midnight_check, show_full_prompt: show_full_prompt }
+end
+
 if __FILE__ == $PROGRAM_NAME
   if ARGV.include?('--help') || ARGV.include?('-h')
     puts <<~HELP
@@ -22,20 +32,15 @@ if __FILE__ == $PROGRAM_NAME
       Only one instance per project; if another is running, this process exits.
       Options:
         -h, --help           Show this help
-        --show-prompt        Show the system prompt (default)
-        --no-show-prompt     Do not show the system prompt
+        --debug              Show full system prompt
         --skip-midnight, --no-midnight   Skip midnight-rollover check
     HELP
     exit 0
   end
 
   CompletionNotifier.setup_exit_hook
-  skip_midnight_check = ARGV.include?('--skip-midnight') || ARGV.include?('--no-midnight')
-  show_prompt = true
-  show_prompt = false if ARGV.include?('--no-show-prompt')
-  ARGV.reject! { |a| %w[--skip-midnight --no-midnight --show-prompt --no-show-prompt].include?(a) }
-
-  display = Display.new(skip_midnight_check: skip_midnight_check)
+  options = parse_superagent_cli_options
+  display = Display.new(skip_midnight_check: options[:skip_midnight_check])
   auto_only = AutoOnlyLock.exist?
   if auto_only
     display.puts 'Auto-only lock file is set; running in auto-only mode.'.yellow
@@ -56,7 +61,7 @@ if __FILE__ == $PROGRAM_NAME
 
     Superagent.new(
       display: display, request_reader: request_reader, auto_only: auto_only,
-      show_prompt: show_prompt
+      show_full_prompt: options[:show_full_prompt]
     ).run
   ensure
     InstanceLock.release_lock(lock_path) if lock_path

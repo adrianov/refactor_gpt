@@ -22,13 +22,13 @@ class Superagent
     verification_handler: nil,
     session_tracker: nil,
     auto_only: false,
-    show_prompt: true
+    show_full_prompt: true
   )
     @display = display
     @session_tracker = session_tracker || SessionTracker.new(@display)
     @request_reader = request_reader || RequestReader.new(@display)
     @agent_executor = agent_executor ||
-      AgentExecutor.new(@display, session_tracker: @session_tracker, show_prompt: show_prompt)
+      AgentExecutor.new(@display, session_tracker: @session_tracker, show_full_prompt: show_full_prompt)
     @verification_handler = verification_handler || VerificationHandler.new(@display, @agent_executor)
     initialize_runtime_state
     @auto_only = auto_only
@@ -70,7 +70,8 @@ class Superagent
     initialize_run(request)
     raw_req, req = run_setup_request(request)
     @current_request = req
-    apply_continuation_analysis(continuation_analysis) if continuation_analysis
+    analysis = resolve_continuation_analysis_for_run(continuation_analysis, req)
+    apply_continuation_analysis(analysis)
     save_current_session(req)
 
     start_index = run_start_index(raw_req, req, start_model_index)
@@ -92,8 +93,23 @@ class Superagent
     model_idx = model_index_from_request_text(raw_req)
     start_index = determine_start_index(model_idx, start_model_index)
     @display.display_start_message(req, @session_continuation, @session_tags)
+    log_model_selection(model_idx, start_index)
     update_terminal_title(@session_continuation ? "↻ Continuing session" : "Running...")
     start_index
+  end
+
+  def log_model_selection(request_model_idx, start_index)
+    model = models[start_index]
+    reason = model_selection_reason(request_model_idx, start_index)
+    @display.puts "Model: #{model} (#{reason})".light_black
+  end
+
+  def model_selection_reason(request_model_idx, start_index)
+    return "from request hint" if request_model_idx && request_model_idx == start_index
+    return "continuation" if @session_continuation
+    return "from failure count" if start_index.positive?
+
+    "default"
   end
 
   def run_read_request(request)
@@ -395,16 +411,27 @@ class Superagent
       @display.puts msg.red
       exit 1
     end
-    analysis = continuation_analysis_for_new_request(raw_new_req, previous_req)
+    analysis = continuation_analysis_for_request(new_req)
     execute_new_request(new_req, previous_req, model_index, continuation_analysis: analysis)
   end
 
-  def continuation_analysis_for_new_request(raw_new_req, _previous_req)
-    previous_session = @session_tracker.session_for_continuation_analysis
-    @session_tracker.analyze_continuation_and_description(raw_new_req, previous_session)
+  def resolve_continuation_analysis_for_run(explicit_analysis, sanitized_req)
+    return explicit_analysis if explicit_analysis
+
+    continuation_analysis_for_request(sanitized_req)
+  end
+
+  def run_continuation_analysis(sanitized_req, previous_session)
+    return default_continuation_analysis unless previous_session
+
+    @session_tracker.analyze_continuation_and_description(sanitized_req, previous_session)
   rescue StandardError => e
     @display.puts "Warning: Continuation analysis failed: #{e.message}".yellow
     default_continuation_analysis
+  end
+
+  def continuation_analysis_for_request(sanitized_req)
+    run_continuation_analysis(sanitized_req, @session_tracker.session_for_continuation_analysis)
   end
 
   def default_continuation_analysis

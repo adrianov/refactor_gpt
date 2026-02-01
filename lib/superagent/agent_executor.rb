@@ -13,7 +13,7 @@ class AgentExecutor
   MAX_EXECUTION_TIMEOUT = 600
   TEST_RUNNER_CHECK_INTERVAL = 2
 
-  def initialize(display, session_tracker: nil, show_prompt: true)
+  def initialize(display, session_tracker: nil, show_full_prompt: true)
     @display = display
     @tools_used = []
     @same_tool_error_tracker = SameToolErrorTracker.new
@@ -24,8 +24,12 @@ class AgentExecutor
     @assistant_accumulator = AssistantTextAccumulator.new
     @state_mutex = Mutex.new
     @full_prompt_buffer = nil
-    @show_prompt = show_prompt
+    @show_full_prompt = show_full_prompt
     @verification_mode = false
+  end
+
+  def show_full_prompt?
+    @show_full_prompt
   end
 
   def test_runner_running?(pid = nil)
@@ -77,8 +81,7 @@ class AgentExecutor
   end
 
   def print_full_prompt(prompt, new_session: false)
-    return unless @show_prompt
-    return if prompt.to_s.strip.empty?
+    return unless show_full_prompt? && !prompt.to_s.strip.empty?
 
     @full_prompt_buffer = prompt.to_s if new_session
     @display.puts '--- Full prompt ---'.light_black
@@ -87,7 +90,7 @@ class AgentExecutor
   end
 
   def emit_full_prompt_to_display
-    return if @full_prompt_buffer.to_s.strip.empty?
+    return unless show_full_prompt? && !@full_prompt_buffer.to_s.strip.empty?
 
     @display.puts '--- Full prompt ---'.light_black
     @display.output_raw(@full_prompt_buffer.to_s)
@@ -95,7 +98,7 @@ class AgentExecutor
   end
 
   def display_command(cmd, prompt, new_session: false, defer_full_prompt: false)
-    if defer_full_prompt && @show_prompt && !prompt.to_s.strip.empty?
+    if defer_full_prompt && show_full_prompt? && !prompt.to_s.strip.empty?
       @full_prompt_buffer = prompt.to_s
     else
       print_full_prompt(prompt, new_session: new_session)
