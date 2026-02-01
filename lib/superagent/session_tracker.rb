@@ -492,16 +492,18 @@ class SessionTracker
     <<~HEREDOC
       Classify the new request relative to the last request.
 
-      Last request (the feature just implemented):
+      Last request (the feature or task just implemented):
       #{previous_req}
 
       New request:
       #{new_req}
 
       Tasks:
-      1. CONTINUATION: Answer YES only if the new request is about the **same** feature or task as the last request (either extending it or fixing a bug/implementation flaw in it). Answer NO if the new request is a different feature, unrelated work, or starts a new session.
-      2. TAGS: From the list below, pick tags that apply. Use #bug, #regression, or #hotfix **only** when the new request is specifically about fixing a defect or implementation flaw in what was just implemented. Use other tags when extending the same feature or when starting something new.
+      1. CONTINUATION: Answer YES only if the new request concerns the **same** feature or task as the last (e.g. extending it or fixing a defect in it). Answer NO if the new request is a different feature, unrelated work, or explicitly starts a new session.
+      2. TAGS: From the list below, pick tags that apply. Use #bug, #regression, or #hotfix only when the new request fixes a defect or implementation flaw in what was just implemented. Use other tags when extending the same feature or when starting something new.
          #{TAGS_LIST.gsub("\n", "\n         ")}
+
+      Documentation: When the requests refer to an external product, API, or documented feature, use web fetch to consult the official documentation for that topic so you can classify continuation and tags accurately.
 
       Response format (required):
       CONTINUATION: YES or NO
@@ -547,7 +549,8 @@ class SessionTracker
     if client.is_a?(AskGeminiClient)
       client.ask([{role: "user", content: prompt}], title: title)
     else
-      system_msg = "You are a request analyzer. Provide concise, structured responses."
+      system_msg = "You are a request analyzer. Provide concise, structured responses. " \
+        "For external products or APIs, use web fetch to consult official docs to classify accurately."
       messages = [
         {role: "system", content: system_msg},
         {role: "user", content: prompt}
