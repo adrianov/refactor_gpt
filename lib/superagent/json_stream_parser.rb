@@ -36,11 +36,16 @@ class JsonStreamParser
   def extract_text_from_json(json_obj)
     case json_obj['type']
     when 'assistant' then assistant_text(json_obj)
-    when 'result' then json_obj['result']
+    when 'result' then result_text_raw(json_obj['result'])
     when 'thinking' then thinking_text(json_obj)
     when 'step', 'tool_call', 'tool_result' then step_like_text(json_obj)
     else json_obj['text'] || json_obj['content'] || json_obj['result'] || json_obj['message']
     end
+  end
+
+  # Result string used as-is so downstream can preserve newlines (e.g. leading/trailing from JSON result).
+  def result_text_raw(value)
+    value.nil? ? nil : value.to_s
   end
 
   def assistant_text(json_obj)

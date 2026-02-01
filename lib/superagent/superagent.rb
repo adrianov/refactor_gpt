@@ -257,12 +257,17 @@ class Superagent
     add_waiting_segment
   end
 
+  # Raw agent output; do not compact (display and verification preserve formatting).
+  def current_recap_text
+    @current_agent_output
+  end
+
   def handle_success(desc, context = "")
     @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_passes_recap(@pass_timings)
-    @display.display_verification_result(true, desc, context, full_recap: @current_agent_output)
+    @display.display_verification_result(true, desc, context, raw_recap: current_recap_text)
     finalize_runtime_before_display
     @display.display_total_runtime(@start_time, active_elapsed: @active_elapsed, waiting_elapsed: @waiting_elapsed)
   end

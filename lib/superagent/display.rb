@@ -254,9 +254,9 @@ class Display
       out_puts ''
     end
 
-    def display_verification_result(verified, desc, context = '', call_failed: false, full_recap: nil)
+    def display_verification_result(verified, desc, context = '', call_failed: false, raw_recap: nil)
       @verification_display.display_verification_result(
-        verified, desc, context, call_failed: call_failed, full_recap: full_recap
+        verified, desc, context, call_failed: call_failed, raw_recap: raw_recap
       )
     end
 

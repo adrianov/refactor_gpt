@@ -66,6 +66,7 @@ module AttemptExecution
 
   def run_model_attempt_on_success(output, elapsed)
     @current_implementation_time = elapsed
+    # Raw agent output; do not compact (display and verification preserve formatting).
     @current_agent_output = output
     save_agent_summary(output) if output && !output.to_s.strip.empty?
   end

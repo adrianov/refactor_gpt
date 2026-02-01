@@ -138,15 +138,21 @@ class VerificationHandler
     HEREDOC
   end
 
+  # previous_agent_response: raw agent output (e.g. current_agent_output); do not compact.
   def build_verification_user_content(user_request, previous_agent_response)
     req_utf8 = to_utf8(user_request)
-    prev_utf8 = to_utf8(previous_agent_response)
+    prev_embedded = agent_response_for_verification_content(previous_agent_response)
     content_parts = []
     content_parts << "Current user request: #{req_utf8}\n\n"
-    if prev_utf8 && !prev_utf8.to_s.strip.empty?
-      content_parts << "Final response from previous agent run:\n#{prev_utf8.to_s.strip}\n"
+    if prev_embedded && !prev_embedded.empty?
+      content_parts << "Final response from previous agent run:\n#{prev_embedded}\n"
     end
     content_parts.map { |p| to_utf8(p) }.join("\n")
+  end
+
+  # Single normalization point for previous agent response in verification. Preserves newlines (no strip).
+  def agent_response_for_verification_content(previous_agent_response)
+    to_utf8(previous_agent_response).to_s
   end
 
   def build_verification_prompt(req, previous_agent_response = nil)

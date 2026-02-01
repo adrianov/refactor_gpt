@@ -11,8 +11,9 @@ class VerificationDisplay
     @display = display
   end
 
-  def display_verification_result(verified, desc, context = '', call_failed: false, full_recap: nil)
-    display_full_recap(full_recap) if verified && full_recap.to_s.strip != ''
+  # raw_recap: raw agent output from Superagent#current_recap_text; do not compact.
+  def display_verification_result(verified, desc, context = '', call_failed: false, raw_recap: nil)
+    display_full_recap(raw_recap) if verified && raw_recap.to_s.strip != ''
     prefix = verification_prefix(verified, call_failed)
     suffix = context.empty? ? '' : " #{context}"
     render_verification_message(prefix, suffix, desc, verified, context)
@@ -36,16 +37,19 @@ class VerificationDisplay
     end
   end
 
-  def display_full_recap(text)
-    return if text.to_s.strip == ''
+  # raw_recap: same as display_verification_result (Superagent#current_recap_text; do not compact).
+  def display_full_recap(raw_recap)
+    text = raw_recap.to_s
+    return if text.strip == ''
 
     @display.out_puts ''
     @display.puts 'Full recap:'.cyan
-    sections = RecapFormatter.parse_recap_sections(text.to_s)
+    sections = RecapFormatter.parse_recap_sections(text)
     print_recap_lines(
       sections.intro_lines, skip_empty: RECAP_INTRO_SKIP_EMPTY, blank_after_each: RECAP_INTRO_BLANK_AFTER_EACH
     )
-    print_summary_raw(sections.summary_block) if sections.summary_block
+    summary = RecapFormatter.summary_block_from_text(text)
+    print_summary_raw(summary) if summary
     @display.out_puts ''
     $stdout.flush unless @display.output_paused
   end
