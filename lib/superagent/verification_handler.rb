@@ -134,7 +134,7 @@ class VerificationHandler
     HEREDOC
   end
 
-  # previous_agent_response: raw agent output (e.g. current_agent_output); do not compact.
+  # previous_agent_response: NDJSON type=result content when present (current_recap_text), else full output.
   def build_verification_user_content(user_request, previous_agent_response)
     req_utf8 = to_utf8(user_request)
     prev_embedded = agent_response_for_verification_content(previous_agent_response)

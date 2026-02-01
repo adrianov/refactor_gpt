@@ -22,9 +22,9 @@ class JsonStreamParser
 
   private
 
-  def skip_type?(obj, type)
+  def skip_type?(_obj, type)
     return true if %w[user system].include?(type)
-    return true if type == 'thinking' && (obj['text'].nil? || obj['text'].to_s.strip.empty?)
+    return true if type == 'thinking'
 
     false
   end
@@ -33,9 +33,17 @@ class JsonStreamParser
     case type
     when 'thinking' then obj['text']&.to_s
     when 'assistant' then assistant_text(obj)
-    when 'result' then obj['result']&.to_s
+    when 'result' then result_content(obj)
     else nil
     end
+  end
+
+  # type=result: value may be string or { "content" => "..." }; return string content.
+  def result_content(obj)
+    r = obj['result']
+    return nil if r.nil?
+    return r['content'].to_s if r.is_a?(Hash) && r.key?('content')
+    r.to_s
   end
 
   def assistant_text(obj)

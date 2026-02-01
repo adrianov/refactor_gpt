@@ -86,7 +86,7 @@ class Superagent
   def run_setup_request(request)
     raw_req = run_read_request(request)
     run_accumulate_waiting_time if @waiting_start
-    @request_reader.add_to_request_history(raw_req) if request.nil? && (raw_req && !raw_req.to_s.strip.empty?)
+    @request_reader.add_to_request_history(raw_req) if request.nil? && (raw_req && !raw_req.to_s.empty?)
     req = run_prepare_request(raw_req)
     [raw_req, req]
   end
@@ -305,7 +305,7 @@ class Superagent
     }
   end
 
-  # Raw agent output; do not compact (display and verification preserve formatting).
+  # NDJSON type=result content when present, else full output; used for display and prompts.
   def current_recap_text
     @current_agent_output
   end
@@ -366,7 +366,7 @@ class Superagent
       @display.puts "Failure count reset.".yellow
       return
     end
-    return if raw.nil? || raw.to_s.strip.empty?
+    return if raw.nil? || raw.to_s.empty?
 
     save_request_to_histories(raw)
     add_and_show_queue(@pending_queue, RequestPreparer.normalized_request_text(raw), @current_request)
@@ -379,9 +379,9 @@ class Superagent
     prompt_accumulate_waiting
     return prompt_handle_reset(previous_req) if RequestReader.reset_command?(raw_new_req)
 
-    prompt_save_history(raw_new_req) unless raw_new_req.nil? || raw_new_req.to_s.strip.empty?
+    prompt_save_history(raw_new_req) unless raw_new_req.nil? || raw_new_req.to_s.empty?
     @active_start = Time.now
-    exit 0 if raw_new_req.nil? || raw_new_req.to_s.strip.empty?
+    exit 0 if raw_new_req.nil? || raw_new_req.to_s.empty?
 
     prompt_execute_new_request(raw_new_req, previous_req)
   end
@@ -407,7 +407,7 @@ class Superagent
   def prompt_execute_new_request(raw_new_req, previous_req)
     model_index = model_index_from_request_text(raw_new_req)
     new_req = RequestPreparer.sanitize_request(raw_new_req, models)
-    return if new_req.nil? || new_req.to_s.strip.empty?
+    return if new_req.nil? || new_req.to_s.empty?
 
     unless InstanceLock.acquire_lock
       msg = "Another instance is already running for this project (#{InstanceLock.project_base_name}). Exiting."
@@ -528,11 +528,11 @@ class Superagent
   end
 
   def save_agent_summary(summary)
-    save_current_session(@current_request, summary) if (summary && !summary.to_s.strip.empty?) && @current_request
+    save_current_session(@current_request, summary) if (summary && !summary.to_s.empty?) && @current_request
   end
 
   def add_and_show_queue(queue, raw_new, current_request = nil)
-    return if raw_new.nil? || raw_new.to_s.strip.empty?
+    return if raw_new.nil? || raw_new.to_s.empty?
 
     queue.add(RequestPreparer.normalized_request_text(raw_new))
     list = queue.snapshot

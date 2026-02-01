@@ -80,11 +80,10 @@ module AttemptExecution
 
   def run_model_attempt_on_success(output, elapsed)
     @current_implementation_time = elapsed
-    # Raw agent output; do not compact (display and verification preserve formatting).
-    @current_agent_output = output
     recap = @agent_executor.last_recap_result
-    to_save = (recap && !recap.to_s.strip.empty?) ? recap : output
-    save_agent_summary(to_save) if to_save && !to_save.to_s.strip.empty?
+    result_content = (recap && !recap.to_s.strip.empty?) ? recap : output
+    @current_agent_output = result_content
+    save_agent_summary(result_content) if result_content && !result_content.to_s.strip.empty?
   end
 
   def record_network_failure(model, output, implementation_time, reason = nil)

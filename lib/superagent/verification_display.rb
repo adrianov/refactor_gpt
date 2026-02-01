@@ -1,15 +1,15 @@
 # frozen_string_literal: true
 
-# Renders verification result and full recap to the display. Extracted to keep Display under length limit.
-# Recap layout: intro and summary preserve LLM newlines; no extra blank after each intro line.
+# Renders verification result and result content to the display. Extracted to keep Display under length limit.
+# Result section: content from NDJSON type=result field; preserves newlines.
 class VerificationDisplay
   def initialize(display)
     @display = display
   end
 
-  # raw_recap: raw agent output from Superagent#current_recap_text; do not compact.
+  # result_content: from Superagent#current_recap_text (NDJSON type=result field when present).
   def display_verification_result(verified, desc, context = '', call_failed: false, raw_recap: nil)
-    display_full_recap(raw_recap) if verified && (raw_recap && !raw_recap.to_s.strip.empty?)
+    display_result_section(raw_recap) if verified && (raw_recap && !raw_recap.to_s.empty?)
     prefix = verification_prefix(verified, call_failed)
     suffix = context.empty? ? '' : " #{context}"
     render_verification_message(prefix, suffix, desc, verified, context)
@@ -33,14 +33,13 @@ class VerificationDisplay
     end
   end
 
-  # raw_recap: same as display_verification_result (Superagent#current_recap_text; raw result from JSON).
-  def display_full_recap(raw_recap)
-    text = raw_recap.to_s.strip
+  def display_result_section(result_content)
+    text = result_content.to_s.strip
     return if text.empty?
 
     @display.out_puts ''
-    @display.puts 'Full recap:'.cyan
-    text.each_line { |line| @display.out_puts @display.body("  #{line.chomp}") }
+    @display.puts 'Result:'.cyan
+    text.each_line { |line| @display.out_puts @display.body("  #{line}") }
     @display.out_puts ''
     $stdout.flush unless @display.output_paused
   end
