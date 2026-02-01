@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
-# Request sanitization and model hint (tag) extraction. Parses @token in request text;
-# resolution in model_index_for_token: exact match, then word-boundary in model name (e.g. @sonnet → sonnet-4.5).
+# Request sanitization and model hint extraction. Only @-prefixed tokens (e.g. @sonnet) select a model.
 module RequestPreparer
   NON_INTERACTIVE_NOTICE = /
     (?:^|\n)
@@ -12,8 +11,8 @@ module RequestPreparer
     \s*
   /mix
   GITIGNORE_PREPEND = "Ensure .gitignore excludes build artifacts, dependencies, and other unneeded files and folders. "
-  # Regex for @-mentions in request text. Capture group is the token (e.g. @sonnet → "sonnet").
   MODEL_HINT_PATTERN = /@(\S+)/.freeze
+  MODEL_HINT_SOURCES = [[:extract_from_at_mentions, :remove_at_mentions]].freeze
 
   module_function
 
@@ -38,6 +37,15 @@ module RequestPreparer
 
   def extract_model_index(req, models)
     return nil if req.nil?
+
+    MODEL_HINT_SOURCES.each do |extractor, _|
+      idx = send(extractor, req, models)
+      return idx if idx
+    end
+    nil
+  end
+
+  def extract_from_at_mentions(req, models)
     req.scan(MODEL_HINT_PATTERN).flatten.each do |token|
       idx = model_index_for_token(token, models)
       return idx if idx
@@ -47,9 +55,15 @@ module RequestPreparer
 
   def remove_model_mentions(req, models)
     return req if req.nil?
-    cleaned = req.gsub(MODEL_HINT_PATTERN) do
+
+    MODEL_HINT_SOURCES.reduce(req) do |text, (_, remover)|
+      send(remover, text, models)
+    end.strip
+  end
+
+  def remove_at_mentions(req, models)
+    req.gsub(MODEL_HINT_PATTERN) do
       model_index_for_token(Regexp.last_match(1), models) ? '' : Regexp.last_match(0)
     end
-    cleaned.strip
   end
 end
