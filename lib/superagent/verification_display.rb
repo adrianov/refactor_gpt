@@ -45,7 +45,7 @@ class VerificationDisplay
     print_recap_lines(
       sections.intro_lines, skip_empty: RECAP_INTRO_SKIP_EMPTY, blank_after_each: RECAP_INTRO_BLANK_AFTER_EACH
     )
-    print_summary_raw(sections.summary_raw) if sections.summary_raw
+    print_summary_raw(sections.summary_block) if sections.summary_block
     @display.out_puts ''
     $stdout.flush unless @display.output_paused
   end
