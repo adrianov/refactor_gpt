@@ -6,6 +6,17 @@
 class VerificationHandler
   include AgentsFileHandler
 
+  # Refactor-stage prompt: intro line. Edit wording here when improving refactor-stage instruction.
+  REFACTOR_STEP_INTRO = 'Refactor the codebase so that implementing this request will be straightforward. ' \
+    'Do not implement the request yet.'
+  # Refactor-stage "You must:" bullets (guideline added in build_refactor_prompt). Edit wording for humans/LLMs.
+  REFACTOR_STEP_REQUIREMENTS = [
+    'Apply changes that make code easier to edit and understand for both humans and LLMs: ' \
+    'improve structure, remove duplication, use clear and literal names, keep methods and ' \
+    'blocks small and focused, prefer explicit logic over clever or implicit code.',
+    'Preserve all existing behavior; do not add or change functionality.'
+  ].freeze
+
   attr_reader :verified, :desc, :review_time, :call_failed, :retryable, :raw_output, :fix_output, :refactor_output
 
   def initialize(display, agent_executor)
@@ -24,15 +35,16 @@ class VerificationHandler
   end
 
   def build_refactor_prompt(req)
+    a, b = self.class::REFACTOR_STEP_REQUIREMENTS
+    guideline = AgentPromptBuilder::GUIDELINE_REFERENCE_PHRASE
+    bullets = "- #{a}\n- #{guideline}\n- #{b}"
     <<~HEREDOC
       User request (to be implemented in the next step): #{to_utf8(req)}
 
-      Refactor the codebase so that implementing this request will be straightforward. Do not implement the request yet.
+      #{self.class::REFACTOR_STEP_INTRO}
 
       You must:
-      - Improve structure, remove duplication, clarify names.
-      - #{AgentPromptBuilder::GUIDELINE_REFERENCE_PHRASE}
-      - Preserve all existing behavior; do not add or change functionality.
+      #{bullets}
     HEREDOC
   end
 

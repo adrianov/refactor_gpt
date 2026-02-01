@@ -80,15 +80,13 @@ class AgentPromptBuilder
     "\n\nFinal summary from previous agent run:\n#{RecapFormatter.format_recap_for_prompt(summary)}"
   end
 
-  # Builds "Previous requests" prompt block: last N entries, direct order (oldest to newest),
-  # each line prefixed with (type) e.g. (implementation), (verification), (fix), (refactor);
-  # indices match session position.
+  # Builds "Previous requests" prompt block: last N entries, direct order (oldest to newest).
+  # Header and body are separate so body format (e.g. one line per request vs compact 2 lines) can change in one place.
   def history_section(current_request: nil)
     recent, start_num, width = recent_request_history_slice(current_request)
     return nil if recent.nil? || recent.empty?
 
-    lines = recent.each_with_index.map { |req, i| format_previous_request_line(start_num + i, width, req) }
-    "\n\nPrevious requests in this project (oldest to newest, last #{recent.size}):\n" + lines.join("\n")
+    previous_requests_header(recent.size) + format_previous_requests_body(recent, start_num, width)
   end
 
   def non_interactive_notice
@@ -138,6 +136,23 @@ class AgentPromptBuilder
   def default_refactor_instructions
     path = File.expand_path('../../REFACTOR.md', __dir__)
     File.exist?(path) ? File.read(path).strip : ''
+  end
+
+  def previous_requests_header(count)
+    "\n\nPrevious requests in this project (oldest to newest, last #{count}):\n"
+  end
+
+  # Renders the list of recent requests for the prompt in at most 2 lines (first half | second half).
+  def format_previous_requests_body(recent, start_num, width)
+    lines = recent.each_with_index.map { |req, i| format_previous_request_line(start_num + i, width, req) }
+    compact_to_two_lines(lines.map { |s| s.length > 38 ? "#{s[0...35]}..." : s })
+  end
+
+  def compact_to_two_lines(parts)
+    mid = (parts.size + 1) / 2
+    line1 = parts.first(mid).join(' | ')
+    line2 = parts.drop(mid).join(' | ')
+    [line1, line2].reject(&:empty?).join("\n")
   end
 
   def recent_request_history_slice(current_request)
