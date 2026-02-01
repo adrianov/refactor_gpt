@@ -6,12 +6,11 @@ class Superagent
 
   MODELS = %w[
     auto
+    grok
     gemini-3-flash
-    gpt-5.2-codex
-    gemini-3-pro
     composer-1
-    claude-4.5-sonnet
-    claude-4.5-opus
+    sonnet-4.5
+    opus-4.5
   ].freeze
   MODELS_AUTO_ONLY = %w[auto auto auto].freeze
 
