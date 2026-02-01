@@ -151,6 +151,7 @@ end
 def parse_response(response)
   return result_unparseable(response) if response.nil? || response.to_s.strip.empty?
 
+  # Strip only leading/trailing so newlines are preserved; verdict uses start or \bYES/\bNO anywhere.
   normalized = response.to_s.strip
   verdict = response_verdict(normalized)
   return result_parsed_yes(normalized) if verdict == :yes

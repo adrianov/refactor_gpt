@@ -57,15 +57,11 @@ class VerificationHandler
     line_info[:verdict] == :no ? parse_no_res(line_info[:text]) : parse_yes_res(line_info[:text])
   end
 
-  # Only lines that start with YES: or NO: (after optional whitespace) are treated as the verdict.
+  # Returns verdict from the first line that starts with "YES: " or "NO: " (after optional whitespace).
+  # When line-based lookup finds nothing, whole_text_verdict handles output where the newline before
+  # YES/NO was lost so the verdict appears mid-line (e.g. "...**YES: The changes...**").
   def extract_final_verdict_line(text)
-    text.to_s.each_line do |line|
-      match = line.match(/\A\s*(YES|NO):\s*(.*)\z/im)
-      next unless match
-
-      return { verdict: match[1].casecmp('no').zero? ? :no : :yes, text: line.to_s.strip }
-    end
-    nil
+    line_based_verdict(text) || whole_text_verdict(text)
   end
 
   def parse_no_res(line)
@@ -248,6 +244,26 @@ class VerificationHandler
     output.to_s
   end
 
+  def line_based_verdict(text)
+    text.to_s.each_line do |line|
+      match = line.match(/\A\s*(YES|NO):\s*(.*)\z/im)
+      next unless match
+
+      return { verdict: match[1].casecmp('no').zero? ? :no : :yes, text: line.to_s.strip }
+    end
+    nil
+  end
+
+  # Fallback when newline before YES/NO was lost: match YES/NO only after sentence-like boundary
+  # (period, **, or newline) so ".**YES: ..." is accepted but "I checked and YES: ..." is not.
+  def whole_text_verdict(text)
+    s = text.to_s
+    m = s.match(/(?:\.\s*|\*\*\s*|\n\s*)(YES|NO)\s*:\s*(.*)/im)
+    return nil unless m
+
+    { verdict: m[1].casecmp('no').zero? ? :no : :yes, text: "#{m[1]}: #{m[2]}".strip }
+  end
+
   def to_utf8(str)
     return '' if str.nil?
     s = str.to_s.dup
@@ -255,6 +271,6 @@ class VerificationHandler
     s.valid_encoding? ? s : s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
   end
 
-  private :verification_response_for_parsing, :to_utf8
+  private :verification_response_for_parsing, :line_based_verdict, :whole_text_verdict, :to_utf8
 
 end
