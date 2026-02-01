@@ -27,11 +27,13 @@ class StreamLineParser
 
   def think_close_only?(text)
     return false if text.nil? || text.to_s.strip.empty?
+
     text.to_s.strip.gsub(/\p{C}+/, '').match?(THINK_CLOSE_ONLY)
   end
 
   def trailing_think_close?(text)
     return false if text.nil? || text.to_s.empty?
+
     text.to_s.gsub(/\p{C}+/, '').match?(THINK_CLOSE_TAIL)
   end
 end

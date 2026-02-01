@@ -120,38 +120,24 @@ class Display
 
     # Prints one stream line of assistant text. Agent sends full lines (one JSON per line).
     def print_assistant_text(text, stream_id: nil)
-      text = normalized_assistant_text(text)
-      return if text.nil? || text.empty?
+      stripped = assistant_text_to_print(text)
+      return if stripped.nil? || stripped.empty?
 
       clear_thinking_indicator
       ensure_timestamp(is_new_stream: apply_new_stream(stream_id))
-      print_one_assistant_line(text)
-    end
-
-    def normalized_assistant_text(text)
-      return nil if text.nil? || text.to_s.empty?
-      return nil if think_close_only?(text)
-
-      stripped = strip_trailing_think_close(text)
-      (stripped.nil? || stripped.to_s.empty?) ? nil : stripped.to_s
-    end
-
-    def think_close_only?(text)
-      return false if text.nil? || text.to_s.strip.empty?
-      text.to_s.strip.gsub(/\p{C}+/, '').match?(THINK_CLOSE_ONLY)
-    end
-
-    def strip_trailing_think_close(text)
-      return text if text.nil? || text.to_s.empty?
-      text.to_s.gsub(/\p{C}+/, '').sub(THINK_CLOSE_TAIL, '')
-    end
-
-    def print_one_assistant_line(text)
-      out_print body(text)
-      out_puts '' unless text.end_with?("\n")
-      @at_start_of_line = text.end_with?("\n")
+      out_print body(stripped)
+      out_puts '' unless stripped.end_with?("\n")
+      @at_start_of_line = stripped.end_with?("\n")
       @has_printed_in_stream = true
       $stdout.flush
+    end
+
+    def assistant_text_to_print(text)
+      return nil if text.nil? || text.to_s.empty?
+      return nil if text.to_s.strip.gsub(/\p{C}+/, '').match?(THINK_CLOSE_ONLY)
+
+      stripped = text.to_s.gsub(/\p{C}+/, '').sub(THINK_CLOSE_TAIL, '')
+      stripped.empty? ? nil : stripped
     end
 
     def flush_assistant_text_buffer

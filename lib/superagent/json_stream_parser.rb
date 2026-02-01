@@ -15,12 +15,18 @@ class JsonStreamParser
     type = obj['type']
     return [nil] * 5 if skip_type?(obj, type)
 
-    [type, text_for(obj, type), stream_id_for(obj, type), nil, tool_for_if(obj, type)]
+    build_parse_result(obj, type)
   rescue Oj::ParseError, JSON::ParserError
     [nil] * 5
   end
 
   private
+
+  def build_parse_result(obj, type)
+    stream_id = obj['request_id'] || obj['stream_id'] || type
+    tool = (type == 'tool_call' ? tool_for(obj) : nil)
+    [type, text_for(obj, type), stream_id, nil, tool]
+  end
 
   def skip_type?(_obj, type)
     return true if %w[user system].include?(type)
@@ -63,14 +69,6 @@ class JsonStreamParser
     block ? block['text'] : nil
   end
 
-  def stream_id_for(obj, type)
-    obj['request_id'] || obj['stream_id'] || type
-  end
-
-  def tool_for_if(obj, type)
-    type == 'tool_call' ? tool_for(obj) : nil
-  end
-
   def tool_for(obj)
     payload = obj['tool_call']
     return nil unless payload.is_a?(Hash)
@@ -79,28 +77,14 @@ class JsonStreamParser
     return nil unless key
 
     value = payload[key]
-    build_tool_hash(tool_name_from_key(key), value, obj['subtype'])
+    name = key.to_s.sub(/ToolCall\z/, '').gsub(/([a-z])([A-Z])/, '\1_\2').downcase.sub(/_tool\z/, '')
+    build_tool_hash(name, value, obj['subtype'])
   end
 
   def build_tool_hash(name, value, subtype)
     args = value.is_a?(Hash) ? value['args'] : nil
     result = value.is_a?(Hash) ? value['result'] : nil
-    {
-      name: name,
-      arguments: args.is_a?(String) ? parse_json_safe(args) : args,
-      subtype: subtype,
-      result: result
-    }
-  end
-
-  def tool_name_from_key(key)
-    name = key.to_s.sub(/ToolCall\z/, '')
-    name.gsub(/([a-z])([A-Z])/, '\1_\2').downcase.sub(/_tool\z/, '')
-  end
-
-  def parse_json_safe(str)
-    Oj.load(str)
-  rescue Oj::ParseError, JSON::ParserError
-    str
+    parsed_args = args.is_a?(String) ? (Oj.load(args) rescue args) : args
+    { name: name, arguments: parsed_args, subtype: subtype, result: result }
   end
 end

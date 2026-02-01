@@ -228,7 +228,7 @@ class AgentExecutor
     content = display_content_for(parsed)
     return final unless content && !content.empty?
 
-    handle_stream_line_display(parsed, final)
+    handle_stream_line_display(content, parsed, final)
   end
 
   def finalize_display(success_for_display)
@@ -377,19 +377,13 @@ class AgentExecutor
     @display.puts "Running: #{command}".green if command && !command.empty?
   end
 
-  def handle_stream_line_display(parsed, final)
-    content = display_content_for(parsed)
+  def handle_stream_line_display(content, parsed, _final)
     @display.apply_stream_line_display(
       parsed[:type], content, parsed[:stream_id],
       think_close_only: parsed[:think_close_only],
       trailing_think_close: parsed[:trailing_think_close],
       passthrough: @passthrough
     )
-    case parsed[:type]
-    when 'result' then parsed[:result]
-    when 'thinking', 'assistant', nil then final
-    else final
-    end
   end
 
   def drain_prompt_pipe(pipe)
