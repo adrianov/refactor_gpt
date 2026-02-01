@@ -27,6 +27,11 @@ class TestToolOutcome < Minitest::Test
     refute ToolOutcome.tool_result_error?(tool)
   end
 
+  def test_tool_result_error_false_when_completed_with_error_null
+    tool = { subtype: 'completed', result: { 'error' => nil, 'path' => '/x' } }
+    refute ToolOutcome.tool_result_error?(tool)
+  end
+
   def test_tool_result_error_true_when_result_is_json_string_with_error
     tool = { subtype: 'completed', result: '{"error":"something went wrong"}' }
     assert ToolOutcome.tool_result_error?(tool)
@@ -43,6 +48,13 @@ class TestToolOutcome < Minitest::Test
 
   def test_result_has_error_key_hash_without_error
     refute ToolOutcome.result_has_error_key?({ output: 'ok' })
+  end
+
+  def test_result_has_error_key_hash_error_nil_or_false_not_error
+    refute ToolOutcome.result_has_error_key?({ 'error' => nil })
+    refute ToolOutcome.result_has_error_key?({ error: nil })
+    refute ToolOutcome.result_has_error_key?({ 'error' => false })
+    refute ToolOutcome.result_has_error_key?({ error: false })
   end
 
   def test_result_has_error_key_json_string_with_error
