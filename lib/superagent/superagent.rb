@@ -212,6 +212,12 @@ class Superagent
 
   private
 
+  def display_done_requests_recap_if_any
+    return unless @session_outcomes.any? || @pending_queue.size.positive?
+
+    @display.display_done_requests_recap(@session_outcomes, queued: @pending_queue.snapshot)
+  end
+
   def models
     @auto_only ? MODELS_AUTO_ONLY : MODELS
   end
@@ -267,7 +273,7 @@ class Superagent
     current_req = previous_req || @current_request
     @session_outcomes << {request: current_req, success: true}
     save_current_session(current_req) if current_req
-    @display.display_done_requests_recap(@session_outcomes) if @session_outcomes.any?
+    display_done_requests_recap_if_any
 
     process_pending_queue(previous_req)
   end
@@ -383,7 +389,7 @@ class Superagent
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_all_attempts_failed(@current_request)
-    @display.display_done_requests_recap(@session_outcomes) if @session_outcomes.any?
+    display_done_requests_recap_if_any
     finalize_runtime_before_display
     @display.display_total_runtime(@start_time, active_elapsed: @active_elapsed, waiting_elapsed: @waiting_elapsed)
     save_current_session(@current_request) if @current_request

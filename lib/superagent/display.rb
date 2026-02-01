@@ -245,8 +245,8 @@ class Display
       @queue_display.pending_request_preview(text)
     end
 
-    def display_done_requests_recap(outcomes)
-      @outcome_display.display_done_requests_recap(outcomes)
+    def display_done_requests_recap(outcomes, queued: nil)
+      @outcome_display.display_done_requests_recap(outcomes, queued: queued)
     end
 
     def display_attempt_header(model, idx, total)
