@@ -38,12 +38,12 @@ class JsonStreamParser
     end
   end
 
-  # type=result: value may be string or { "content" => "..." }; return string content.
+  # type=result: value may be string or { "content" => "..." }; return string content; collapses 3+ newlines to two.
   def result_content(obj)
     r = obj['result']
     return nil if r.nil?
-    return r['content'].to_s if r.is_a?(Hash) && r.key?('content')
-    r.to_s
+    raw = (r.is_a?(Hash) && r.key?('content') ? r['content'].to_s : r.to_s)
+    raw.gsub(/\n{3,}/, "\n\n")
   end
 
   def assistant_text(obj)
