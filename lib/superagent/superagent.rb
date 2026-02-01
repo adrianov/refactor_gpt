@@ -16,6 +16,7 @@ class Superagent
     opus-4.5-thinking
   ].freeze
   MODELS_AUTO_ONLY = Array.new(3, MODELS.first).freeze
+  STEPS_PER_MODEL = 2 # Requests 1-2 use model 1, 3-4 use model 2, etc.
 
   def initialize(
     display: Display.new,
@@ -246,11 +247,13 @@ class Superagent
     RequestPreparer.extract_model_index(raw_text, models)
   end
 
-  # Start-index policy: continuation keeps current model; new request uses request hint or session failure_count.
+  # Continuation: start from step_count tier (0-1→model 0, 2-3→1…). New request: hint or failure_count.
   def resolve_start_index(request_model_index, _start_model_index, continuation:, current_model_index:,
-                          failure_count: 0)
+                          failure_count: 0, step_count: 0)
     if continuation
-      request_model_index ? [request_model_index, current_model_index].max : current_model_index
+      tier = [(step_count / STEPS_PER_MODEL), models.size - 1].min
+      idx = request_model_index || tier
+      [idx, current_model_index].max
     else
       request_model_index || [failure_count, models.size - 1].min
     end
@@ -260,10 +263,11 @@ class Superagent
     @current_model_index = 0 unless @session_continuation
     session = @session_tracker.session_for_continuation_analysis
     failure_count = session ? (session[:failure_count] || 0) : 0
+    step_count = session ? (session[:step_count] || 0) : 0
     resolve_start_index(
       model_index_from_request, start_model_index,
       continuation: @session_continuation, current_model_index: @current_model_index,
-      failure_count: failure_count
+      failure_count: failure_count, step_count: step_count
     )
   end
 
@@ -324,7 +328,7 @@ class Superagent
     update_terminal_title(true)
     current_req = previous_req || @current_request
     @session_outcomes << {request: current_req, success: true}
-    save_current_session(current_req) if current_req
+    save_current_session(current_req, :not_provided, update_in_place: true) if current_req
     display_done_requests_recap_if_any
 
     process_pending_queue(previous_req)
@@ -377,6 +381,10 @@ class Superagent
     @waiting_start = Time.now
     raw_new_req = @request_reader.read_request
     prompt_accumulate_waiting
+    prompt_after_read(raw_new_req, previous_req)
+  end
+
+  def prompt_after_read(raw_new_req, previous_req)
     return prompt_handle_reset(previous_req) if RequestReader.reset_command?(raw_new_req)
 
     prompt_save_history(raw_new_req) unless raw_new_req.nil? || raw_new_req.to_s.empty?
@@ -444,11 +452,11 @@ class Superagent
   def execute_new_request(new_req, _previous_req, model_index, continuation_analysis: nil)
     analysis = continuation_analysis || default_continuation_analysis
     session = @session_tracker.session_for_continuation_analysis
-    failure_count = session ? (session[:failure_count] || 0) : 0
     start_index = resolve_start_index(
       model_index, 0,
       continuation: analysis[:continuation], current_model_index: @current_model_index,
-      failure_count: failure_count
+      failure_count: session ? (session[:failure_count] || 0) : 0,
+      step_count: session ? (session[:step_count] || 0) : 0
     )
     start_index = [[start_index, 0].max, models.size - 1].min
 
@@ -486,7 +494,7 @@ class Superagent
     @display.display_total_runtime(runtime_stats_for_display)
     if @current_request
       @session_tracker.increment_failure_count
-      save_current_session(@current_request)
+      save_current_session(@current_request, :not_provided, update_in_place: true)
     end
     CompletionNotifier.notify_completion(success: false) if no_queued
     update_terminal_title(false)
@@ -521,14 +529,17 @@ class Superagent
     @session_tracker.append_to_request_history(raw)
   end
 
-  def save_current_session(req, summary = :not_provided)
+  def save_current_session(req, summary = :not_provided, update_in_place: false)
     @session_tracker.save_session(
-      req, @session_description, @session_tags, @session_continuation, summary
+      req, @session_description, @session_tags, @session_continuation, summary,
+      update_in_place: update_in_place
     )
   end
 
   def save_agent_summary(summary)
-    save_current_session(@current_request, summary) if (summary && !summary.to_s.empty?) && @current_request
+    return unless summary && !summary.to_s.empty? && @current_request
+
+    save_current_session(@current_request, summary, update_in_place: true)
   end
 
   def add_and_show_queue(queue, raw_new, current_request = nil)

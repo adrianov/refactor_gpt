@@ -4,7 +4,7 @@ require 'oj'
 require 'fileutils'
 
 # Tracks session state per project (directory). Many sessions per project; continuation uses latest session.
-# Each session: request, history, continuation, failure_count (model selection). /reset clears failure_count.
+# Session: request, history, continuation, failure_count, step_count (model tier). /reset clears failure_count.
 class SessionTracker
   SESSION_DIR = ConfigPath::CONFIG_DIR
   MAX_SESSION_AGE = 86400 # 24 hours
@@ -139,15 +139,15 @@ class SessionTracker
   DEFAULT_REQUEST_TYPE = 'implementation'
 
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided,
-                   request_type: DEFAULT_REQUEST_TYPE)
+                   request_type: DEFAULT_REQUEST_TYPE, update_in_place: false)
     previous_session = load_previous_session
     ctx = session_save_context(previous_session, request, continuation, last_agent_summary, request_type)
     session_data = build_session_data(
       request: request, description: description, tags: tags, continuation: continuation,
       request_history: ctx[:request_history], last_agent_summary: ctx[:agent_summary],
-      failure_count: ctx[:failure_count]
+      failure_count: ctx[:failure_count], step_count: ctx[:step_count]
     )
-    list = determine_session_save_strategy(load_sessions, session_data, continuation)
+    list = session_list_for_save(load_sessions, session_data, continuation, update_in_place, previous_session)
     write_sessions(list.last(MAX_SESSIONS))
   end
 
@@ -175,7 +175,7 @@ class SessionTracker
     return if sessions.empty?
 
     updated_session = merge_request_history_into_session(
-      session_with_default_failure_count(previous || sessions[-1] || {}),
+      session_with_defaults(previous || sessions[-1] || {}),
       prev_list + new_entries
     )
     sessions[-1] = updated_session
@@ -183,7 +183,7 @@ class SessionTracker
   end
 
   def build_session_data(request:, description:, tags:, continuation:, request_history:, last_agent_summary:,
-                         failure_count: 0)
+                         failure_count: 0, step_count: 0)
     session_data = {
       request: request,
       description: description,
@@ -192,6 +192,7 @@ class SessionTracker
       request_history: request_history,
       last_agent_summary: last_agent_summary,
       failure_count: failure_count,
+      step_count: step_count,
       timestamp: Time.now.to_i,
       cwd: Dir.pwd
     }
@@ -221,10 +222,13 @@ class SessionTracker
 
   private
 
-  def session_with_default_failure_count(session)
+  def session_with_defaults(session)
     return {} unless session.is_a?(Hash)
 
-    session.key?(:failure_count) ? session : session.merge(failure_count: 0)
+    defaults = {}
+    defaults[:failure_count] = 0 unless session.key?(:failure_count)
+    defaults[:step_count] = 0 unless session.key?(:step_count)
+    defaults.empty? ? session : session.merge(defaults)
   end
 
   def validate_session_structure(session)
@@ -246,6 +250,7 @@ class SessionTracker
 
   def set_session_defaults(session)
     session[:failure_count] ||= 0
+    session[:step_count] ||= 0
     session[:request_history] ||= []
     session[:tags] ||= []
     session[:continuation] ||= false
@@ -265,6 +270,10 @@ class SessionTracker
     continuation && previous_session ? (previous_session[:failure_count] || 0) : 0
   end
 
+  def calculate_step_count_context(continuation, previous_session)
+    continuation && previous_session ? (previous_session[:step_count] || 0) + 1 : 0
+  end
+
   def determine_session_save_strategy(current_sessions, new_session_data, continuation)
     if continuation && current_sessions.any?
       # Replace the last session with the new continuation session
@@ -280,7 +289,8 @@ class SessionTracker
       request_history: new_history_entries,
       timestamp: Time.now.to_i,
       cwd: Dir.pwd,
-      failure_count: base_session[:failure_count] || 0
+      failure_count: base_session[:failure_count] || 0,
+      step_count: base_session[:step_count] || 0
     )
   end
 
@@ -292,11 +302,18 @@ class SessionTracker
     write_sessions(sessions)
   end
 
+  def session_list_for_save(sessions, session_data, continuation, update_in_place, previous_session)
+    return sessions[0..-2] + [session_data] if update_in_place && previous_session && sessions.any?
+
+    determine_session_save_strategy(sessions, session_data, continuation)
+  end
+
   def session_save_context(previous_session, request, continuation, last_agent_summary, request_type)
     {
       request_history: build_request_history_context(previous_session, request, request_type),
       agent_summary: determine_agent_summary_context(continuation, previous_session, last_agent_summary),
-      failure_count: calculate_failure_count_context(continuation, previous_session)
+      failure_count: calculate_failure_count_context(continuation, previous_session),
+      step_count: calculate_step_count_context(continuation, previous_session)
     }
   end
 
@@ -368,7 +385,7 @@ class SessionTracker
             []
           end
     raw.select { |s| s.is_a?(Hash) }.map do |session|
-      normalized = session_with_default_failure_count(session)
+      normalized = session_with_defaults(session)
       validate_session_structure(normalized) ? normalized : nil
     end.compact
   end
