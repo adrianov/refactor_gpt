@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'digest'
 require 'oj'
 require 'fileutils'
 
@@ -48,25 +49,25 @@ class SessionTracker
     last
   end
 
-  # Session used for continuation analysis and prompt history/summary (latest non-expired session).
-  def session_for_continuation_analysis
-    load_previous_session
+  # Session used for continuation analysis and prompt history/summary.
+  # When description is given, returns the session whose description matches (same session id); else latest.
+  def session_for_continuation_analysis(description = nil)
+    return load_previous_session if description.nil? || description.to_s.strip.empty?
+
+    find_session_by_description(description) || load_previous_session
+  end
+
+  # Returns the most recent session whose description matches (by session_id), or nil.
+  def find_session_by_description(description)
+    id = description_to_session_id(description)
+    return nil if id.nil? || id.empty?
+
+    active_sessions.reverse.find { |s| session_id_for(s) == id }
   end
 
   # Returns all non-expired sessions for this project, ordered by most recent first.
   def active_sessions
     load_sessions.select { |session| !session_expired?(session) }
-  end
-
-  # Finds the best matching session for a new request based on recency and content similarity.
-  # Prioritizes recent sessions with similar tags or descriptions.
-  def find_best_matching_session(_new_request)
-    sessions = active_sessions
-    return nil if sessions.empty?
-
-    # Simple heuristic: prefer recent sessions, but could be enhanced with AI analysis
-    # For now, return most recent as the continuation detection happens via AI analysis
-    sessions.first
   end
 
   # Returns sessions ordered by failure count (lowest first), useful for model selection.
@@ -90,15 +91,23 @@ class SessionTracker
     normalize_sessions_list(data)
   end
 
-  def increment_failure_count
-    modify_last_session do |session|
-      session[:failure_count] = (session[:failure_count] || 0) + 1
+  def increment_failure_count(description: nil)
+    target = description.to_s.strip.empty? ? nil : find_session_by_description(description)
+    if target
+      modify_session_by_id(session_id_for(target)) do |session|
+        session[:failure_count] = (session[:failure_count] || 0) + 1
+      end
+    else
+      modify_last_session { |session| session[:failure_count] = (session[:failure_count] || 0) + 1 }
     end
   end
 
-  def reset_failure_count
-    modify_last_session do |session|
-      session[:failure_count] = 0
+  def reset_failure_count(description: nil)
+    target = description.to_s.strip.empty? ? nil : find_session_by_description(description)
+    if target
+      modify_session_by_id(session_id_for(target)) { |session| session[:failure_count] = 0 }
+    else
+      modify_last_session { |session| session[:failure_count] = 0 }
     end
   end
 
@@ -140,14 +149,14 @@ class SessionTracker
 
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided,
                    request_type: DEFAULT_REQUEST_TYPE, update_in_place: false)
-    previous_session = load_previous_session
+    previous_session = session_for_continuation_analysis(description)
     ctx = session_save_context(previous_session, request, continuation, last_agent_summary, request_type)
     session_data = build_session_data(
       request: request, description: description, tags: tags, continuation: continuation,
       request_history: ctx[:request_history], last_agent_summary: ctx[:agent_summary],
       failure_count: ctx[:failure_count], step_count: ctx[:step_count]
     )
-    list = session_list_for_save(load_sessions, session_data, continuation, update_in_place, previous_session)
+    list = session_list_for_save(load_sessions, session_data, continuation, update_in_place)
     write_sessions(list.last(MAX_SESSIONS))
   end
 
@@ -194,7 +203,8 @@ class SessionTracker
       failure_count: failure_count,
       step_count: step_count,
       timestamp: Time.now.to_i,
-      cwd: Dir.pwd
+      cwd: Dir.pwd,
+      session_id: description_to_session_id(description)
     }
 
     raise "Invalid session structure" unless validate_session_structure(session_data)
@@ -202,8 +212,8 @@ class SessionTracker
     session_data
   end
 
-  def get_session_request_history(exclude_equal: nil)
-    session_data = session_for_continuation_analysis
+  def get_session_request_history(exclude_equal: nil, description: nil)
+    session_data = session_for_continuation_analysis(description)
     return [] unless session_data
 
     list = previous_request_history_list(session_data)
@@ -213,8 +223,8 @@ class SessionTracker
     list.reject { |req| RequestPreparer.normalized_request_text(req[:text]) == exclude }
   end
 
-  def get_last_agent_summary
-    session_data = session_for_continuation_analysis
+  def get_last_agent_summary(description: nil)
+    session_data = session_for_continuation_analysis(description)
     return nil unless session_data
 
     session_data[:last_agent_summary]
@@ -254,6 +264,14 @@ class SessionTracker
     session[:request_history] ||= []
     session[:tags] ||= []
     session[:continuation] ||= false
+    session[:session_id] ||= description_to_session_id(session[:description]) if session[:description]
+  end
+
+  def description_to_session_id(description)
+    return nil if description.nil? || description.to_s.strip.empty?
+
+    normalized = description.to_s.downcase.strip
+    Digest::SHA256.hexdigest(normalized)[0..15]
   end
 
   def build_request_history_context(previous_session, request, request_type)
@@ -276,12 +294,17 @@ class SessionTracker
 
   def determine_session_save_strategy(current_sessions, new_session_data, continuation)
     if continuation && current_sessions.any?
-      # Replace the last session with the new continuation session
-      current_sessions[0..-2] + [new_session_data]
+      sid = new_session_data[:session_id]
+      idx = sid ? current_sessions.index { |s| session_id_for(s) == sid } : nil
+      replace_at = idx.nil? ? current_sessions.size - 1 : idx
+      current_sessions.dup.tap { |list| list[replace_at] = new_session_data }
     else
-      # Append as a new session
       current_sessions + [new_session_data]
     end
+  end
+
+  def session_id_for(session)
+    session[:session_id] || description_to_session_id(session[:description])
   end
 
   def merge_request_history_into_session(base_session, new_history_entries)
@@ -302,8 +325,22 @@ class SessionTracker
     write_sessions(sessions)
   end
 
-  def session_list_for_save(sessions, session_data, continuation, update_in_place, previous_session)
-    return sessions[0..-2] + [session_data] if update_in_place && previous_session && sessions.any?
+  def modify_session_by_id(session_id)
+    sessions = load_sessions
+    idx = sessions.index { |s| session_id_for(s) == session_id }
+    return if idx.nil?
+
+    yield sessions[idx]
+    write_sessions(sessions)
+  end
+
+  def session_list_for_save(sessions, session_data, continuation, update_in_place)
+    if update_in_place && sessions.any?
+      sid = session_data[:session_id]
+      idx = sid ? sessions.index { |s| session_id_for(s) == sid } : nil
+      replace_at = idx.nil? ? sessions.size - 1 : idx
+      return sessions.dup.tap { |list| list[replace_at] = session_data }
+    end
 
     determine_session_save_strategy(sessions, session_data, continuation)
   end

@@ -23,8 +23,11 @@ class AgentPromptBuilder
   def wrap_prompt(p, new_session: false, current_request: nil, verification_mode: false, continuation_analysis: nil)
     user_content = format_user_request_content(p, continuation_analysis)
     rest = context_parts(new_session).compact.join
-    history = verification_mode ? nil : history_section(current_request: current_request)
-    summary = summary_section
+    session_desc = continuation_analysis&.dig(:description)
+    history = verification_mode ? nil : history_section(
+      current_request: current_request, session_description: session_desc
+    )
+    summary = summary_section(session_description: session_desc)
     user_content + (history.to_s + summary.to_s + rest)
   end
 
@@ -81,8 +84,8 @@ class AgentPromptBuilder
     content.empty? ? '' : "\n\n#{content}"
   end
 
-  def summary_section
-    summary = @session_tracker&.get_last_agent_summary
+  def summary_section(session_description: nil)
+    summary = @session_tracker&.get_last_agent_summary(description: session_description)
     return nil if summary.nil? || summary.to_s.strip.empty?
 
     "\n\nFinal summary from previous agent run:\n#{summary}"
@@ -90,8 +93,8 @@ class AgentPromptBuilder
 
   # Builds "Previous requests" prompt block: last N entries, direct order (oldest to newest).
   # Header and body are separate so body format (e.g. one line per request vs compact 2 lines) can change in one place.
-  def history_section(current_request: nil)
-    recent, start_num, width = recent_request_history_slice(current_request)
+  def history_section(current_request: nil, session_description: nil)
+    recent, start_num, width = recent_request_history_slice(current_request, session_description)
     return nil if recent.nil? || recent.empty?
 
     previous_requests_header(recent.size) + format_previous_requests_body(recent, start_num, width)
@@ -121,14 +124,20 @@ class AgentPromptBuilder
   private
 
   def continuation_request_header(analysis)
-    lines = []
-    lines << "[#{Time.now.strftime('%H:%M:%S')}] CONTINUATION: #{analysis[:continuation] ? 'YES' : 'NO'}"
-    tags = analysis[:tags] || []
-    lines << "TAGS: #{tags.empty? ? 'NONE' : tags.join(', ')}"
-    desc = analysis[:description]
-    lines << "DESCRIPTION: #{desc}" if desc && !desc.to_s.strip.empty?
-    lines << ''
-    lines.join("\n")
+    [
+      "[#{Time.now.strftime('%H:%M:%S')}] CONTINUATION: #{analysis[:continuation] ? 'YES' : 'NO'}",
+      "TAGS: #{format_continuation_tags(analysis[:tags])}",
+      format_continuation_description(analysis[:description]),
+      ''
+    ].compact.join("\n")
+  end
+
+  def format_continuation_tags(tags)
+    (tags || []).empty? ? 'NONE' : (tags || []).join(', ')
+  end
+
+  def format_continuation_description(desc)
+    (desc && !desc.to_s.strip.empty?) ? "DESCRIPTION: #{desc}" : nil
   end
 
   def format_truncated_section(label, content, max_lines: CONTEXT_MAX_LINES)
@@ -174,8 +183,10 @@ class AgentPromptBuilder
     [line1, line2].reject(&:empty?).join("\n")
   end
 
-  def recent_request_history_slice(current_request)
-    full = @session_tracker&.get_session_request_history(exclude_equal: current_request) || []
+  def recent_request_history_slice(current_request, session_description = nil)
+    full = @session_tracker&.get_session_request_history(
+      exclude_equal: current_request, description: session_description
+    ) || []
     return [nil, 0, 0] if full.empty?
 
     recent = full.last(MAX_PREVIOUS_REQUESTS)

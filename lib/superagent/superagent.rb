@@ -261,7 +261,7 @@ class Superagent
 
   def determine_start_index(model_index_from_request, start_model_index)
     @current_model_index = 0 unless @session_continuation
-    session = @session_tracker.session_for_continuation_analysis
+    session = @session_tracker.session_for_continuation_analysis(@session_description)
     failure_count = session ? (session[:failure_count] || 0) : 0
     step_count = session ? (session[:step_count] || 0) : 0
     resolve_start_index(
@@ -366,7 +366,7 @@ class Superagent
       return
     end
     if RequestReader.reset_command?(raw)
-      @session_tracker.reset_failure_count
+      @session_tracker.reset_failure_count(description: @session_description)
       @display.puts "Failure count reset.".yellow
       return
     end
@@ -395,7 +395,7 @@ class Superagent
   end
 
   def prompt_handle_reset(previous_req)
-    @session_tracker.reset_failure_count
+    @session_tracker.reset_failure_count(description: @session_description)
     @display.puts "Failure count reset.".yellow
     prompt_for_new_request(previous_req)
   end
@@ -451,19 +451,23 @@ class Superagent
 
   def execute_new_request(new_req, _previous_req, model_index, continuation_analysis: nil)
     analysis = continuation_analysis || default_continuation_analysis
-    session = @session_tracker.session_for_continuation_analysis
-    start_index = resolve_start_index(
-      model_index, 0,
-      continuation: analysis[:continuation], current_model_index: @current_model_index,
-      failure_count: session ? (session[:failure_count] || 0) : 0,
-      step_count: session ? (session[:step_count] || 0) : 0
-    )
-    start_index = [[start_index, 0].max, models.size - 1].min
-
+    start_index = start_index_for_new_request(analysis, model_index)
     display_continuation_message(analysis, start_index)
     @request_reader = RequestReader.new(@display)
     @request_reader.instance_variable_set(:@plan_mode, false)
     run(start_model_index: start_index, request: new_req, continuation_analysis: analysis)
+  end
+
+  def start_index_for_new_request(analysis, model_index)
+    session = @session_tracker.session_for_continuation_analysis(analysis[:description])
+    failure_count = session ? (session[:failure_count] || 0) : 0
+    step_count = session ? (session[:step_count] || 0) : 0
+    idx = resolve_start_index(
+      model_index, 0,
+      continuation: analysis[:continuation], current_model_index: @current_model_index,
+      failure_count: failure_count, step_count: step_count
+    )
+    [[idx, 0].max, models.size - 1].min
   end
 
   def display_continuation_message(analysis, start_index)
@@ -493,7 +497,7 @@ class Superagent
     finalize_runtime_before_display
     @display.display_total_runtime(runtime_stats_for_display)
     if @current_request
-      @session_tracker.increment_failure_count
+      @session_tracker.increment_failure_count(description: @session_description)
       save_current_session(@current_request, :not_provided, update_in_place: true)
     end
     CompletionNotifier.notify_completion(success: false) if no_queued
