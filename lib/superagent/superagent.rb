@@ -227,13 +227,25 @@ class Superagent
     RequestPreparer.extract_model_index(raw_text, models)
   end
 
-  def determine_start_index(model_index_from_request, start_model_index)
-    if @session_continuation
-      model_index_from_request ? [model_index_from_request, @current_model_index].max : @current_model_index
+  # Start-index policy: continuation keeps current model; new request uses request hint or session failure_count.
+  def resolve_start_index(request_model_index, _start_model_index, continuation:, current_model_index:,
+                          failure_count: 0)
+    if continuation
+      request_model_index ? [request_model_index, current_model_index].max : current_model_index
     else
-      @current_model_index = 0
-      model_index_from_request || start_model_index
+      request_model_index || [failure_count, models.size - 1].min
     end
+  end
+
+  def determine_start_index(model_index_from_request, start_model_index)
+    @current_model_index = 0 unless @session_continuation
+    session = @session_tracker.session_for_continuation_analysis
+    failure_count = session ? (session[:failure_count] || 0) : 0
+    resolve_start_index(
+      model_index_from_request, start_model_index,
+      continuation: @session_continuation, current_model_index: @current_model_index,
+      failure_count: failure_count
+    )
   end
 
   def initialize_run(request)
@@ -330,6 +342,11 @@ class Superagent
       @display.puts "Queued requests discarded.".yellow
       return
     end
+    if RequestReader.reset_command?(raw)
+      @session_tracker.reset_failure_count
+      @display.puts "Failure count reset.".yellow
+      return
+    end
     return if raw.to_s.strip.empty?
 
     save_request_to_histories(raw)
@@ -341,11 +358,19 @@ class Superagent
     @waiting_start = Time.now
     raw_new_req = @request_reader.read_request
     prompt_accumulate_waiting
+    return prompt_handle_reset(previous_req) if RequestReader.reset_command?(raw_new_req)
+
     prompt_save_history(raw_new_req) unless raw_new_req.to_s.strip.empty?
     @active_start = Time.now
     exit 0 if raw_new_req.to_s.strip.empty?
 
     prompt_execute_new_request(raw_new_req, previous_req)
+  end
+
+  def prompt_handle_reset(previous_req)
+    @session_tracker.reset_failure_count
+    @display.puts "Failure count reset.".yellow
+    prompt_for_new_request(previous_req)
   end
 
   def prompt_accumulate_waiting
@@ -375,7 +400,7 @@ class Superagent
   end
 
   def continuation_analysis_for_new_request(raw_new_req, _previous_req)
-    previous_session = @session_tracker.load_previous_session
+    previous_session = @session_tracker.session_for_continuation_analysis
     @session_tracker.analyze_continuation_and_description(raw_new_req, previous_session)
   rescue StandardError => e
     @display.puts "Warning: Continuation analysis failed: #{e.message}".yellow
@@ -388,7 +413,13 @@ class Superagent
 
   def execute_new_request(new_req, _previous_req, model_index, continuation_analysis: nil)
     analysis = continuation_analysis || default_continuation_analysis
-    start_index = start_index_for_new_request(analysis, model_index)
+    session = @session_tracker.session_for_continuation_analysis
+    failure_count = session ? (session[:failure_count] || 0) : 0
+    start_index = resolve_start_index(
+      model_index, 0,
+      continuation: analysis[:continuation], current_model_index: @current_model_index,
+      failure_count: failure_count
+    )
     start_index = [[start_index, 0].max, models.size - 1].min
 
     display_continuation_message(analysis, start_index)
@@ -423,7 +454,10 @@ class Superagent
     display_done_requests_recap_if_any
     finalize_runtime_before_display
     @display.display_total_runtime(runtime_stats_for_display)
-    save_current_session(@current_request) if @current_request
+    if @current_request
+      @session_tracker.increment_failure_count
+      save_current_session(@current_request)
+    end
     CompletionNotifier.notify_completion(success: false) if no_queued
     update_terminal_title(false)
     exit 1
@@ -464,14 +498,6 @@ class Superagent
 
   def save_agent_summary(summary)
     save_current_session(@current_request, summary) if summary && !summary.to_s.strip.empty? && @current_request
-  end
-
-  def start_index_for_new_request(analysis, model_index)
-    if analysis[:continuation]
-      [model_index || 0, @current_model_index].max
-    else
-      model_index || 0
-    end
   end
 
   def add_and_show_queue(queue, raw_new, current_request = nil)

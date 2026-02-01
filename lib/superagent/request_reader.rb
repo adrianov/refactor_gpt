@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'digest'
 require 'fileutils'
 require 'reline'
 
@@ -25,6 +24,7 @@ Reline::LineEditor.prepend(RelineNilSafeBuffer)
 class RequestReader
   REQUEST_PROMPT = 'Enter request (press Enter twice to submit):'
   DISCARD_CMD = '/discard'
+  RESET_CMD = '/reset'
   PASTE_THRESHOLD = 0.2
   HISTORY_DIR = ConfigPath::CONFIG_DIR
   HISTORY_SEP = "\n---\n"
@@ -36,7 +36,7 @@ class RequestReader
     @display = display
     @plan_mode = false
     # Freeze path at startup so history is always for the directory from which superagent was started.
-    @history_file_path = File.join(HISTORY_DIR, "#{Digest::SHA256.hexdigest(Dir.pwd)}_history")
+    @history_file_path = File.join(HISTORY_DIR, "#{ConfigPath.project_id}_history")
   end
 
   attr_reader :plan_mode
@@ -303,6 +303,10 @@ class RequestReader
 
   def self.discard_command?(str)
     str.to_s.strip == DISCARD_CMD
+  end
+
+  def self.reset_command?(str)
+    str.to_s.strip == RESET_CMD
   end
 
   def validate(req)
