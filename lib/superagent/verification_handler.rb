@@ -34,18 +34,32 @@ class VerificationHandler
     HEREDOC
   end
 
-  def build_refactor_prompt(req)
+  def build_refactor_prompt(req, triggering_files: [])
     a, b = self.class::REFACTOR_STEP_REQUIREMENTS
     guideline = AgentPromptBuilder::GUIDELINE_REFERENCE_PHRASE
     bullets = "- #{a}\n- #{guideline}\n- #{b}"
+    trigger_blurb = format_refactor_trigger_blurb(triggering_files)
     <<~HEREDOC
       User request (to be implemented in the next step): #{to_utf8(req)}
 
       #{self.class::REFACTOR_STEP_INTRO}
+      #{trigger_blurb}
 
       You must:
       #{bullets}
     HEREDOC
+  end
+
+  # Describes which changed files triggered this refactor step and why (line count >= threshold).
+  def format_refactor_trigger_blurb(triggering_files)
+    return '' if triggering_files.nil? || triggering_files.empty?
+
+    lines = triggering_files.map do |e|
+      "  - #{e[:path]} (#{e[:lines]} lines; refactor threshold for this file type is #{e[:limit]} lines)"
+    end
+    intro = 'This refactor step was triggered because the following changed file(s) exceed the project ' \
+            "line-count thresholds:\n#{lines.join("\n")}\n"
+    intro + "Prioritize refactoring these files (e.g. split or simplify) while preserving behavior.\n"
   end
 
   def parse_res(res)
@@ -225,9 +239,9 @@ class VerificationHandler
     @refactor_output = nil
   end
 
-  def run_refactor(model, req)
+  def run_refactor(model, req, triggering_files: [])
     @refactor_output = nil
-    refactor_prompt = build_refactor_prompt(req)
+    refactor_prompt = build_refactor_prompt(req, triggering_files: triggering_files)
     @display.puts "Refactoring: #{model}...".blue
     $stdout.puts ''
 
