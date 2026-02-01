@@ -3,10 +3,6 @@
 # Renders verification result and full recap to the display. Extracted to keep Display under length limit.
 # Recap layout: intro and summary preserve LLM newlines; no extra blank after each intro line.
 class VerificationDisplay
-  RECAP_INDENT = '  '
-  RECAP_INTRO_SKIP_EMPTY = false
-  RECAP_INTRO_BLANK_AFTER_EACH = false
-
   def initialize(display)
     @display = display
   end
@@ -29,7 +25,7 @@ class VerificationDisplay
   def render_verification_message(prefix, suffix, desc, verified, context)
     if desc && !desc.empty?
       @display.puts "#{prefix}#{suffix}:".send(verified ? :green : :yellow)
-      desc.each_line { |line| @display.out_puts @display.body("#{RECAP_INDENT}#{line.chomp}") }
+      desc.each_line { |line| @display.out_puts @display.body("  #{line.chomp}") }
     elsif verified
       @display.puts "#{prefix}#{suffix}! Success.".send(:green)
     else
@@ -45,9 +41,7 @@ class VerificationDisplay
     @display.out_puts ''
     @display.puts 'Full recap:'.cyan
     sections = RecapFormatter.parse_recap_sections(text)
-    print_recap_lines(
-      sections.intro_lines, skip_empty: RECAP_INTRO_SKIP_EMPTY, blank_after_each: RECAP_INTRO_BLANK_AFTER_EACH
-    )
+    print_recap_lines(sections.intro_lines)
     summary = RecapFormatter.summary_block_from_text(text)
     print_summary_raw(summary) if summary
     @display.out_puts ''
@@ -56,17 +50,15 @@ class VerificationDisplay
 
   def print_summary_raw(raw)
     @display.out_puts ''
-    raw.each_line { |line| @display.out_puts @display.body("#{RECAP_INDENT}#{line.chomp}") }
+    raw.each_line { |line| @display.out_puts @display.body("  #{line.chomp}") }
   end
 
-  def print_recap_lines(lines, skip_empty: false, blank_after_each: false)
+  def print_recap_lines(lines)
     lines.each do |line|
       if line.empty?
-        next if skip_empty
         @display.out_puts ''
       else
-        @display.out_puts @display.body("#{RECAP_INDENT}#{line}")
-        @display.out_puts '' if blank_after_each
+        @display.out_puts @display.body("  #{line}")
       end
     end
   end
