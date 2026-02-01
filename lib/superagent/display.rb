@@ -67,7 +67,7 @@ class Display
 
   def flush_paused_output
     to_print = @output_buffer_mutex.synchronize do
-      buf = @output_buffer.join
+      buf = @output_buffer.map { |s| normalize_utf8(s) }.join
       @output_buffer.clear
       buf
     end
@@ -513,6 +513,12 @@ class Display
     end
 
     private
+
+    def normalize_utf8(str)
+      s = str.to_s
+      s = s.dup.force_encoding(Encoding::UTF_8) unless s.encoding == Encoding::UTF_8
+      s.valid_encoding? ? s : s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
+    end
 
     def apply_new_stream(stream_id)
       is_new = stream_id && stream_id != @current_stream_id
