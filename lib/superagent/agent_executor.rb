@@ -157,7 +157,9 @@ class AgentExecutor
   def run_plan_mode(model, p, new_session: false, continuation_analysis: nil)
     clear_full_prompt_buffer if new_session
     reset_run_tool_state
-    wrapped = wrap_prompt(p, new_session: new_session, current_request: p, continuation_analysis: continuation_analysis)
+    wrapped = PromptCompactor.compact(
+      wrap_prompt(p, new_session: new_session, current_request: p, continuation_analysis: continuation_analysis)
+    )
     cmd = setup_subprocess_run(model, wrapped, plan_mode: true, new_session: new_session)
     run_plan_subprocess(cmd, wrapped)
   rescue StandardError => e
@@ -170,8 +172,10 @@ class AgentExecutor
           defer_full_prompt: false, continuation_analysis: nil)
     @verification_mode = verification_mode
     clear_full_prompt_buffer if new_session
-    wrapped = wrap_prompt(p, new_session: new_session, current_request: current_request || p,
-                         continuation_analysis: continuation_analysis)
+    wrapped = PromptCompactor.compact(
+      wrap_prompt(p, new_session: new_session, current_request: current_request || p,
+                  continuation_analysis: continuation_analysis)
+    )
     retries = 0
     loop do
       result = run_one_attempt(model, wrapped, retries, base_delay,
