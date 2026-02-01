@@ -33,33 +33,15 @@ class VerificationDisplay
     end
   end
 
-  # raw_recap: same as display_verification_result (Superagent#current_recap_text; do not compact).
+  # raw_recap: same as display_verification_result (Superagent#current_recap_text; raw result from JSON).
   def display_full_recap(raw_recap)
-    text = RecapFormatter.prepare_recap_for_display(raw_recap)
-    return if text.nil? || text.to_s.strip.empty?
+    text = raw_recap.to_s.strip
+    return if text.empty?
 
     @display.out_puts ''
     @display.puts 'Full recap:'.cyan
-    sections = RecapFormatter.parse_recap_sections(text)
-    print_recap_lines(sections.intro_lines)
-    summary = RecapFormatter.summary_block_from_text(text)
-    print_summary_raw(summary) if summary
+    text.each_line { |line| @display.out_puts @display.body("  #{line.chomp}") }
     @display.out_puts ''
     $stdout.flush unless @display.output_paused
-  end
-
-  def print_summary_raw(raw)
-    @display.out_puts ''
-    raw.each_line { |line| @display.out_puts @display.body("  #{line.chomp}") }
-  end
-
-  def print_recap_lines(lines)
-    lines.each do |line|
-      if line.empty?
-        @display.out_puts ''
-      else
-        @display.out_puts @display.body("  #{line}")
-      end
-    end
   end
 end
