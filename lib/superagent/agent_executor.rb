@@ -289,9 +289,11 @@ class AgentExecutor
   end
 
   # Interrupt when same tool + same params fails 3 times in a row.
+  # Skip tracking when key has no arguments (stream may omit args on completed calls; would collapse all into one key).
   def on_tool_completed(tool)
     key = ToolOutcome.invocation_key(tool)
     return if key.nil? || @state_mutex.synchronize { @state[:timed_out] }
+    return if key.split("\0", 2)[1].to_s.strip.empty?
     return unless @same_tool_error_tracker.record(key, error: ToolOutcome.tool_result_error?(tool)) == :interrupt
 
     terminate_agent('same tool and parameters failed 3 times', cause: :interrupt)

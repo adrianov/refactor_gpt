@@ -96,6 +96,16 @@ class TestToolOutcome < Minitest::Test
     assert_equal key1, key2
   end
 
+  # When stream omits args on completed tool_call, key has empty args part; executor skips same-tool tracking.
+  def test_invocation_key_empty_args_produces_key_with_empty_args_part
+    key_nil = ToolOutcome.invocation_key({ name: 'edit', arguments: nil })
+    key_empty = ToolOutcome.invocation_key({ name: 'edit', arguments: {} })
+    [key_nil, key_empty].each do |key|
+      _, args_part = key.split("\0", 2)
+      assert args_part.to_s.strip.empty?, "key #{key.inspect} should have empty args part"
+    end
+  end
+
   def test_normalize_args_nil_returns_empty_string
     assert_equal '', ToolOutcome.normalize_args(nil)
   end
