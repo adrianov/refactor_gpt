@@ -5,7 +5,8 @@ require 'oj'
 require 'fileutils'
 
 # Tracks session state per project (directory). Many sessions; continuation uses latest.
-# Session: request, history, continuation, failure_count, step_count. /reset clears failure_count.
+# Session: request, history, failure_count, step_count, failed_sessions_count. /reset clears failure_count.
+# All attempts failed: step_count→0, failed_sessions_count+1.
 # Classification: Before running a request, the LLM is asked whether it continues an existing session
 # or starts a new one. The UI title for this step is "Classifying to a session" when there are
 # existing sessions, or "Classifying request" when there are none. Same-session requests are grouped
@@ -116,17 +117,6 @@ class SessionTracker
     normalize_sessions_list(data)
   end
 
-  def increment_failure_count(description: nil)
-    target = description.to_s.strip.empty? ? nil : find_session_by_description(description)
-    if target
-      modify_session_by_id(session_id_for(target)) do |session|
-        session[:failure_count] = (session[:failure_count] || 0) + 1
-      end
-    else
-      modify_last_session { |session| session[:failure_count] = (session[:failure_count] || 0) + 1 }
-    end
-  end
-
   def reset_failure_count(description: nil)
     target = description.to_s.strip.empty? ? nil : find_session_by_description(description)
     if target
@@ -179,13 +169,15 @@ class SessionTracker
   DEFAULT_REQUEST_TYPE = 'implementation'
 
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided,
-                   request_type: DEFAULT_REQUEST_TYPE, update_in_place: false)
+                   request_type: DEFAULT_REQUEST_TYPE, update_in_place: false, all_attempts_failed: false)
     previous_session = session_for_continuation_analysis(description)
-    ctx = session_save_context(previous_session, request, continuation, last_agent_summary, request_type)
+    ctx = session_save_context(previous_session, request, continuation, last_agent_summary, request_type,
+                              all_attempts_failed: all_attempts_failed)
     session_data = build_session_data(
       request: request, description: description, tags: tags, continuation: continuation,
       request_history: ctx[:request_history], last_agent_summary: ctx[:agent_summary],
-      failure_count: ctx[:failure_count], step_count: ctx[:step_count]
+      failure_count: ctx[:failure_count], step_count: ctx[:step_count],
+      failed_sessions_count: ctx[:failed_sessions_count]
     )
     list = session_list_for_save(load_sessions, session_data, continuation, update_in_place)
     write_sessions(list.last(MAX_SESSIONS))
@@ -223,7 +215,7 @@ class SessionTracker
   end
 
   def build_session_data(request:, description:, tags:, continuation:, request_history:, last_agent_summary:,
-                         failure_count: 0, step_count: 0)
+                         failure_count: 0, step_count: 0, failed_sessions_count: 0)
     session_data = {
       request: request,
       description: description,
@@ -233,6 +225,7 @@ class SessionTracker
       last_agent_summary: last_agent_summary,
       failure_count: failure_count,
       step_count: step_count,
+      failed_sessions_count: failed_sessions_count,
       timestamp: Time.now.to_i,
       cwd: Dir.pwd,
       session_id: description_to_session_id(description)
@@ -269,6 +262,7 @@ class SessionTracker
     defaults = {}
     defaults[:failure_count] = 0 unless session.key?(:failure_count)
     defaults[:step_count] = 0 unless session.key?(:step_count)
+    defaults[:failed_sessions_count] = 0 unless session.key?(:failed_sessions_count)
     defaults.empty? ? session : session.merge(defaults)
   end
 
@@ -292,6 +286,7 @@ class SessionTracker
   def set_session_defaults(session)
     session[:failure_count] ||= 0
     session[:step_count] ||= 0
+    session[:failed_sessions_count] ||= 0
     session[:request_history] ||= []
     session[:tags] ||= []
     session[:continuation] ||= false
@@ -340,6 +335,11 @@ class SessionTracker
     continuation && previous_session ? (previous_session[:step_count] || 0) + 1 : 0
   end
 
+  def calculate_failed_sessions_count_context(previous_session, all_attempts_failed)
+    base = previous_session ? (previous_session[:failed_sessions_count] || 0) : 0
+    all_attempts_failed ? base + 1 : base
+  end
+
   def determine_session_save_strategy(current_sessions, new_session_data, continuation)
     if continuation && current_sessions.any?
       sid = new_session_data[:session_id]
@@ -361,7 +361,8 @@ class SessionTracker
       timestamp: Time.now.to_i,
       cwd: Dir.pwd,
       failure_count: base_session[:failure_count] || 0,
-      step_count: base_session[:step_count] || 0
+      step_count: base_session[:step_count] || 0,
+      failed_sessions_count: base_session[:failed_sessions_count] || 0
     )
   end
 
@@ -393,12 +394,20 @@ class SessionTracker
     determine_session_save_strategy(sessions, session_data, continuation)
   end
 
-  def session_save_context(previous_session, request, continuation, last_agent_summary, request_type)
+  def session_save_context(previous_session, request, continuation, last_agent_summary, request_type,
+                           all_attempts_failed: false)
+    prev_fail = previous_session&.dig(:failure_count) || 0
+    failure_count = all_attempts_failed ? prev_fail + 1 : calculate_failure_count_context(
+      continuation, previous_session
+    )
+    step_count = all_attempts_failed ? 0 : calculate_step_count_context(continuation, previous_session)
+    failed_sessions_count = calculate_failed_sessions_count_context(previous_session, all_attempts_failed)
     {
       request_history: build_request_history_context(previous_session, request, request_type),
       agent_summary: determine_agent_summary_context(continuation, previous_session, last_agent_summary),
-      failure_count: calculate_failure_count_context(continuation, previous_session),
-      step_count: calculate_step_count_context(continuation, previous_session)
+      failure_count: failure_count,
+      step_count: step_count,
+      failed_sessions_count: failed_sessions_count
     }
   end
 

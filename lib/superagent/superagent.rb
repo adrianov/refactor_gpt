@@ -520,8 +520,7 @@ class Superagent
     finalize_runtime_before_display
     @display.display_total_runtime(runtime_stats_for_display)
     if @current_request
-      @session_tracker.increment_failure_count(description: @session_description)
-      save_current_session(@current_request, :not_provided, update_in_place: true)
+      save_current_session(@current_request, :not_provided, update_in_place: true, all_attempts_failed: true)
     end
     CompletionNotifier.notify_completion(success: false) if no_queued
     update_terminal_title(false)
@@ -556,10 +555,10 @@ class Superagent
     @session_tracker.append_to_request_history(raw)
   end
 
-  def save_current_session(req, summary = :not_provided, update_in_place: false)
+  def save_current_session(req, summary = :not_provided, update_in_place: false, all_attempts_failed: false)
     @session_tracker.save_session(
       req, @session_description, @session_tags, @session_continuation, summary,
-      update_in_place: update_in_place
+      update_in_place: update_in_place, all_attempts_failed: all_attempts_failed
     )
   end
 
