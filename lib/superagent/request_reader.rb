@@ -171,7 +171,7 @@ class RequestReader
     saw_empty = false
     last_time = Time.now
     loop do
-      action, saw_empty, last_time, line = process_one_line(lines, saw_empty, last_time)
+      action, saw_empty, last_time, line = process_one_line(lines, saw_empty, last_time, for_queue)
       return nil if action == :return_nil
       break if action == :break
       next if action == :next
@@ -191,16 +191,16 @@ class RequestReader
     r.empty? ? nil : r
   end
 
-  def process_one_line(lines, saw_empty, last_time)
+  def process_one_line(lines, saw_empty, last_time, for_queue = false)
     line, new_last_time, elapsed = read_line_with_elapsed(lines, last_time)
     return [:return_nil, saw_empty, new_last_time, nil] if line.nil?
-    return handle_empty_line(line, elapsed, saw_empty, lines) if empty_line_token?(line)
+    return handle_empty_line(line, elapsed, saw_empty, lines, for_queue) if empty_line_token?(line)
 
     [:append, false, new_last_time, line]
   end
 
-  def handle_empty_line(line, elapsed, saw_empty, lines)
-    flow, new_saw_empty = apply_empty_line(line, elapsed, saw_empty, lines)
+  def handle_empty_line(line, elapsed, saw_empty, lines, for_queue = false)
+    flow, new_saw_empty = apply_empty_line(line, elapsed, saw_empty, lines, for_queue)
     action = flow == :return_nil ? :return_nil : (flow == :break ? :break : :next)
     lines << '' if flow == :continue
     [action, new_saw_empty, Time.now, nil]
@@ -232,12 +232,13 @@ class RequestReader
     [line, now, now - last_time]
   end
 
-  def apply_empty_line(line, elapsed, saw_empty, lines)
+  def apply_empty_line(line, elapsed, saw_empty, lines, for_queue = false)
     if elapsed < PASTE_THRESHOLD
       lines << ''
       return [:continue, saw_empty]
     end
     return [:break, saw_empty] if line == :done
+    return [:break, saw_empty] if for_queue && line == :empty_line && lines.empty?
     return [:return_nil, saw_empty] if line == :empty_line && saw_empty
 
     [:continue, true]
