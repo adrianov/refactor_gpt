@@ -4,8 +4,13 @@ require 'digest'
 require 'oj'
 require 'fileutils'
 
-# Tracks session state per project (directory). Many sessions per project; continuation uses latest session.
-# Session: request, history, continuation, failure_count, step_count (model tier). /reset clears failure_count.
+# Tracks session state per project (directory). Many sessions; continuation uses latest.
+# Session: request, history, continuation, failure_count, step_count. /reset clears failure_count.
+# Classification: Before running a request, the LLM is asked whether it continues an existing session
+# or starts a new one. The UI title for this step is "Classifying to a session" when there are
+# existing sessions, or "Classifying request" when there are none. Same-session requests are grouped
+# by permanent session_id (Excel-style A1, B1: letter = order of addition, digit = 1).
+# rubocop:disable Metrics/ClassLength -- session + continuation + prompts; SessionIdRegistry already extracted
 class SessionTracker
   SESSION_DIR = ConfigPath::CONFIG_DIR
   MAX_SESSION_AGE = 86400 # 24 hours
@@ -36,6 +41,10 @@ class SessionTracker
 
   def initialize(display)
     @display = display
+    @session_id_registry = SessionIdRegistry.new(
+      read_index: -> { read_description_letter_index },
+      persist_index: method(:persist_description_letter_index)
+    )
     ensure_session_dir
   end
 
@@ -57,12 +66,14 @@ class SessionTracker
     find_session_by_description(description) || load_previous_session
   end
 
-  # Returns the most recent session whose description matches (by session_id), or nil.
+  # Returns the most recent session whose description matches (by session_id or description), or nil.
   def find_session_by_description(description)
     id = description_to_session_id(description)
-    return nil if id.nil? || id.empty?
-
-    active_sessions.reverse.find { |s| session_id_for(s) == id }
+    if id && !id.empty?
+      found = active_sessions.reverse.find { |s| session_id_for(s) == id }
+      return found if found
+    end
+    active_sessions.reverse.find { |s| @session_id_registry.descriptions_match(s[:description], description) }
   end
 
   # Returns all non-expired sessions for this project, ordered by most recent first.
@@ -101,6 +112,7 @@ class SessionTracker
     data = read_sessions_file(file)
     return [] unless data
 
+    @session_id_registry.load_index(data.is_a?(Hash) ? data[:description_letter_index] : nil)
     normalize_sessions_list(data)
   end
 
@@ -124,6 +136,7 @@ class SessionTracker
     end
   end
 
+  # Classifies the new request as continuing an existing session or new; returns continuation, tags, description.
   def analyze_continuation_and_description(new_request, _previous_session = nil)
     client = create_ask_client
     default = {continuation: false, tags: [], description: default_description(new_request), continuation_id: nil}
@@ -147,9 +160,11 @@ class SessionTracker
     result
   end
 
+  # UI title for the classification LLM call: "Classifying to a session" when there are existing
+  # sessions (user sees that we are matching the new request to a session), else "Classifying request".
   def continuation_prompt_and_title(new_request, sessions_newest_first)
     prompt = build_analysis_and_description_prompt(new_request, sessions_newest_first)
-    title = sessions_newest_first.any? ? "Analyzing continuation" : "Classifying request"
+    title = sessions_newest_first.any? ? "Classifying to a session" : "Classifying request"
     [prompt, title]
   end
 
@@ -283,11 +298,28 @@ class SessionTracker
     session[:session_id] ||= description_to_session_id(session[:description]) if session[:description]
   end
 
-  def description_to_session_id(description)
-    return nil if description.nil? || description.to_s.strip.empty?
+  public
 
-    normalized = description.to_s.downcase.strip
-    Digest::SHA256.hexdigest(normalized)[0..15]
+  # Permanent Excel-style session ID (e.g. A1, B1): letter = order of addition, digit = 1.
+  def description_to_session_id(description)
+    @session_id_registry.description_to_session_id(description)
+  end
+
+  private
+
+  def read_description_letter_index
+    data = read_sessions_file(sessions_file_path)
+    idx = data.is_a?(Hash) && data[:description_letter_index].is_a?(Array) ? data[:description_letter_index] : []
+    idx.dup
+  end
+
+  def persist_description_letter_index(index)
+    data = read_sessions_file(sessions_file_path) || {}
+    data = { sessions: [] } unless data.is_a?(Hash)
+    data[:sessions] ||= []
+    data[:description_letter_index] = index
+    ensure_session_dir
+    File.write(sessions_file_path, Oj.dump(data, mode: :compat, indent: 2))
   end
 
   def build_request_history_context(previous_session, request, request_type)
@@ -445,9 +477,10 @@ class SessionTracker
 
   def write_sessions(list)
     ensure_session_dir
-    # Clean up expired sessions and limit to max sessions
     active_sessions = list.select { |session| !session_expired?(session) }.last(MAX_SESSIONS)
     payload = { sessions: active_sessions.map { |s| s.is_a?(Hash) ? s : {} } }
+    idx = @session_id_registry.description_letter_index
+    payload[:description_letter_index] = idx if idx.is_a?(Array)
     File.write(sessions_file_path, Oj.dump(payload, mode: :compat, indent: 2))
   end
 
@@ -640,5 +673,5 @@ class SessionTracker
     description = description[0..99] if description && description.length > 100
     description.nil? ? nil : description.to_s.strip
   end
-
+# rubocop:enable Metrics/ClassLength
 end

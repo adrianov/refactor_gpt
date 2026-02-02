@@ -11,7 +11,7 @@ class QueueDisplay
     return if requests.nil? || requests.empty?
 
     @display.puts "Using #{requests.size} queued request(s):".cyan
-    requests.each_with_index { |r, i| @display.out_puts @display.body("  #{i + 1}. #{r.lines.first&.chomp}") }
+    requests.each_with_index { |r, i| pending_lines(r, i).each { |line| @display.out_puts @display.body(line) } }
     @display.out_puts ''
   end
 
@@ -32,6 +32,16 @@ class QueueDisplay
   end
 
   private
+
+  def pending_lines(item, index)
+    text = (item.is_a?(Hash) ? (item[:text] || item[:request]) : item).to_s
+    lines = text.lines.map(&:chomp).reject(&:empty?)
+    return [] if lines.empty?
+
+    first = "  #{index + 1}. #{lines.first}"
+    rest = lines.drop(1).map { |l| "     #{l}" }
+    [first] + rest
+  end
 
   def print_running_preview(current_request)
     return if current_request.nil? || current_request.to_s.strip.empty?

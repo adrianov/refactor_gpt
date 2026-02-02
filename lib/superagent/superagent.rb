@@ -347,16 +347,35 @@ class Superagent
   end
 
   def process_pending_with_requests(pending, previous_req)
-    combined = @pending_queue.to_combined_request(pending)
-    @display.display_pending_list(pending)
+    merged_list = @pending_queue.to_merged_requests_by_session(pending)
+    @display.display_pending_list(merged_list)
     InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
     unless InstanceLock.acquire_lock
       msg = "Another instance is already running for this project (#{InstanceLock.project_base_name}). Exiting."
       @display.puts msg.red
       exit 1
     end
-    model_index = model_index_from_request_text(combined)
-    execute_new_request(combined, previous_req, model_index)
+    return if merged_list.empty?
+
+    run_first_merged_and_prepend_rest(merged_list, previous_req)
+  end
+
+  def run_first_merged_and_prepend_rest(merged_list, previous_req)
+    first = merged_list.first
+    rest = merged_list[1..] || []
+    rest.reverse_each { |m| @pending_queue.prepend_merged([m]) }
+    analysis = merged_item_to_analysis(first)
+    model_index = model_index_from_request_text(first[:text])
+    execute_new_request(first[:text], previous_req, model_index, continuation_analysis: analysis)
+  end
+
+  def merged_item_to_analysis(merged)
+    {
+      continuation: merged[:continuation],
+      tags: merged[:tags] || [],
+      description: merged[:description],
+      continuation_id: nil
+    }
   end
 
   def process_queue_input(raw)
@@ -373,7 +392,10 @@ class Superagent
     return if raw.nil? || raw.to_s.empty?
 
     save_request_to_histories(raw)
-    add_and_show_queue(@pending_queue, RequestPreparer.normalized_request_text(raw), @current_request)
+    add_and_show_queue(
+      @pending_queue, RequestPreparer.normalized_request_text(raw),
+      current_request: @current_request, current_session_description: @session_description
+    )
   end
 
   def prompt_for_new_request(previous_req)
@@ -441,8 +463,9 @@ class Superagent
     default_continuation_analysis
   end
 
-  def continuation_analysis_for_request(sanitized_req)
-    run_continuation_analysis(sanitized_req, @session_tracker.session_for_continuation_analysis)
+  def continuation_analysis_for_request(sanitized_req, session: nil)
+    ctx = session || @session_tracker.session_for_continuation_analysis
+    run_continuation_analysis(sanitized_req, ctx)
   end
 
   def default_continuation_analysis
@@ -546,11 +569,24 @@ class Superagent
     save_current_session(@current_request, summary, update_in_place: true)
   end
 
-  def add_and_show_queue(queue, raw_new, current_request = nil)
+  def add_and_show_queue(queue, raw_new, current_request: nil, current_session_description: nil)
     return if raw_new.nil? || raw_new.to_s.empty?
 
-    queue.add(RequestPreparer.normalized_request_text(raw_new))
+    normalized = RequestPreparer.normalized_request_text(raw_new)
+    analysis, session_id = queue_classification_for(raw_new, session_description: current_session_description)
+    queue.add(normalized, analysis: analysis, session_id: session_id)
     list = queue.snapshot
-    @display.display_pending_list(list, current_request: current_request) unless list.empty?
+    merged = queue.to_merged_requests_by_session(list)
+    @display.display_pending_list(merged, current_request: current_request) unless merged.empty?
+  end
+
+  def queue_classification_for(raw_new, session_description: nil)
+    sanitized = RequestPreparer.sanitize_request(raw_new, models)
+    session = session_description ? @session_tracker.session_for_continuation_analysis(session_description) : nil
+    analysis = if sanitized && !sanitized.to_s.empty?
+                  continuation_analysis_for_request(sanitized, session: session)
+                end
+    sid = analysis&.dig(:description) ? @session_tracker.description_to_session_id(analysis[:description]) : nil
+    [analysis, sid]
   end
 end
