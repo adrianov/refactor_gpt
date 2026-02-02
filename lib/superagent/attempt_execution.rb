@@ -35,7 +35,6 @@ module AttemptExecution
   end
 
   def handle_switch_to_auto_only(req)
-    @display.puts "Usage limit reached; switching to auto-only model queue.".yellow
     execute_attempts(0, req)
     true
   end
@@ -87,6 +86,8 @@ module AttemptExecution
     if @agent_executor.usage_unrecoverable?(output)
       AutoOnlyLock.create
       @auto_only = true
+      msg = last_line_from(output)
+      @display.puts msg.yellow if msg
     end
     @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
     @display.display_agent_failure(output, reason)
@@ -191,7 +192,15 @@ module AttemptExecution
 
     AutoOnlyLock.create
     @auto_only = true
+    msg = last_line_from(usage_output)
+    @display.puts msg.yellow if msg
   end
+
+  def last_line_from(text)
+    lines = text.to_s.lines.map(&:strip).reject(&:empty?)
+    lines.last
+  end
+  private :last_line_from
 
   # Allow one automated fix with the same model (MAX_AUTOMATED_FIXES) before moving to next model.
   def retry_verification_with_fix(model, req, pass_timing)
