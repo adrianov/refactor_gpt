@@ -65,6 +65,11 @@ class TestToolOutcome < Minitest::Test
     refute ToolOutcome.result_has_error_key?('{"output": "ok"}')
   end
 
+  def test_result_has_error_key_json_string_error_null_or_false_not_error
+    refute ToolOutcome.result_has_error_key?('{"error": null}')
+    refute ToolOutcome.result_has_error_key?('{"error": false}')
+  end
+
   def test_invocation_key_nil_for_non_hash
     assert_nil ToolOutcome.invocation_key(nil)
     assert_nil ToolOutcome.invocation_key(1)
