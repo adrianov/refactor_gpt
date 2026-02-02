@@ -23,6 +23,7 @@ Reline::LineEditor.prepend(RelineNilSafeBuffer)
 # Reline path used when running the agent (history, editing); chunked stdin when queue-only (large paste safe).
 class RequestReader
   REQUEST_PROMPT = 'Enter request (press Enter twice to submit):'
+  SHELL_CMD_PREFIX = '! '
   DISCARD_CMD = '/discard'
   RESET_CMD = '/reset'
   PASTE_THRESHOLD = 0.2
@@ -65,7 +66,18 @@ class RequestReader
   # skip_prompt: when true, caller has already shown the prompt (e.g. when output is paused and buffered).
   def read_request(use_reline: true, skip_prompt: false)
     print_request_prompt unless skip_prompt
-    read_interactive_silent(use_reline: use_reline)
+    read_until_non_shell(use_reline: use_reline, for_queue: false)
+  end
+
+  # Reads until the user enters a non-shell request. Used when caller has already shown the prompt (e.g. queue).
+  def read_until_non_shell(use_reline: true, for_queue: false)
+    loop do
+      raw = read_interactive_silent(use_reline: use_reline, for_queue: for_queue)
+      return raw unless shell_command?(raw)
+
+      run_shell_cmd(raw)
+      print_request_prompt
+    end
   end
 
   def print_request_prompt
@@ -298,7 +310,12 @@ class RequestReader
       piped = read_from_stdin
       return piped if piped && !piped.to_s.strip.empty?
     end
-    read_from_argv || read_interactive(use_reline: use_reline)
+    result = read_from_argv || read_interactive(use_reline: use_reline)
+    if shell_command?(result)
+      run_shell_cmd(result)
+      return read_interactive(use_reline: use_reline)
+    end
+    result
   end
 
   def self.discard_command?(str)
@@ -316,6 +333,15 @@ class RequestReader
   end
 
   private
+
+  def shell_command?(raw)
+    raw.to_s.strip.start_with?(SHELL_CMD_PREFIX)
+  end
+
+  def run_shell_cmd(raw)
+    cmd = raw.to_s.strip.delete_prefix(SHELL_CMD_PREFIX)
+    system(cmd) unless cmd.empty?
+  end
 
   # Returns normalized, non-empty entries in file order (oldest first).
   def read_history_entries_from_file

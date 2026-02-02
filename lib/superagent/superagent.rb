@@ -195,7 +195,7 @@ class Superagent
     $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
     $stdout.flush
 
-    raw = @request_reader.read_interactive_silent(for_queue: true)
+    raw = @request_reader.read_until_non_shell(use_reline: true, for_queue: true)
     process_queue_input(raw) if raw
   ensure
     @display.set_output_paused(false)
