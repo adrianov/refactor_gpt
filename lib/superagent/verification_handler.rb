@@ -62,11 +62,12 @@ class VerificationHandler
     intro + "Prioritize refactoring these files (e.g. split or simplify) while preserving behavior.\n"
   end
 
+  # Returns [verified, desc] or [false, res, :incomplete] when response has no YES/NO verdict.
   def parse_res(res)
     return [false, res] if res.nil? || res.to_s.strip.empty?
 
     line_info = extract_final_verdict_line(res)
-    return [false, res] unless line_info
+    return [false, res, :incomplete] unless line_info
 
     line_info[:verdict] == :no ? parse_no_res(line_info[:text]) : parse_yes_res(line_info[:text])
   end
@@ -182,21 +183,31 @@ class VerificationHandler
       set_verification_failure(output, reason)
       return
     end
-    set_verification_success(parse_res(verification_response_for_parsing(output)))
+    parsed = parse_res(verification_response_for_parsing(output))
+    if parsed[2] == :incomplete
+      set_verification_failure(output, :no_verdict)
+    else
+      set_verification_success(parsed)
+    end
   end
 
   def set_verification_failure(output, reason)
     normalized = verification_response_for_parsing(output)
     @verified = false
-    blank = normalized.nil? || normalized.to_s.strip.empty?
-    system_init_only = RunFailureClassifier.stream_json_init?(normalized)
-    treat_as_no_data = blank || system_init_only
-    @desc = treat_as_no_data ? 'Verification call failed (no response)' : normalized.lines.first.to_s.strip
+    incomplete = incomplete_verification_output?(normalized, reason)
+    @desc = incomplete ? 'Verification call failed (no response)' : normalized.lines.first.to_s.strip
     @call_failed = true
-    @retryable = (reason == :recoverable) || system_init_only
+    @retryable = (reason == :recoverable) || incomplete
     @raw_output = output.to_s
     @fix_output = nil
     @refactor_output = nil
+  end
+
+  def incomplete_verification_output?(normalized, reason)
+    return true if normalized.nil? || normalized.to_s.strip.empty?
+    return true if reason == :no_verdict
+
+    RunFailureClassifier.stream_json_init?(normalized)
   end
 
   def set_verification_success(parsed)
@@ -287,6 +298,7 @@ class VerificationHandler
     s.valid_encoding? ? s : s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
   end
 
-  private :verification_response_for_parsing, :line_based_verdict, :whole_text_verdict, :to_utf8
+  private :verification_response_for_parsing, :line_based_verdict, :whole_text_verdict, :to_utf8,
+          :incomplete_verification_output?
 
 end
