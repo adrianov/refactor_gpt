@@ -29,14 +29,24 @@ class AgentPromptBuilder
       current_request: current_request, session_description: session_desc
     )
     summary = summary_section(session_description: session_desc)
-    user_content + (history.to_s + summary.to_s + rest)
+    prompt_parts_ordered(history, summary, user_content, rest, session_desc)
+  end
+
+  # Continuation: already-addressed list first, then current (new) request last; otherwise user content first.
+  def prompt_parts_ordered(history, summary, user_content, rest, session_desc)
+    blocks = [history.to_s, summary.to_s]
+    if session_desc && history.to_s.strip != ''
+      blocks.join + user_content + rest
+    else
+      user_content + blocks.join + rest
+    end
   end
 
   # Single place to build the user request block sent to the agent. Prepends CONTINUATION/TAGS/DESCRIPTION when present.
   def format_user_request_content(request_text, continuation_analysis)
     return request_text.to_s if continuation_analysis.nil? || continuation_analysis.empty?
 
-    continuation_request_header(continuation_analysis) + request_text.to_s
+    continuation_request_header(continuation_analysis) + "Current request (not yet addressed):\n" + request_text.to_s
   end
 
   def user_context_section
@@ -92,13 +102,12 @@ class AgentPromptBuilder
     "\n\nFinal summary from previous agent run:\n#{summary}"
   end
 
-  # Builds "Previous requests" prompt block: last N entries, direct order (oldest to newest).
-  # Header and body are separate so body format (e.g. one line per request vs compact 2 lines) can change in one place.
+  # Builds "Already addressed" (continuation) or "Previous requests" prompt block: last N entries, oldest to newest.
   def history_section(current_request: nil, session_description: nil)
     recent, start_num, width = recent_request_history_slice(current_request, session_description)
     return nil if recent.nil? || recent.empty?
 
-    previous_requests_header(recent.size) + format_previous_requests_body(recent, start_num, width)
+    history_header(recent.size, session_description) + format_previous_requests_body(recent, start_num, width)
   end
 
   def non_interactive_notice
@@ -183,8 +192,12 @@ class AgentPromptBuilder
     File.exist?(path) ? File.read(path).strip : ''
   end
 
-  def previous_requests_header(count)
-    "\n\nPrevious requests in this project (oldest to newest, last #{count}):\n"
+  def history_header(count, session_description)
+    if session_description && !session_description.to_s.strip.empty?
+      "\n\nAlready addressed in this session (oldest to newest, last #{count}):\n"
+    else
+      "\n\nPrevious requests in this project (oldest to newest, last #{count}):\n"
+    end
   end
 
   # Renders the list of recent requests for the prompt in at most 2 lines (first half | second half).

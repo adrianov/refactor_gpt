@@ -548,23 +548,22 @@ class SessionTracker
 
   # Builds continuation-analysis prompt. When the newest session has last_agent_summary (recap/summary/result),
   # includes it so continuation and tag decisions build on that outcome.
+  # Sessions show "Already addressed in this session" so the decider sees what was run vs the request to classify.
   def build_continuation_analysis_prompt(new_req, sessions_newest_first)
-    session_lines = sessions_newest_first.each_with_index.map do |s, i|
-      desc = (s[:description] || s[:request].to_s[0..80]).to_s.strip
-      "#{i + 1}. #{desc}"
-    end.join("\n")
+    session_lines = continuation_session_lines(sessions_newest_first)
     last_run_block = last_run_result_block(sessions_newest_first.first)
     <<~HEREDOC
       Existing sessions (newest first, by numerical ID):
       #{session_lines}
       #{last_run_block}
 
-      New request:
+      Request to classify (not yet addressed):
       #{new_req}
 
       Tasks:
-      1. CONTINUATION: Answer CONTINUATION: <number> if the new request concerns the same feature or task
-         (e.g. extending it or fixing a defect). Answer CONTINUATION: NEW if a different feature or new session.
+      1. CONTINUATION: Answer CONTINUATION: <number> only when the request clearly concerns the same feature or task
+         as that session (e.g. extending it or fixing a defect in that feature). Answer CONTINUATION: NEW if the
+         request is about a different topic, another feature, or unrelated behavior (e.g. UI messages, config, logs).
       2. TAGS: From the list below, pick tags that apply. Use #bug, #regression, or #hotfix only when it fixes a defect.
          Use other tags for extending the same feature or when starting something new.
          #{TAGS_LIST.gsub("\n", "\n         ")}
@@ -581,7 +580,30 @@ class SessionTracker
       - "also add 'forgot password'" → CONTINUATION: 1, TAGS: #feature
       - "add a user dashboard" → CONTINUATION: NEW, TAGS: #feature
       - "the validation we added is wrong, fix it" → CONTINUATION: 1, TAGS: #bug
+      - "when usage limit reached always show the message" (different topic) → CONTINUATION: NEW, TAGS: #improvement
     HEREDOC
+  end
+
+  def continuation_session_lines(sessions_newest_first)
+    sessions_newest_first.each_with_index.map do |s, i|
+      desc = (s[:description] || s[:request].to_s[0..80]).to_s.strip
+      addressed = already_addressed_preview(s, max_entries: 5, max_len: 80)
+      line = "#{i + 1}. #{desc}"
+      line += "\n   Already addressed in this session: #{addressed}" if addressed && !addressed.empty?
+      line
+    end.join("\n")
+  end
+
+  def already_addressed_preview(session, max_entries: 5, max_len: 80)
+    list = previous_request_history_list(session)
+    return nil if list.nil? || list.empty?
+
+    parts = list.last(max_entries).map do |req|
+      text = (req[:text] || '').to_s.strip
+      short = text.length > max_len ? "#{text[0...(max_len - 3)]}..." : text
+      "(#{req[:type]}) #{short}"
+    end
+    parts.join('; ')
   end
 
   def last_run_result_block(newest_session)
