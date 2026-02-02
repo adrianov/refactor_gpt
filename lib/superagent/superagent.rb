@@ -15,7 +15,7 @@ class Superagent
     sonnet-4.5-thinking
     opus-4.5-thinking
   ].freeze
-  MODELS_AUTO_ONLY = Array.new(3, MODELS.first).freeze
+  MODELS_AUTO_ONLY = Array.new(5, MODELS.first).freeze
   STEPS_PER_MODEL = 2 # Requests 1-2 use model 1, 3-4 use model 2, etc.
 
   def initialize(

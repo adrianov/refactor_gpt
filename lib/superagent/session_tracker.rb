@@ -504,25 +504,31 @@ class SessionTracker
     HEREDOC
   end
 
-  # Builds continuation-analysis prompt. Args: new_req (request text), sessions_newest_first (list, 1-based ID).
+  # Builds continuation-analysis prompt. When the newest session has last_agent_summary (recap/summary/result),
+  # includes it so continuation and tag decisions build on that outcome.
   def build_continuation_analysis_prompt(new_req, sessions_newest_first)
     session_lines = sessions_newest_first.each_with_index.map do |s, i|
       desc = (s[:description] || s[:request].to_s[0..80]).to_s.strip
       "#{i + 1}. #{desc}"
     end.join("\n")
+    last_run_block = last_run_result_block(sessions_newest_first.first)
     <<~HEREDOC
       Existing sessions (newest first, by numerical ID):
       #{session_lines}
+      #{last_run_block}
 
       New request:
       #{new_req}
 
       Tasks:
-      1. CONTINUATION: Answer with a session ID (e.g. CONTINUATION: 1) to continue that session if the new request concerns the **same** feature or task (e.g. extending it or fixing a defect in it). Answer CONTINUATION: NEW if the new request is a different feature, unrelated work, or explicitly starts a new session.
-      2. TAGS: From the list below, pick tags that apply. Use #bug, #regression, or #hotfix only when the new request fixes a defect. Use other tags when extending the same feature or when starting something new.
+      1. CONTINUATION: Answer CONTINUATION: <number> if the new request concerns the same feature or task
+         (e.g. extending it or fixing a defect). Answer CONTINUATION: NEW if a different feature or new session.
+      2. TAGS: From the list below, pick tags that apply. Use #bug, #regression, or #hotfix only when it fixes a defect.
+         Use other tags for extending the same feature or when starting something new.
          #{TAGS_LIST.gsub("\n", "\n         ")}
 
-      Documentation: When the requests refer to an external product, API, or documented feature, use web fetch to consult the official documentation for that topic so you can classify continuation and tags accurately.
+      When recap, summary, or result from the last run is shown above, use it so continuation and tag decisions build on that outcome.
+      For external products or APIs, use web fetch to consult official docs to classify accurately.
 
       Response format (required):
       CONTINUATION: <number> or NEW
@@ -534,6 +540,13 @@ class SessionTracker
       - "add a user dashboard" → CONTINUATION: NEW, TAGS: #feature
       - "the validation we added is wrong, fix it" → CONTINUATION: 1, TAGS: #bug
     HEREDOC
+  end
+
+  def last_run_result_block(newest_session)
+    summary = newest_session&.dig(:last_agent_summary)
+    return "" if summary.nil? || summary.to_s.strip.empty?
+
+    "\nLast run (recap / summary / result):\n#{summary.to_s.strip}\n"
   end
 
   def append_description_task(base_prompt, step_number, format_lines)
