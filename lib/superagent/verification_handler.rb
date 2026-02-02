@@ -124,14 +124,18 @@ class VerificationHandler
       Task:
       Verify that the code changes fully implement the user's request without introducing bugs or regressions.
 
+      Multiple requests in one run:
+      The implementation may have addressed multiple requests in a single run. When "Other requests that may have been in scope" are listed, treat changes that clearly fulfill those requests as requested. Only respond NO when the diff introduces changes that are not requested by the current request nor by any of the other listed requests. Do not treat changes that fulfill other listed requests as unrequested.
+
       Available information:
       - Current user request
+      - Other requests that may have been in scope for this implementation (if listed)
       - Final summary/response from the previous agent run that attempted to implement the feature
 
       Verification approach:
       - Review the previous agent's response to understand what was implemented
       - #{AgentPromptBuilder::VERIFICATION_FILES_PHRASE}
-      - Check if the changes address the user's request
+      - Check if the changes address the current user request (and, when listed, other in-scope requests)
       - Look for potential bugs, regressions, or missing functionality
       - Verify code quality and adherence to project guidelines
       - You MUST respond NO when the edited code has obvious quality issues (e.g. violates DRY, SOLID, or YAGNI)
@@ -150,15 +154,30 @@ class VerificationHandler
   end
 
   # previous_agent_response: NDJSON type=result content when present (current_recap_text), else full output.
-  def build_verification_user_content(user_request, previous_agent_response)
+  # additional_requests: optional array of { type:, text: } (other requests in scope for this implementation).
+  def build_verification_user_content(user_request, previous_agent_response, additional_requests: nil)
     req_utf8 = to_utf8(user_request)
     prev_embedded = agent_response_for_verification_content(previous_agent_response)
     content_parts = []
     content_parts << "Current user request: #{req_utf8}\n\n"
+    other_section = format_other_requests_section(additional_requests)
+    content_parts << "#{other_section}\n\n" if other_section && !other_section.empty?
     if prev_embedded && !prev_embedded.empty?
       content_parts << "Final response from previous agent run:\n#{prev_embedded}\n"
     end
     content_parts.map { |p| to_utf8(p) }.join("\n")
+  end
+
+  def format_other_requests_section(additional_requests)
+    return nil if additional_requests.nil? || additional_requests.empty?
+
+    lines = additional_requests.each_with_index.map do |req, i|
+      text = RequestHistoryFormatter.truncated_first_line(req[:text]) || req[:text].to_s.strip
+      type = req[:type] || 'implementation'
+      "  #{i + 1}. (#{type}) #{text}"
+    end
+    header = 'Other requests that may have been in scope for this implementation (same as in implementation prompt):'
+    "#{header}\n#{lines.join("\n")}"
   end
 
   # Single normalization point for previous agent response in verification. Preserves newlines (no strip).
@@ -166,15 +185,17 @@ class VerificationHandler
     to_utf8(previous_agent_response).to_s
   end
 
-  def build_verification_prompt(req, previous_agent_response = nil)
-    user_content = build_verification_user_content(req, previous_agent_response)
+  def build_verification_prompt(req, previous_agent_response = nil, additional_requests: nil)
+    user_content = build_verification_user_content(req, previous_agent_response, 
+additional_requests: additional_requests)
     notice = @agent_executor.non_interactive_notice
     guidelines = @agent_executor.guidelines_section(always_include: true)
     "#{build_verification_system_instruction}\n\n---\n\n#{user_content}\n\n---\n\n#{notice}\n\n#{guidelines}"
   end
 
-  def run_verification(model, req, previous_agent_response = nil)
-    verification_prompt = build_verification_prompt(req, previous_agent_response)
+  def run_verification(model, req, previous_agent_response = nil, additional_requests: nil)
+    verification_prompt = build_verification_prompt(req, previous_agent_response, 
+additional_requests: additional_requests)
     start_time = Time.now
     success, output, reason = @agent_executor.run(model, verification_prompt, verification_mode: true,
                                                   current_request: req)
@@ -232,7 +253,7 @@ class VerificationHandler
     @refactor_output = nil
   end
 
-  def retry_with_fix(model, req)
+  def retry_with_fix(model, req, additional_requests: nil)
     fix_prompt = build_fix_prompt(req)
     @display.puts "Retrying #{model} with fix...".blue
     $stdout.puts ''
@@ -247,7 +268,7 @@ class VerificationHandler
       return
     end
 
-    run_verification(model, req, fix_out)
+    run_verification(model, req, fix_out, additional_requests: additional_requests)
     @fix_output = fix_out
     @refactor_output = nil
   end
@@ -299,6 +320,6 @@ class VerificationHandler
   end
 
   private :verification_response_for_parsing, :line_based_verdict, :whole_text_verdict, :to_utf8,
-          :incomplete_verification_output?
+          :incomplete_verification_output?, :format_other_requests_section
 
 end

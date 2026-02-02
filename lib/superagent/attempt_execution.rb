@@ -135,10 +135,16 @@ module AttemptExecution
     retry_verification_with_fix(model, req, pass_timing)
   end
 
+  def recent_requests_for_verification(req)
+    list = @session_tracker.get_session_request_history(exclude_equal: req, description: @session_description)
+    list&.last(AgentPromptBuilder::MAX_PREVIOUS_REQUESTS) || []
+  end
+
   def run_verification_with_retries(model, req)
+    additional = recent_requests_for_verification(req)
     exhausted = true
     (VERIFICATION_CALL_RETRIES + 1).times do |attempt|
-      @verification_handler.run_verification(model, req, @current_agent_output)
+      @verification_handler.run_verification(model, req, @current_agent_output, additional_requests: additional)
       h = @verification_handler
       unless h.call_failed && h.retryable
         exhausted = false
@@ -192,7 +198,7 @@ module AttemptExecution
     @session_tracker.append_to_request_history("Fix after verification failure", type: "fix")
     update_terminal_title("Retrying: #{model}")
     fix_start = Time.now
-    @verification_handler.retry_with_fix(model, req)
+    @verification_handler.retry_with_fix(model, req, additional_requests: recent_requests_for_verification(req))
     retry_verification_after_fix(pass_timing, fix_start, req)
   end
 
