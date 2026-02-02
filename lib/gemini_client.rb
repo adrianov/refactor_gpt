@@ -360,6 +360,7 @@ class GeminiClient
       chunk.dig("candidates", 0, "content", "parts", 0, "text")
     end.compact.join
 
+    usage = last_chunk.is_a?(Hash) ? last_chunk["usageMetadata"] : nil
     combined_body = {
       "candidates" => [
         {
@@ -370,7 +371,7 @@ class GeminiClient
           "finishReason" => last_chunk.dig("candidates", 0, "finishReason")
         }
       ],
-      "usageMetadata" => last_chunk["usageMetadata"]
+      "usageMetadata" => usage.is_a?(Hash) ? usage : nil
     }
 
     MockResponse.new(200, Oj.dump(combined_body, mode: :compat))

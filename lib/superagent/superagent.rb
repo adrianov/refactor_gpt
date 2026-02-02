@@ -524,6 +524,7 @@ class Superagent
     end
     CompletionNotifier.notify_completion(success: false) if no_queued
     update_terminal_title(false)
+    # Exit when all models have failed (session was already reset above).
     exit 1
   end
 

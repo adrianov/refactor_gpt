@@ -171,7 +171,7 @@ class OpenAiClient
     msg = error_message.to_s
     msg.include?("resource_exhausted") || msg.match?(/connection\s+stalled/i) ||
       msg.include?("CANCEL") || msg.include?("canceled") ||
-      msg.include?("stream closed") || msg.include?("0x8") ||
+      msg.include?("stream closed") || msg.include?("closed with error") || msg.include?("0x8") ||
       msg.include?("SSL_read: unexpected eof while reading")
   end
 
@@ -313,6 +313,14 @@ class OpenAiClient
   end
 
   def handle_error_response_without_status(response)
+    if response.class.name == "HTTPX::ErrorResponse"
+      err_msg = (response.error.to_s if response.respond_to?(:error) && response.error)
+      err_msg ||= response.message.to_s if response.respond_to?(:message)
+      if err_msg.to_s != "" && is_network_resource_error?(err_msg)
+        raise NetworkResourceError.new("Network/resource error: #{err_msg}")
+      end
+    end
+
     error_status = extract_error_response_status(response)
 
     if error_status == 429
