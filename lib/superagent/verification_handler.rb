@@ -189,9 +189,11 @@ class VerificationHandler
     normalized = verification_response_for_parsing(output)
     @verified = false
     blank = normalized.nil? || normalized.to_s.strip.empty?
-    @desc = blank ? 'Verification call failed (no response)' : normalized.lines.first.to_s.strip
+    system_init_only = RunFailureClassifier.stream_json_init?(normalized)
+    treat_as_no_data = blank || system_init_only
+    @desc = treat_as_no_data ? 'Verification call failed (no response)' : normalized.lines.first.to_s.strip
     @call_failed = true
-    @retryable = reason == :recoverable
+    @retryable = (reason == :recoverable) || system_init_only
     @raw_output = output.to_s
     @fix_output = nil
     @refactor_output = nil
