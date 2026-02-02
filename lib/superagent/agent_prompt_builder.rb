@@ -83,6 +83,13 @@ class AgentPromptBuilder
     format_truncated_section('Working tree (bfs --nohidden)', `bfs --nohidden 2>#{File::NULL}`.strip)
   end
 
+  def modified_files_section
+    list = @session_tracker&.get_modified_files || []
+    return nil if list.empty?
+
+    "\n\nModified code files in this session (max #{ModifiedFilesTracker::MAX_ENTRIES}):\n#{list.join("\n")}"
+  end
+
   def guidelines_section(always_include: false, fix_stage: false)
     raw = fix_stage ? read_agents_files_with_dev.to_s.strip : read_agents_files.to_s.strip
     default = default_refactor_instructions.to_s.strip
@@ -123,15 +130,19 @@ class AgentPromptBuilder
       parts << non_interactive_notice
       parts << guidelines_section(always_include: true, fix_stage: false)
     end
-    if fix_stage
-      parts << guidelines_section(always_include: true, fix_stage: true)
-    end
+    parts << guidelines_section(always_include: true, fix_stage: true) if fix_stage
     parts << user_context_section
-    parts << git_status_section(new_session)
-    parts << git_log_section(new_session)
-    parts << git_diff_section(new_session)
-    parts << working_tree_section(new_session)
-    parts
+    parts.concat(optional_context_sections(new_session))
+  end
+
+  def optional_context_sections(new_session)
+    [
+      git_status_section(new_session),
+      git_log_section(new_session),
+      git_diff_section(new_session),
+      working_tree_section(new_session),
+      modified_files_section
+    ].compact
   end
 
   private

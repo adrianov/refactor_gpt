@@ -149,6 +149,8 @@ class Superagent
     end
     @agent_thread = Thread.new do
       execute_attempts(start_index, req)
+      paths = ModifiedFilesTracker.collect_from_repo(Dir.pwd)
+      @session_tracker.add_modified_files(paths) if paths.any?
       @agent_result_mutex.synchronize { @agent_result = @last_attempt_success ? :success : :failure }
     end
 

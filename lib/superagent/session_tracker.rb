@@ -46,7 +46,19 @@ class SessionTracker
       read_index: -> { read_description_letter_index },
       persist_index: method(:persist_description_letter_index)
     )
+    @modified_files = []
     ensure_session_dir
+  end
+
+  # In-memory list of modified code files this run (not persisted). Max ModifiedFilesTracker::MAX_ENTRIES.
+  def add_modified_files(paths)
+    return if paths.nil? || paths.empty?
+
+    @modified_files = (@modified_files + paths).uniq.last(ModifiedFilesTracker::MAX_ENTRIES)
+  end
+
+  def get_modified_files
+    @modified_files || []
   end
 
   def load_previous_session
