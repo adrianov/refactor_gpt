@@ -273,10 +273,11 @@ class Display
       out_puts ''
     end
 
-    # stats: :start_time, :active_elapsed, :waiting_elapsed; optional keys in OPTIONAL_RUNTIME_STAT_LINES.
+    # stats: :start_time, :active_elapsed, :waiting_elapsed, :files_changed; optional in OPTIONAL_RUNTIME_STAT_LINES.
     def display_total_runtime(stats)
       return unless stats && stats[:start_time]
 
+      puts "Files changed: #{stats[:files_changed] || 0}".cyan
       active = stats[:active_elapsed]
       active = Time.now - stats[:start_time] if active.nil?
       puts "Run time: #{format_duration(active)}".cyan

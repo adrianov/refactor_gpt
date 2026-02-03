@@ -302,6 +302,7 @@ class Superagent
       start_time: @start_time,
       active_elapsed: @active_elapsed,
       waiting_elapsed: @waiting_elapsed,
+      files_changed: ModifiedFilesTracker.collect_from_repo(Dir.pwd).size,
       model: @current_model,
       current_dir: Dir.pwd
     }
