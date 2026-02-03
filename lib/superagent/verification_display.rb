@@ -39,7 +39,7 @@ class VerificationDisplay
 
     @display.out_puts ''
     @display.puts 'Result:'.cyan
-    text.each_line { |line| @display.out_puts @display.body("  #{line}") }
+    text.each_line { |line| @display.out_puts @display.body("  #{line.chomp}") }
     @display.out_puts ''
     $stdout.flush unless @display.output_paused
   end
