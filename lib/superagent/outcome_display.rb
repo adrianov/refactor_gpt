@@ -7,15 +7,20 @@ class OutcomeDisplay
     @display = display
   end
 
-  def display_done_requests_recap(outcomes, queued: nil)
+  def display_done_requests_recap(outcomes, queued: nil, files_count: nil)
     outcomes = outcomes || []
-    return if outcomes.empty? && (queued.nil? || queued.empty?)
+    return if outcomes.empty? && (queued.nil? || queued.empty?) && files_count.nil?
 
     outcome_sections(outcomes, queued).each { |s| print_outcome_section(s[:label], s[:color], s[:items]) }
+    print_files_changed(files_count) unless files_count.nil?
     @display.out_puts ''
   end
 
   private
+
+  def print_files_changed(count)
+    @display.puts "Files changed (#{count}):".cyan
+  end
 
   def outcome_sections(outcomes, queued)
     completed = outcomes.select { |o| o[:success] }.map { |o| o[:request] }

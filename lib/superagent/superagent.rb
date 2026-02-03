@@ -150,6 +150,7 @@ class Superagent
     end
     @agent_thread = Thread.new do
       execute_attempts(start_index, req)
+      # Collect once after full run (implementation + optional fix); do not reset before fix.
       paths = ModifiedFilesTracker.collect_from_repo(Dir.pwd)
       @session_tracker.add_modified_files(paths) if paths.any?
       @agent_result_mutex.synchronize { @agent_result = @last_attempt_success ? :success : :failure }
@@ -238,7 +239,10 @@ class Superagent
   def display_done_requests_recap_if_any
     return unless @session_outcomes.any? || @pending_queue.size.positive?
 
-    @display.display_done_requests_recap(@session_outcomes, queued: @pending_queue.snapshot)
+    files_count = @session_tracker.get_modified_files.size
+    @display.display_done_requests_recap(
+      @session_outcomes, queued: @pending_queue.snapshot, files_count: files_count
+    )
   end
 
   def models
@@ -297,12 +301,13 @@ class Superagent
   end
 
   # Hash for display_total_runtime. Add optional keys here and in Display::OPTIONAL_RUNTIME_STAT_LINES.
+  # code_files_edited: same list as refactor trigger (files changed in this run), from AttemptExecution.
   def runtime_stats_for_display
     {
       start_time: @start_time,
       active_elapsed: @active_elapsed,
       waiting_elapsed: @waiting_elapsed,
-      files_changed: ModifiedFilesTracker.collect_from_repo(Dir.pwd).size,
+      code_files_edited: @code_files_edited_in_run,
       model: @current_model,
       current_dir: Dir.pwd
     }
@@ -314,7 +319,6 @@ class Superagent
   end
 
   def handle_success(desc, context = "")
-    @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_passes_recap(@pass_timings)
@@ -506,7 +510,6 @@ class Superagent
   def handle_plan_success
     finalize_runtime_before_display
     @display.display_total_runtime(runtime_stats_for_display)
-    @display.display_git_status
     CompletionNotifier.notify_completion(success: true)
     update_terminal_title(true)
     exit 0
@@ -515,7 +518,6 @@ class Superagent
   def handle_final_failure
     @session_outcomes << {request: @current_request, success: false} if @current_request
     no_queued = @pending_queue.size == 0
-    @display.display_git_status
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_all_attempts_failed(@current_request)

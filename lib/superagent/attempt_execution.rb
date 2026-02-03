@@ -40,6 +40,7 @@ module AttemptExecution
   end
 
   def run_model_attempt(model, idx, req)
+    @code_files_edited_in_run = nil
     mtimes_before = RefactorNeededCheck.mtimes_snapshot(Dir.pwd)
     success, output, elapsed, reason = run_implementation(model, idx, req)
     return run_model_attempt_on_failure(model, output, elapsed, reason) unless success
@@ -50,8 +51,10 @@ module AttemptExecution
     result
   end
 
+  # Same list as refactor trigger (changed in this run). Display uses it for "Code files edited" and counter.
   def run_refactor_step_if_triggered(model, req, mtimes_before = nil)
     changed = RefactorNeededCheck.changed_files_since(Dir.pwd, mtimes_before)
+    @code_files_edited_in_run = changed
     triggering = RefactorNeededCheck.files_triggering_refactor(changed)
     shotgun_count = RefactorNeededCheck.shotgun_triggered?(changed) ? changed.size : nil
     return unless triggering.any? || shotgun_count

@@ -198,17 +198,6 @@ class Display
       @last_thinking_indicator_time = nil
     end
 
-    def display_git_status
-      return unless git_repo?
-
-      status = `git status --short 2>&1`.strip
-      return if status.empty?
-
-      puts 'Git status:'.cyan
-      status.each_line { |line| out_puts body("  #{line.chomp}") }
-      out_puts ''
-    end
-
     def display_session_description(description)
       return unless description && !description.to_s.strip.empty?
 
@@ -217,14 +206,13 @@ class Display
       out_puts ''
     end
 
-    # Shows session start: "Superagent:", session type (continuation/new + tags), full request text, then git status.
+    # Shows session start: "Superagent:", session type (continuation/new + tags), full request text.
     # Request is output raw (no timestamp per line) so lines are not squished.
     def display_start_message(req, continuation = false, tags = [])
       puts "\nSuperagent:".cyan
       @queue_display.display_session_type(continuation, tags)
       output_raw(req.to_s, color: :yellow)
       out_puts ''
-      display_git_status
     end
 
     def display_pending_hint
@@ -251,8 +239,8 @@ class Display
       @queue_display.pending_request_preview(text)
     end
 
-    def display_done_requests_recap(outcomes, queued: nil)
-      @outcome_display.display_done_requests_recap(outcomes, queued: queued)
+    def display_done_requests_recap(outcomes, queued: nil, files_count: nil)
+      @outcome_display.display_done_requests_recap(outcomes, queued: queued, files_count: files_count)
     end
 
     def display_attempt_header(model, idx, total)
@@ -273,15 +261,22 @@ class Display
       out_puts ''
     end
 
-    # stats: :start_time, :active_elapsed, :waiting_elapsed, :files_changed; optional in OPTIONAL_RUNTIME_STAT_LINES.
+    # Runtime stats; optional keys in OPTIONAL_RUNTIME_STAT_LINES.
     def display_total_runtime(stats)
       return unless stats && stats[:start_time]
 
-      puts "Files changed: #{stats[:files_changed] || 0}".cyan
-      active = stats[:active_elapsed]
-      active = Time.now - stats[:start_time] if active.nil?
+      print_code_files_edited(stats[:code_files_edited])
+      active = stats[:active_elapsed] || (Time.now - stats[:start_time])
       puts "Run time: #{format_duration(active)}".cyan
       print_optional_runtime_stats(stats)
+    end
+
+    # entries: nil, [{ path:, lines: }, ...], or legacy [path, ...]. Must be same list as refactor trigger.
+    def print_code_files_edited(entries)
+      list = entries || []
+      paths = list.any? && list.first.is_a?(Hash) ? list.map { |e| e[:path] } : list
+      puts "Code files edited (#{paths.size}):".cyan
+      paths.each { |path| puts "  #{path}".cyan }
     end
 
     def print_optional_runtime_stats(stats)

@@ -25,6 +25,15 @@ module ModifiedFilesTracker
     (modified + untracked).uniq.select { |path| code_file?(path) }
   end
 
+  # Like collect_from_repo but excludes deleted files (only modified/added/untracked code files).
+  def collect_edited_from_repo(root)
+    return [] unless File.directory?(File.join(root, '.git'))
+
+    modified = `git -C #{Shellwords.escape(root)} diff --diff-filter=ACMR --name-only HEAD 2>#{File::NULL}`.strip.lines.map(&:strip)
+    untracked = `git -C #{Shellwords.escape(root)} ls-files --others --exclude-standard 2>#{File::NULL}`.strip.lines.map(&:strip)
+    (modified + untracked).uniq.select { |path| code_file?(path) }
+  end
+
   def code_file?(path)
     ext = File.extname(path).downcase
     CODE_EXTENSIONS.include?(ext)
