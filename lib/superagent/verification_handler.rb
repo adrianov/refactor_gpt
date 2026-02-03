@@ -6,9 +6,8 @@
 class VerificationHandler
   include AgentsFileHandler
 
-  # Refactor-stage prompt: intro line. Edit wording here when improving refactor-stage instruction.
-  REFACTOR_STEP_INTRO = 'Refactor the codebase so that implementing this request will be straightforward. ' \
-    'Do not implement the request yet.'
+  # Refactor-stage prompt: intro line. Refactor runs after implementation.
+  REFACTOR_STEP_INTRO = 'Refactor changed files: improve structure (e.g. split or simplify) while preserving behavior.'
   # Refactor-stage "You must:" bullets (guideline added in build_refactor_prompt). Edit wording for humans/LLMs.
   REFACTOR_STEP_REQUIREMENTS = [
     'Apply changes that make code easier to edit and understand for both humans and LLMs: ' \
@@ -17,23 +16,23 @@ class VerificationHandler
     'Preserve all existing behavior; do not add or change functionality.'
   ].freeze
 
-  # Shotgun Surgery refactor: triggered when one business rule change touches more than 6 files.
+  # Shotgun Surgery refactor: triggered when one business rule change touched more than 6 files (after implementation).
   SHOTGUN_REFACTOR_PROMPT = <<~HEREDOC.freeze
     SYSTEM ROLE: ARCHITECTURAL REFACTORING AGENT
 
-    The current task has triggered a "Shotgun Surgery" alert. A single business rule change has required edits across %<file_count>s files. This indicates high coupling and poor encapsulation. The specific affected file names are listed in the "Affected files" section below.
+    The user request has already been implemented and has triggered a "Shotgun Surgery" alert: the implementation required edits across %<file_count>s files. This indicates high coupling and poor encapsulation. The specific affected file names are listed in the "Affected files" section below.
 
     YOUR OBJECTIVE:
-    Analyze the proposed changes and propose a structural refactor to centralize this logic before applying the functional change.
+    Refactor the already-implemented code to centralize the logic that was spread across these files, so that future changes to this rule would touch fewer files (ideally one).
 
     CONSTRAINTS:
-    1. Do not apply the business logic change yet.
+    1. Preserve all current behavior; do not add or remove functionality.
     2. Identify the "Gravity Center": Where should this logic naturally live (e.g., a new Service, a shared Base Class, or a Utility module)?
     3. Use the "Least Change" principle: Refactor only what is necessary to reduce the number of files affected by this specific rule.
 
     INSTRUCTIONS:
-    1. Analyze: Look at the commonalities in the code being added/edited across these %<file_count>s files.
-    2. Abstract: Create a single source of truth (e.g., a new method instead of repeating logic in many places).
+    1. Analyze: Look at the commonalities in the code that was added/edited across these %<file_count>s files.
+    2. Abstract: Create a single source of truth (e.g., a new method or module instead of repeating logic in many places).
     3. Execute: Step A: Create the new abstraction. Step B: Update the affected files to call this new abstraction. Step C: Confirm that future changes to this rule would now only require editing ONE file.
 
     OUTPUT:
@@ -69,7 +68,7 @@ class VerificationHandler
 
   def build_shotgun_refactor_prompt(req, file_count, file_paths)
     body = format(self.class::SHOTGUN_REFACTOR_PROMPT, file_count: file_count)
-    parts = ["User request (to be implemented in the next step): #{to_utf8(req)}\n\n", body]
+    parts = ["User request (already implemented): #{to_utf8(req)}\n\n", body]
     list = (file_paths && file_paths.any?) ? file_paths.map { |p| "  - #{p}" }.join("\n") : nil
     parts << "\nAffected files:\n#{list || '  (see implementation diff)'}"
     parts.join("\n")
@@ -81,7 +80,7 @@ class VerificationHandler
     bullets = "- #{a}\n- #{guideline}\n- #{b}"
     trigger_blurb = format_refactor_trigger_blurb(triggering_files)
     <<~HEREDOC
-      User request (to be implemented in the next step): #{to_utf8(req)}
+      User request (already implemented): #{to_utf8(req)}
 
       #{self.class::REFACTOR_STEP_INTRO}
       #{trigger_blurb}
