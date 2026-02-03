@@ -16,7 +16,7 @@ class VerificationHandler
     'Preserve all existing behavior; do not add or change functionality.'
   ].freeze
 
-  # Shotgun Surgery refactor: triggered when one business rule change touched more than 6 files (after implementation).
+  # Shotgun Surgery refactor: triggered when one business rule change touched 6 or more files (after implementation).
   SHOTGUN_REFACTOR_PROMPT = <<~HEREDOC.freeze
     SYSTEM ROLE: ARCHITECTURAL REFACTORING AGENT
 

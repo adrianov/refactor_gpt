@@ -4,10 +4,10 @@ require 'shellwords'
 require_relative 'modified_files_tracker'
 
 # Decides if a refactor step is needed from changed-file line counts or file count (no LLM).
-# Rules: refactor when any file exceeds LINE_THRESHOLDS, or when file count > SHOTGUN_FILE_COUNT_THRESHOLD.
+# Rules: refactor when any file exceeds LINE_THRESHOLDS, or when file count >= SHOTGUN_FILE_COUNT_THRESHOLD.
 # For triggers we use mtime snapshot (before/after run) so only files edited in the current run count.
 module RefactorNeededCheck
-  # Refactor when more than this many files changed for one business rule (shotgun surgery).
+  # Refactor when this many or more files changed for one business rule (shotgun surgery).
   SHOTGUN_FILE_COUNT_THRESHOLD = 6
 
   # Extension => line limit (refactor when file has >= this many lines).
@@ -35,7 +35,7 @@ module RefactorNeededCheck
     {}
   end
 
-  # Returns list of changed files with line counts for files modified in this run only (mtime > snapshot or new).
+  # Returns changed files (path + lines) for this run only: mtime > snapshot, new, or deleted.
   # mtimes_before: from mtimes_snapshot(root) before run. If nil, falls back to all git-changed (legacy).
   def changed_files_since(project_root, mtimes_before)
     root = project_root.to_s
@@ -43,7 +43,7 @@ module RefactorNeededCheck
     return names.filter_map { |rel_path| file_entry(root, rel_path) } if mtimes_before.nil? || mtimes_before.empty?
 
     names.filter_map do |rel_path|
-      file_entry(root, rel_path) if modified_in_run?(root, rel_path, mtimes_before)
+      entry_for_run(root, rel_path, mtimes_before)
     end
   rescue SystemCallError
     []
@@ -78,24 +78,27 @@ module RefactorNeededCheck
     git_changed_and_untracked_names(root).select { |p| ModifiedFilesTracker.code_file?(p) }
   end
 
-  def modified_in_run?(root, rel_path, mtimes_before)
+  def entry_for_run(root, rel_path, mtimes_before)
     full = File.join(root, rel_path)
-    return false unless File.file?(full)
+    return { path: rel_path, lines: 0 } if !File.file?(full) && mtimes_before.key?(rel_path) # deleted in run
+    return nil unless File.file?(full)
 
     prev = mtimes_before[rel_path]
-    prev.nil? || File.mtime(full) > prev
+    return nil unless prev.nil? || File.mtime(full) > prev
+
+    file_entry(root, rel_path)
   end
 
-  private :git_changed_and_untracked_names, :file_entry, :code_file_names_since, :modified_in_run?
+  private :git_changed_and_untracked_names, :file_entry, :code_file_names_since, :entry_for_run
 
-  # True when any changed file exceeds line threshold or when changed file count > SHOTGUN_FILE_COUNT_THRESHOLD.
+  # True when any changed file exceeds line threshold or when changed file count >= SHOTGUN_FILE_COUNT_THRESHOLD.
   def refactor_needed?(changed_files_list)
     files_triggering_refactor(changed_files_list).any? || shotgun_triggered?(changed_files_list)
   end
 
-  # True when more than SHOTGUN_FILE_COUNT_THRESHOLD files changed (shotgun surgery).
+  # True when SHOTGUN_FILE_COUNT_THRESHOLD or more files changed (shotgun surgery).
   def shotgun_triggered?(changed_files_list)
-    (changed_files_list || []).size > SHOTGUN_FILE_COUNT_THRESHOLD
+    (changed_files_list || []).size >= SHOTGUN_FILE_COUNT_THRESHOLD
   end
 
   # Returns entries that triggered refactor: [{ path:, lines:, limit: }, ...].
