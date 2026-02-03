@@ -223,6 +223,7 @@ module AttemptExecution
   end
 
   def retry_verification_success(pass_timing, h, req)
+    @applied_fix_this_run = true
     finalize_success(pass_timing, h.desc, req, "after retry")
     :success
   end

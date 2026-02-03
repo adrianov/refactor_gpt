@@ -5,8 +5,9 @@ require 'oj'
 require 'fileutils'
 
 # Tracks session state per project (directory). Many sessions; continuation uses latest.
-# Session: request, history, failure_count, step_count, failed_sessions_count. /reset clears failure_count.
-# All attempts failed: step_count→0, failed_sessions_count+1.
+# Session: request, history, failed_sessions_count, applied_fixes_count.
+# Model selection uses applied_fixes_count (verification + bug/regression/hotfix). /reset clears applied_fixes_count.
+# failed_sessions_count only when tags are #bug/#regression/#hotfix.
 # Classification: Before running a request, the LLM is asked whether it continues an existing session
 # or starts a new one. The UI title for this step is "Classifying to a session" when there are
 # existing sessions, or "Classifying request" when there are none. Same-session requests are grouped
@@ -16,6 +17,9 @@ class SessionTracker
   SESSION_DIR = ConfigPath::CONFIG_DIR
   MAX_SESSION_AGE = 86400 # 24 hours
   MAX_SESSIONS = 50
+
+  # Tags that count toward failed_sessions_count and applied_fixes_count when all attempts fail.
+  FAILURE_COUNT_TAGS = %w[#bug #regression #hotfix].freeze
 
   TAGS_LIST = (<<~TAGS
     - #bug: Fixing a defect or error in the code
@@ -107,15 +111,14 @@ class SessionTracker
     list[id - 1]
   end
 
-  # Returns sessions ordered by failure count (lowest first), useful for model selection.
+  # Returns sessions ordered by applied fixes count (lowest first), used for model selection.
   def sessions_by_failure_count
-    active_sessions.sort_by { |session| session[:failure_count] || 0 }
+    active_sessions.sort_by { |session| applied_fixes_for_session(session) }
   end
 
-  # Gets the failure count for a specific session, defaulting to 0 if not found.
-  def failure_count_for_session(session)
+  def applied_fixes_for_session(session)
     return 0 unless session
-    session[:failure_count] || 0
+    session[:applied_fixes_count] || 0
   end
 
   def load_sessions
@@ -132,9 +135,9 @@ class SessionTracker
   def reset_failure_count(description: nil)
     target = description.to_s.strip.empty? ? nil : find_session_by_description(description)
     if target
-      modify_session_by_id(session_id_for(target)) { |session| session[:failure_count] = 0 }
+      modify_session_by_id(session_id_for(target)) { |s| s[:applied_fixes_count] = 0 }
     else
-      modify_last_session { |session| session[:failure_count] = 0 }
+      modify_last_session { |s| s[:applied_fixes_count] = 0 }
     end
   end
 
@@ -181,15 +184,16 @@ class SessionTracker
   DEFAULT_REQUEST_TYPE = 'implementation'
 
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided,
-                   request_type: DEFAULT_REQUEST_TYPE, update_in_place: false, all_attempts_failed: false)
+                   request_type: DEFAULT_REQUEST_TYPE, update_in_place: false, all_attempts_failed: false,
+                   applied_fix_this_run: false)
     previous_session = session_for_continuation_analysis(description)
     ctx = session_save_context(previous_session, request, continuation, last_agent_summary, request_type,
-                              all_attempts_failed: all_attempts_failed)
+                              tags: tags, all_attempts_failed: all_attempts_failed,
+                              applied_fix_this_run: applied_fix_this_run)
     session_data = build_session_data(
       request: request, description: description, tags: tags, continuation: continuation,
       request_history: ctx[:request_history], last_agent_summary: ctx[:agent_summary],
-      failure_count: ctx[:failure_count], step_count: ctx[:step_count],
-      failed_sessions_count: ctx[:failed_sessions_count]
+      failed_sessions_count: ctx[:failed_sessions_count], applied_fixes_count: ctx[:applied_fixes_count]
     )
     list = session_list_for_save(load_sessions, session_data, continuation, update_in_place)
     write_sessions(list.last(MAX_SESSIONS))
@@ -227,7 +231,7 @@ class SessionTracker
   end
 
   def build_session_data(request:, description:, tags:, continuation:, request_history:, last_agent_summary:,
-                         failure_count: 0, step_count: 0, failed_sessions_count: 0)
+                         failed_sessions_count: 0, applied_fixes_count: 0)
     session_data = {
       request: request,
       description: description,
@@ -235,9 +239,8 @@ class SessionTracker
       continuation: continuation,
       request_history: request_history,
       last_agent_summary: last_agent_summary,
-      failure_count: failure_count,
-      step_count: step_count,
       failed_sessions_count: failed_sessions_count,
+      applied_fixes_count: applied_fixes_count,
       timestamp: Time.now.to_i,
       cwd: Dir.pwd,
       session_id: description_to_session_id(description)
@@ -272,9 +275,8 @@ class SessionTracker
     return {} unless session.is_a?(Hash)
 
     defaults = {}
-    defaults[:failure_count] = 0 unless session.key?(:failure_count)
-    defaults[:step_count] = 0 unless session.key?(:step_count)
     defaults[:failed_sessions_count] = 0 unless session.key?(:failed_sessions_count)
+    defaults[:applied_fixes_count] = applied_fixes_for_session(session) unless session.key?(:applied_fixes_count)
     defaults.empty? ? session : session.merge(defaults)
   end
 
@@ -296,9 +298,8 @@ class SessionTracker
   end
 
   def set_session_defaults(session)
-    session[:failure_count] ||= 0
-    session[:step_count] ||= 0
     session[:failed_sessions_count] ||= 0
+    session[:applied_fixes_count] = applied_fixes_for_session(session)
     session[:request_history] ||= []
     session[:tags] ||= []
     session[:continuation] ||= false
@@ -339,12 +340,11 @@ class SessionTracker
     determine_agent_summary(continuation, previous_session, last_agent_summary)
   end
 
-  def calculate_failure_count_context(continuation, previous_session)
-    continuation && previous_session ? (previous_session[:failure_count] || 0) : 0
-  end
+  def counts_as_failure?(tags)
+    return false if tags.nil? || !tags.is_a?(Array)
 
-  def calculate_step_count_context(continuation, previous_session)
-    continuation && previous_session ? (previous_session[:step_count] || 0) + 1 : 0
+    normalized = tags.map { |t| t.to_s.strip.downcase }
+    FAILURE_COUNT_TAGS.any? { |tag| normalized.include?(tag.downcase) }
   end
 
   def calculate_failed_sessions_count_context(previous_session, all_attempts_failed)
@@ -372,9 +372,8 @@ class SessionTracker
       request_history: new_history_entries,
       timestamp: Time.now.to_i,
       cwd: Dir.pwd,
-      failure_count: base_session[:failure_count] || 0,
-      step_count: base_session[:step_count] || 0,
-      failed_sessions_count: base_session[:failed_sessions_count] || 0
+      failed_sessions_count: base_session[:failed_sessions_count] || 0,
+      applied_fixes_count: applied_fixes_for_session(base_session)
     )
   end
 
@@ -407,19 +406,16 @@ class SessionTracker
   end
 
   def session_save_context(previous_session, request, continuation, last_agent_summary, request_type,
-                           all_attempts_failed: false)
-    prev_fail = previous_session&.dig(:failure_count) || 0
-    failure_count = all_attempts_failed ? prev_fail + 1 : calculate_failure_count_context(
-      continuation, previous_session
-    )
-    step_count = all_attempts_failed ? 0 : calculate_step_count_context(continuation, previous_session)
-    failed_sessions_count = calculate_failed_sessions_count_context(previous_session, all_attempts_failed)
+                           tags: [], all_attempts_failed: false, applied_fix_this_run: false)
+    count_as_failure = all_attempts_failed && counts_as_failure?(tags)
+    failed_sessions_count = calculate_failed_sessions_count_context(previous_session, count_as_failure)
+    prev_applied = applied_fixes_for_session(previous_session)
+    applied_fixes_count = prev_applied + (count_as_failure || applied_fix_this_run ? 1 : 0)
     {
       request_history: build_request_history_context(previous_session, request, request_type),
       agent_summary: determine_agent_summary_context(continuation, previous_session, last_agent_summary),
-      failure_count: failure_count,
-      step_count: step_count,
-      failed_sessions_count: failed_sessions_count
+      failed_sessions_count: failed_sessions_count,
+      applied_fixes_count: applied_fixes_count
     }
   end
 

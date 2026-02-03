@@ -66,6 +66,7 @@ class Superagent
     @session_outcomes = []
     @agent_thread = nil
     @agent_result_mutex = Mutex.new
+    @applied_fix_this_run = false
   end
 
   def run(start_model_index: 0, request: nil, continuation_analysis: nil)
@@ -110,7 +111,7 @@ class Superagent
   def model_selection_reason(request_model_idx, start_index)
     return "from request hint" if request_model_idx && request_model_idx == start_index
     return "continuation" if @session_continuation
-    return "from failure count" if start_index.positive?
+    return "from applied fixes" if start_index.positive?
 
     "default"
   end
@@ -249,27 +250,22 @@ class Superagent
     RequestPreparer.extract_model_index(raw_text, models)
   end
 
-  # Continuation: start from step_count tier (0-1→model 0, 2-3→1…). New request: hint or failure_count.
+  # Model tier from applied_fixes_count. Same for continuation and new request.
   def resolve_start_index(request_model_index, _start_model_index, continuation:, current_model_index:,
-                          failure_count: 0, step_count: 0)
-    if continuation
-      tier = [(step_count / STEPS_PER_MODEL), models.size - 1].min
-      idx = request_model_index || tier
-      [idx, current_model_index].max
-    else
-      request_model_index || [failure_count, models.size - 1].min
-    end
+                          applied_fixes_count: 0)
+    tier = [(applied_fixes_count / STEPS_PER_MODEL), models.size - 1].min
+    idx = request_model_index || tier
+    continuation ? [idx, current_model_index].max : idx
   end
 
   def determine_start_index(model_index_from_request, start_model_index)
     @current_model_index = 0 unless @session_continuation
     session = @session_tracker.session_for_continuation_analysis(@session_description)
-    failure_count = session ? (session[:failure_count] || 0) : 0
-    step_count = session ? (session[:step_count] || 0) : 0
+    applied = session ? @session_tracker.applied_fixes_for_session(session) : 0
     resolve_start_index(
       model_index_from_request, start_model_index,
       continuation: @session_continuation, current_model_index: @current_model_index,
-      failure_count: failure_count, step_count: step_count
+      applied_fixes_count: applied
     )
   end
 
@@ -330,7 +326,12 @@ class Superagent
     update_terminal_title(true)
     current_req = previous_req || @current_request
     @session_outcomes << {request: current_req, success: true}
-    save_current_session(current_req, :not_provided, update_in_place: true) if current_req
+    if current_req
+      save_current_session(
+        current_req, :not_provided, update_in_place: true, applied_fix_this_run: @applied_fix_this_run
+      )
+      @applied_fix_this_run = false
+    end
     display_done_requests_recap_if_any
 
     process_pending_queue(previous_req)
@@ -485,12 +486,11 @@ class Superagent
 
   def start_index_for_new_request(analysis, model_index)
     session = @session_tracker.session_for_continuation_analysis(analysis[:description])
-    failure_count = session ? (session[:failure_count] || 0) : 0
-    step_count = session ? (session[:step_count] || 0) : 0
+    applied = session ? @session_tracker.applied_fixes_for_session(session) : 0
     idx = resolve_start_index(
       model_index, 0,
       continuation: analysis[:continuation], current_model_index: @current_model_index,
-      failure_count: failure_count, step_count: step_count
+      applied_fixes_count: applied
     )
     [[idx, 0].max, models.size - 1].min
   end
@@ -558,10 +558,12 @@ class Superagent
     @session_tracker.append_to_request_history(raw)
   end
 
-  def save_current_session(req, summary = :not_provided, update_in_place: false, all_attempts_failed: false)
+  def save_current_session(req, summary = :not_provided, update_in_place: false, all_attempts_failed: false,
+                           applied_fix_this_run: false)
     @session_tracker.save_session(
       req, @session_description, @session_tags, @session_continuation, summary,
-      update_in_place: update_in_place, all_attempts_failed: all_attempts_failed
+      update_in_place: update_in_place, all_attempts_failed: all_attempts_failed,
+      applied_fix_this_run: applied_fix_this_run
     )
   end
 
