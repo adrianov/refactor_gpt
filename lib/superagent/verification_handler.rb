@@ -21,7 +21,7 @@ class VerificationHandler
   SHOTGUN_REFACTOR_PROMPT = <<~HEREDOC.freeze
     SYSTEM ROLE: ARCHITECTURAL REFACTORING AGENT
 
-    The current task has triggered a "Shotgun Surgery" alert. A single business rule change has required edits across %<file_count>s files. This indicates high coupling and poor encapsulation.
+    The current task has triggered a "Shotgun Surgery" alert. A single business rule change has required edits across %<file_count>s files. This indicates high coupling and poor encapsulation. The specific affected file names are listed in the "Affected files" section below.
 
     YOUR OBJECTIVE:
     Analyze the proposed changes and propose a structural refactor to centralize this logic before applying the functional change.
@@ -70,10 +70,8 @@ class VerificationHandler
   def build_shotgun_refactor_prompt(req, file_count, file_paths)
     body = format(self.class::SHOTGUN_REFACTOR_PROMPT, file_count: file_count)
     parts = ["User request (to be implemented in the next step): #{to_utf8(req)}\n\n", body]
-    if file_paths && file_paths.any?
-      list = file_paths.map { |p| "  - #{p}" }.join("\n")
-      parts << "\nAffected files:\n#{list}"
-    end
+    list = (file_paths && file_paths.any?) ? file_paths.map { |p| "  - #{p}" }.join("\n") : nil
+    parts << "\nAffected files:\n#{list || '  (see implementation diff)'}"
     parts.join("\n")
   end
 
