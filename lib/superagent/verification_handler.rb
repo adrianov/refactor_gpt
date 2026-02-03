@@ -17,6 +17,31 @@ class VerificationHandler
     'Preserve all existing behavior; do not add or change functionality.'
   ].freeze
 
+  # Shotgun Surgery refactor: triggered when one business rule change touches more than 6 files.
+  SHOTGUN_REFACTOR_PROMPT = <<~HEREDOC.freeze
+    SYSTEM ROLE: ARCHITECTURAL REFACTORING AGENT
+
+    The current task has triggered a "Shotgun Surgery" alert. A single business rule change has required edits across %<file_count>s files. This indicates high coupling and poor encapsulation.
+
+    YOUR OBJECTIVE:
+    Analyze the proposed changes and propose a structural refactor to centralize this logic before applying the functional change.
+
+    CONSTRAINTS:
+    1. Do not apply the business logic change yet.
+    2. Identify the "Gravity Center": Where should this logic naturally live (e.g., a new Service, a shared Base Class, or a Utility module)?
+    3. Use the "Least Change" principle: Refactor only what is necessary to reduce the number of files affected by this specific rule.
+
+    INSTRUCTIONS:
+    1. Analyze: Look at the commonalities in the code being added/edited across these %<file_count>s files.
+    2. Abstract: Create a single source of truth (e.g., a new method instead of repeating logic in many places).
+    3. Execute: Step A: Create the new abstraction. Step B: Update the affected files to call this new abstraction. Step C: Confirm that future changes to this rule would now only require editing ONE file.
+
+    OUTPUT:
+    Provide the code for the new abstraction and the updated call-sites in the affected files.
+
+    This agent runs in non-interactive mode. Make all decisions autonomously and execute tasks directly without requesting user input. Proceed with implementation based on the available context.
+  HEREDOC
+
   attr_reader :verified, :desc, :review_time, :call_failed, :retryable, :raw_output, :fix_output, :refactor_output
 
   def initialize(display, agent_executor)
@@ -34,7 +59,25 @@ class VerificationHandler
     HEREDOC
   end
 
-  def build_refactor_prompt(req, triggering_files: [])
+  def build_refactor_prompt(req, triggering_files: [], shotgun_file_count: nil, shotgun_file_paths: nil)
+    if shotgun_file_count
+      build_shotgun_refactor_prompt(req, shotgun_file_count, shotgun_file_paths)
+    else
+      build_line_count_refactor_prompt(req, triggering_files)
+    end
+  end
+
+  def build_shotgun_refactor_prompt(req, file_count, file_paths)
+    body = format(self.class::SHOTGUN_REFACTOR_PROMPT, file_count: file_count)
+    parts = ["User request (to be implemented in the next step): #{to_utf8(req)}\n\n", body]
+    if file_paths && file_paths.any?
+      list = file_paths.map { |p| "  - #{p}" }.join("\n")
+      parts << "\nAffected files:\n#{list}"
+    end
+    parts.join("\n")
+  end
+
+  def build_line_count_refactor_prompt(req, triggering_files)
     a, b = self.class::REFACTOR_STEP_REQUIREMENTS
     guideline = AgentPromptBuilder::GUIDELINE_REFERENCE_PHRASE
     bullets = "- #{a}\n- #{guideline}\n- #{b}"
@@ -273,9 +316,11 @@ additional_requests: additional_requests)
     @refactor_output = nil
   end
 
-  def run_refactor(model, req, triggering_files: [])
+  def run_refactor(model, req, triggering_files: [], shotgun_file_count: nil, shotgun_file_paths: nil)
     @refactor_output = nil
-    refactor_prompt = build_refactor_prompt(req, triggering_files: triggering_files)
+    refactor_prompt = build_refactor_prompt(req, triggering_files: triggering_files,
+                                            shotgun_file_count: shotgun_file_count,
+                                            shotgun_file_paths: shotgun_file_paths)
     @display.puts "Refactoring: #{model}...".blue
     $stdout.puts ''
 

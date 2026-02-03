@@ -2,10 +2,13 @@
 
 require 'shellwords'
 
-# Decides if a refactor step is needed from changed-file line counts (no LLM).
-# Rule: refactor when any changed file has extension in LINE_THRESHOLDS and lines >= that limit.
+# Decides if a refactor step is needed from changed-file line counts or file count (no LLM).
+# Rules: refactor when any file exceeds LINE_THRESHOLDS, or when file count > SHOTGUN_FILE_COUNT_THRESHOLD.
 # Changed = modified (staged/unstaged) or untracked.
 module RefactorNeededCheck
+  # Refactor when more than this many files changed for one business rule (shotgun surgery).
+  SHOTGUN_FILE_COUNT_THRESHOLD = 6
+
   # Extension => line limit (refactor when file has >= this many lines).
   LINE_THRESHOLDS = {
     '.rb' => 800, '.py' => 800, '.php' => 800,
@@ -45,9 +48,14 @@ module RefactorNeededCheck
 
   private :git_changed_and_untracked_names, :file_entry
 
-  # True when any changed file has an extension in LINE_THRESHOLDS and lines >= that limit.
+  # True when any changed file exceeds line threshold or when changed file count > SHOTGUN_FILE_COUNT_THRESHOLD.
   def refactor_needed?(changed_files_list)
-    files_triggering_refactor(changed_files_list).any?
+    files_triggering_refactor(changed_files_list).any? || shotgun_triggered?(changed_files_list)
+  end
+
+  # True when more than SHOTGUN_FILE_COUNT_THRESHOLD files changed (shotgun surgery).
+  def shotgun_triggered?(changed_files_list)
+    (changed_files_list || []).size > SHOTGUN_FILE_COUNT_THRESHOLD
   end
 
   # Returns entries that triggered refactor: [{ path:, lines:, limit: }, ...].

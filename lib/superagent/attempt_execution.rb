@@ -43,12 +43,21 @@ module AttemptExecution
     success, output, elapsed, reason = run_implementation(model, idx, req)
     return run_model_attempt_on_failure(model, output, elapsed, reason) unless success
 
-    changed = RefactorNeededCheck.changed_files(Dir.pwd)
-    triggering = RefactorNeededCheck.files_triggering_refactor(changed)
-    run_refactor_step(model, req, triggering) if triggering.any?
+    run_refactor_step_if_triggered(model, req)
     result = process_verification_and_fix(model, req)
     record_attempt_failure(model) if result != :success
     result
+  end
+
+  def run_refactor_step_if_triggered(model, req)
+    changed = RefactorNeededCheck.changed_files(Dir.pwd)
+    triggering = RefactorNeededCheck.files_triggering_refactor(changed)
+    shotgun_count = RefactorNeededCheck.shotgun_triggered?(changed) ? changed.size : nil
+    return unless triggering.any? || shotgun_count
+
+    shotgun_paths = shotgun_count ? changed.map { |e| e[:path] } : nil
+    run_refactor_step(model, req, triggering, shotgun_file_count: shotgun_count,
+                      shotgun_file_paths: shotgun_paths)
   end
 
   # Runs implementation step only (agent run, no verification). Returns success, output, elapsed, reason.
@@ -160,12 +169,14 @@ module AttemptExecution
     @verification_handler.finalize_call_failed(h.verified, h.desc, h.review_time, h.raw_output) if exhausted
   end
 
-  def run_refactor_step(model, req, triggering_files = [])
+  def run_refactor_step(model, req, triggering_files = [], shotgun_file_count: nil, shotgun_file_paths: nil)
     @pass_refactor_time = 0
     @session_tracker.append_to_request_history(RequestHistoryFormatter.refactor_entry(req), type: "refactor")
     update_terminal_title("Refactoring: #{model}")
     refactor_start = Time.now
-    refactor_ok = @verification_handler.run_refactor(model, req, triggering_files: triggering_files)
+    refactor_ok = @verification_handler.run_refactor(model, req, triggering_files: triggering_files,
+                                                     shotgun_file_count: shotgun_file_count,
+                                                     shotgun_file_paths: shotgun_file_paths)
     @pass_refactor_time = (Time.now - refactor_start) if refactor_ok
     save_refactor_summary_if_present if refactor_ok
   end
