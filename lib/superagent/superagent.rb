@@ -239,10 +239,7 @@ class Superagent
   def display_done_requests_recap_if_any
     return unless @session_outcomes.any? || @pending_queue.size.positive?
 
-    files_count = @session_tracker.get_modified_files.size
-    @display.display_done_requests_recap(
-      @session_outcomes, queued: @pending_queue.snapshot, files_count: files_count
-    )
+    @display.display_done_requests_recap(@session_outcomes, queued: @pending_queue.snapshot)
   end
 
   def models
