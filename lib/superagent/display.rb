@@ -243,9 +243,17 @@ class Display
       @outcome_display.display_done_requests_recap(outcomes, queued: queued)
     end
 
-    def display_attempt_header(model, idx, total)
-      puts "--- Attempt #{idx + 1}/#{total}: #{model} ---".blue
+    def display_attempt_header(model, idx, total, title: nil)
+      line = "--- Attempt #{idx + 1}/#{total}: #{model}"
+      line += " (#{truncate_attempt_title(title)})" if title && !title.to_s.strip.empty?
+      puts "#{line} ---".blue
       out_puts ''
+    end
+
+    def truncate_attempt_title(title, max_len: 80)
+      return '' if title.nil? || title.to_s.strip.empty?
+      s = title.to_s.strip
+      s.length <= max_len ? s : "#{s[0...(max_len - 3)]}..."
     end
 
     def display_verification_result(verified, desc, context = '', call_failed: false, raw_recap: nil)
@@ -483,6 +491,7 @@ class Display
         return
       end
       $stdout.print str
+      $stdout.flush
     end
 
     def out_puts(str = '')
@@ -492,6 +501,7 @@ class Display
         return
       end
       $stdout.print s
+      $stdout.flush
     end
 
     private
