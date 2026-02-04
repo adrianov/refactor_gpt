@@ -36,7 +36,7 @@ def ask_mode_classification?(title)
   ['Classifying to a session', 'Classifying request'].include?(title.to_s.strip)
 end
 
-def run_ask_mode
+def run_ask_mode(show_full_prompt: false)
   sandbox = "/tmp/sandbox_#{Random.hex(8)}"
   FileUtils.mkdir_p(sandbox)
   original_cwd = Dir.pwd
@@ -50,7 +50,7 @@ def run_ask_mode
     end
     classification = ask_mode_classification?(title)
     client = ask_mode_client(config, progress_title: classification ? nil : 'Thinking')
-    invoke_ask_client(client, config, prompt, classification ? nil : title)
+    invoke_ask_client(client, config, prompt, classification ? nil : title, show_full_prompt: show_full_prompt)
     exit 0
   ensure
     Dir.chdir(original_cwd)
@@ -58,8 +58,14 @@ def run_ask_mode
   end
 end
 
-def invoke_ask_client(client, config, prompt, title)
+def invoke_ask_client(client, config, prompt, title, show_full_prompt: false)
   messages = ask_mode_messages(config[:backend], prompt)
+  if show_full_prompt
+    full_text = messages.map { |m| "[#{m[:role]}]\n#{m[:content]}" }.join("\n\n")
+    puts '--- Full prompt ---'.light_black
+    puts full_text
+    puts '--- End prompt ---'.light_black
+  end
   excerpt = prompt.to_s.strip.lines.first.to_s.strip
   run_line = "agent --mode ask"
   run_line += " #{excerpt.size > 72 ? "#{excerpt[0..68]}..." : excerpt}" if excerpt && !excerpt.empty?
@@ -123,7 +129,7 @@ if __FILE__ == $PROGRAM_NAME
 
   options = parse_superagent_cli_options
   if options[:ask_mode]
-    run_ask_mode
+    run_ask_mode(show_full_prompt: options[:show_full_prompt])
     # run_ask_mode exits; never reached
   end
 

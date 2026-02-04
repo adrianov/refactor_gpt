@@ -156,6 +156,9 @@ class SessionTracker
   end
 
   def run_continuation_query(prompt, title, new_request, sessions_newest_first)
+    @display.set_output_paused(false)
+    @display.flush_paused_output
+    @display.reset_after_pause
     @display.puts "Running: agent --mode ask#{title.to_s.strip.empty? ? '' : " (#{title})"}".green
     response = run_superagent_ask(prompt, title: title)
     return default_continuation_result(new_request) unless response
