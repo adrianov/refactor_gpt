@@ -159,11 +159,21 @@ class SessionTracker
     @display.set_output_paused(false)
     @display.flush_paused_output
     @display.reset_after_pause
-    @display.puts "Running: agent --mode ask#{title.to_s.strip.empty? ? '' : " (#{title})"}".green
+    @display.puts continuation_running_message(title).green
     response = run_superagent_ask(prompt, title: title)
     return default_continuation_result(new_request) unless response
 
-    @display.puts response.light_black if !response.to_s.strip.empty?
+    to_show = strip_classification_title_from_response(response)
+    @display.puts to_show.light_black if to_show.to_s.strip != ''
+    apply_continuation_response(response, sessions_newest_first, new_request)
+  end
+
+  def continuation_running_message(title)
+    suffix = title.to_s.strip.empty? ? '' : " (#{title})"
+    "Running: agent ask#{suffix}"
+  end
+
+  def apply_continuation_response(response, sessions_newest_first, new_request)
     result = parse_continuation_and_description_response(response, sessions_newest_first, new_request)
     result[:description] = description_or_default(result[:description], new_request)
     result
@@ -177,16 +187,38 @@ class SessionTracker
     script = File.join(Utility::PROJECT_ROOT, 'superagent.rb')
     return nil unless File.file?(script)
 
-    stdin_data = title.to_s.strip.empty? ? prompt : "TITLE: #{title}\n\n#{prompt}"
+    stdin_data = classification_title?(title) || title.to_s.strip.empty? ? prompt : "TITLE: #{title}\n\n#{prompt}"
     out, _, status = Open3.capture3(
       { 'RUBYOPT' => nil },
-      RbConfig.ruby, script, '--mode', 'ask',
+      RbConfig.ruby, script, 'ask',
       stdin_data: stdin_data,
       chdir: Utility::PROJECT_ROOT
     )
     return nil unless status.success?
 
     out.to_s.strip
+  end
+
+  def classification_title?(title)
+    ['Classifying to a session', 'Classifying request'].include?(title.to_s.strip)
+  end
+
+  # True when text is a classification title (with or without "TITLE:" prefix), or when the first line is.
+  def classification_title_as_request?(text)
+    return false if text.to_s.strip.empty?
+    first_line = text.to_s.strip.lines.first.to_s.strip
+    stripped = first_line.sub(/\ATITLE:\s*/i, '').strip
+    classification_title?(stripped)
+  end
+
+  # So the continuation output never shows "TITLE: Classifying to a session" as the request line.
+  def strip_classification_title_from_response(response)
+    return response if response.to_s.strip.empty?
+    header = "Request to classify (not yet addressed):"
+    placeholder = "\n(current request; see context)"
+    response.to_s
+      .gsub(/#{Regexp.escape(header)}\nTITLE: Classifying to a session/i, "#{header}#{placeholder}")
+      .gsub(/#{Regexp.escape(header)}\nTITLE: Classifying request/i, "#{header}#{placeholder}")
   end
 
   # UI title for the classification LLM call: "Classifying to a session" when there are existing
@@ -206,6 +238,11 @@ class SessionTracker
   end
 
   DEFAULT_REQUEST_TYPE = 'implementation'
+
+  # Derives request type for changelog from tags (e.g. #bug/#regression/#hotfix → "fix").
+  def request_type_from_tags(tags)
+    counts_as_failure?(tags) ? 'fix' : DEFAULT_REQUEST_TYPE
+  end
 
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided,
                    request_type: DEFAULT_REQUEST_TYPE, update_in_place: false, all_attempts_failed: false,
@@ -558,19 +595,22 @@ class SessionTracker
     HEREDOC
   end
 
-  # Builds continuation-analysis prompt. When the newest session has last_agent_summary (recap/summary/result),
-  # includes it so continuation and tag decisions build on that outcome.
-  # Sessions show "Already addressed in this session" so the decider sees what was run vs the request to classify.
+  # Builds continuation-analysis prompt. Request to classify on top; then sessions as table (title left, content right).
+  # When the newest session has last_agent_summary, it is included so continuation and tag decisions build on it.
+  # If new_req is a classification title (e.g. "TITLE: Classifying to a session"), use a placeholder so the prompt
+  # never shows the title as the request.
   def build_continuation_analysis_prompt(new_req, sessions_newest_first)
     session_lines = continuation_session_lines(sessions_newest_first)
     last_run_block = last_run_result_block(sessions_newest_first.first)
+    display_req = new_req.to_s.strip
+    display_req = '(current request; see context)' if classification_title_as_request?(display_req)
     <<~HEREDOC
-      Existing sessions (newest first, by numerical ID):
+      Request to classify (not yet addressed):
+      #{display_req}
+
+      Existing sessions (newest first, by numerical ID). Each row: session number on the left, content on the right:
       #{session_lines}
       #{last_run_block}
-
-      Request to classify (not yet addressed):
-      #{new_req}
 
       Tasks:
       1. CONTINUATION: Answer CONTINUATION: <number> only when the request clearly concerns the same feature or task
@@ -583,7 +623,7 @@ class SessionTracker
       When recap, summary, or result from the last run is shown above, use it so continuation and tag decisions build on that outcome.
       For external products or APIs, use web fetch to consult official docs to classify accurately.
 
-      Response format (required):
+      Response format (required). Request to classify on top; then one row per field with title on the left, content on the right:
       CONTINUATION: <number> or NEW
       TAGS: comma-separated tags (e.g., #bug, #feature) or NONE
 
@@ -597,13 +637,15 @@ class SessionTracker
   end
 
   def continuation_session_lines(sessions_newest_first)
-    sessions_newest_first.each_with_index.map do |s, i|
-      desc = (s[:description] || s[:request].to_s[0..80]).to_s.strip
-      addressed = already_addressed_preview(s, max_entries: 5, max_len: 80)
-      line = "#{i + 1}. #{desc}"
-      line += "\n   Already addressed in this session: #{addressed}" if addressed && !addressed.empty?
-      line
-    end.join("\n")
+    sessions_newest_first.each_with_index.map { |s, i| continuation_session_row(s, i) }.join("\n")
+  end
+
+  def continuation_session_row(session, index)
+    desc = (session[:description] || session[:request].to_s[0..80]).to_s.strip
+    addressed = already_addressed_preview(session, max_entries: 5, max_len: 80)
+    row_content = desc.dup
+    row_content += "\n   Already addressed in this session: #{addressed}" if addressed && !addressed.empty?
+    "#{index + 1}.\t#{row_content.gsub("\n", "\n\t")}"
   end
 
   def already_addressed_preview(session, max_entries: 5, max_len: 80)

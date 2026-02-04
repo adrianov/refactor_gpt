@@ -16,16 +16,11 @@ require "fileutils"
 InstanceLock.lock_dir_override = ConfigPath::CONFIG_DIR
 
 # Option strings stripped from ARGV by parse_superagent_cli_options. Add new flags here when adding options.
-SUPERAGENT_CLI_STRIP_FLAGS = %w[--skip-midnight --no-midnight --debug --mode].freeze
+SUPERAGENT_CLI_STRIP_FLAGS = %w[--skip-midnight --no-midnight --debug].freeze
 
 def parse_superagent_cli_options
-  ask_mode = false
-  if (idx = ARGV.index('--mode'))
-    val = ARGV[idx + 1]
-    ask_mode = (val == 'ask')
-    ARGV.delete_at(idx + 1) if val
-    ARGV.delete_at(idx)
-  end
+  ask_mode = (ARGV.first == 'ask')
+  ARGV.shift if ask_mode
   skip_midnight_check = ARGV.include?('--skip-midnight') || ARGV.include?('--no-midnight')
   show_full_prompt = ARGV.include?('--debug')
   ARGV.reject! { |a| SUPERAGENT_CLI_STRIP_FLAGS.include?(a) }
@@ -42,20 +37,115 @@ def run_ask_mode(show_full_prompt: false)
   original_cwd = Dir.pwd
   Dir.chdir(sandbox)
   begin
-    prompt, title = resolve_ask_prompt
-    config = ask_mode_config
-    unless config
-      warn 'No API configuration. Set MODEL (or token) in .env'
-      exit 1
+    if $stdin.tty?
+      run_ask_mode_interactive(show_full_prompt: show_full_prompt)
+    else
+      run_ask_mode_once(show_full_prompt: show_full_prompt)
     end
-    classification = ask_mode_classification?(title)
-    client = ask_mode_client(config, progress_title: classification ? nil : 'Thinking')
-    invoke_ask_client(client, config, prompt, classification ? nil : title, show_full_prompt: show_full_prompt)
-    exit 0
   ensure
     Dir.chdir(original_cwd)
     FileUtils.rm_rf(sandbox)
   end
+end
+
+def run_ask_mode_once(show_full_prompt: false)
+  prompt, title = resolve_ask_prompt
+  config = ask_mode_config
+  unless config
+    warn 'No API configuration. Set MODEL (or token) in .env'
+    exit 1
+  end
+  classification = ask_mode_classification?(title)
+  client = ask_mode_client(config)
+  invoke_ask_client(client, config, prompt, classification ? nil : title, show_full_prompt: show_full_prompt)
+  exit 0
+end
+
+def run_ask_mode_interactive(show_full_prompt: false)
+  display = Display.new
+  request_reader = RequestReader.new(display)
+  prompt, title = resolve_ask_prompt_interactive(request_reader)
+  exit 0 if prompt.to_s.strip.empty?
+
+  config = ask_mode_config
+  unless config
+    warn 'No API configuration. Set MODEL (or token) in .env'
+    exit 1
+  end
+  queue, worker = start_ask_worker(prompt, title, config, show_full_prompt)
+  run_ask_main_input_loop(queue, request_reader, display)
+  queue << :quit
+  worker.join
+  exit 0
+end
+
+def start_ask_worker(prompt, title, config, show_full_prompt)
+  client = ask_mode_client(config)
+  queue = Queue.new
+  queue << { prompt: prompt, title: title }
+  worker = Thread.new { ask_worker_loop(queue, client, config, show_full_prompt) }
+  [queue, worker]
+end
+
+def resolve_ask_prompt_interactive(request_reader)
+  if ARGV.any?
+    [ARGV.join(' ').strip, nil]
+  else
+    raw = request_reader.read_request
+    [RequestPreparer.normalized_request_text(raw).to_s.strip, nil]
+  end
+end
+
+def ask_worker_loop(queue, client, config, show_full_prompt)
+  loop do
+    item = queue.pop
+    break if item == :quit
+
+    classification = ask_mode_classification?(item[:title])
+    invoke_ask_client(client, config, item[:prompt], classification ? nil : item[:title],
+                     show_full_prompt: show_full_prompt)
+  end
+end
+
+def run_ask_main_input_loop(queue, request_reader, display)
+  input_io = File.open("/dev/tty", "r")
+  loop do
+    break unless ask_input_ready?(input_io)
+
+    $stdout.puts "\n#{RequestReader::REQUEST_PROMPT}\n\n"
+    $stdout.flush
+    raw = request_reader.read_until_non_shell(use_reline: true, for_queue: true)
+    break if ask_handle_queue_input(queue, request_reader, display, raw) == :quit
+  end
+rescue IOError, Errno::EIO
+  # Terminal closed or unavailable
+ensure
+  input_io&.close
+end
+
+def ask_input_ready?(input_io)
+  ready = IO.select([input_io], nil, nil, 0.3)
+  return false unless ready
+
+  line = input_io.gets
+  return false if line.nil?
+
+  line.chomp.empty?
+end
+
+def ask_handle_queue_input(queue, request_reader, display, raw)
+  if RequestReader.discard_command?(raw)
+    display.puts "Queued requests discarded.".yellow
+    return :next
+  end
+  return :quit if raw.to_s.strip == "/quit"
+  return :next if raw.nil? || raw.to_s.strip.empty?
+
+  text = RequestPreparer.normalized_request_text(raw)
+  request_reader.add_to_request_history(raw)
+  queue << { prompt: text, title: nil }
+  display.puts "Queued: #{RequestHistoryFormatter.queue_preview(text)}".light_blue
+  :next
 end
 
 def invoke_ask_client(client, config, prompt, title, show_full_prompt: false)
@@ -66,11 +156,19 @@ def invoke_ask_client(client, config, prompt, title, show_full_prompt: false)
     puts full_text
     puts '--- End prompt ---'.light_black
   end
-  excerpt = prompt.to_s.strip.lines.first.to_s.strip
-  run_line = "agent --mode ask"
-  run_line += " #{excerpt.size > 72 ? "#{excerpt[0..68]}..." : excerpt}" if excerpt && !excerpt.empty?
-  puts "Running: #{run_line}".green
+  puts ask_running_line(prompt) if ask_show_running_line?(title)
   puts client.ask(messages, title: title)
+end
+
+def ask_show_running_line?(title)
+  title.to_s.strip != '' && !ask_mode_classification?(title)
+end
+
+def ask_running_line(prompt)
+  excerpt = prompt.to_s.strip.lines.first.to_s.strip
+  line = "agent ask"
+  line += " #{excerpt.size > 72 ? "#{excerpt[0..68]}..." : excerpt}" if excerpt && !excerpt.empty?
+  "Running: #{line}".green
 end
 
 def resolve_ask_prompt
@@ -98,7 +196,7 @@ def ask_mode_config
   LlmRouter.config_for_model(LlmRouter.default_model(env_auto), env)
 end
 
-def ask_mode_client(config, progress_title: 'Thinking')
+def ask_mode_client(config, progress_title: nil)
   common = { model: config[:model], api_base_url: config[:base_url], api_key: config[:access_token],
              debug: false, progress_title: progress_title }
   config[:backend] == :gemini ? GeminiClient.new(**common) : OpenAiClient.new(**common)
@@ -116,12 +214,13 @@ if __FILE__ == $PROGRAM_NAME
   if ARGV.include?('--help') || ARGV.include?('-h')
     puts <<~HELP
       Usage: #{File.basename($PROGRAM_NAME)} [options] [request]
+             #{File.basename($PROGRAM_NAME)} ask [question]
       Runs the agent; request can be given as an argument or entered interactively.
+      Subcommand 'ask': one-shot Q&A from stdin or ARGV; in a TTY, press Enter to add more requests (type /quit to exit).
       Only one instance per project; if another is running, this process exits.
       Options:
         -h, --help           Show this help
         --debug              Show full system prompt
-        --mode ask           Sandboxed one-shot Q&A (stdin: optional "TITLE: ...\\n\\n" then prompt; stdout: response)
         --skip-midnight, --no-midnight   Skip midnight-rollover check
     HELP
     exit 0
