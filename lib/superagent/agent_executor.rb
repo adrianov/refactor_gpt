@@ -36,6 +36,10 @@ class AgentExecutor
     TestRunnerDetector.test_runner_running?(pid)
   end
 
+  def long_build_running?(pid)
+    LongBuildDetector.long_build_running?(pid)
+  end
+
   def usage_unrecoverable?(output)
     RunFailureClassifier.usage_unrecoverable?(output)
   end
@@ -414,11 +418,20 @@ class AgentExecutor
         next unless pid
         detected = @state_mutex.synchronize { @state[:detected] }
         next if detected
-        next unless test_runner_running?(pid)
+        message = timeout_exemption_message(pid)
+        next unless message
+
         @state_mutex.synchronize { @state[:detected] = @state[:disabled] = true }
-        @display.puts '⚠️  Test runner detected (child of agent), disabling timeout'.yellow
+        @display.puts message.yellow
       end
     end
+  end
+
+  def timeout_exemption_message(pid)
+    return '⚠️  Test runner detected (child of agent), disabling timeout' if test_runner_running?(pid)
+    return '⚠️  Long build (e.g. cargo) detected, disabling timeout' if long_build_running?(pid)
+
+    nil
   end
 
   def start_timeout_thread
@@ -429,7 +442,7 @@ class AgentExecutor
           [@state[:complete], @state[:disabled], @state[:pid]]
         end
         break if complete
-        next if disabled || (pid && test_runner_running?(pid))
+        next if disabled || (pid && (test_runner_running?(pid) || long_build_running?(pid)))
         check_timeouts
       end
     end
