@@ -39,12 +39,8 @@ def extract_porcelain_filenames(porcelain_output)
     next nil if line.strip.empty? || line.start_with?("##")
 
     status_and_path = line.sub(/^.{2}\s+/, "")
-
-    if status_and_path.include?("->")
-      status_and_path.split("->").last.strip
-    else
-      status_and_path
-    end
+    path = status_and_path.include?("->") ? status_and_path.split("->").last.strip : status_and_path
+    path.match(/\A"(.*)"\z/) ? Regexp.last_match(1) : path
   end.compact
 end
 
@@ -139,10 +135,24 @@ def run_git_add_existing(paths)
   abort_staging unless system(add_cmd)
 end
 
+def resolve_deleted_paths_for_index(paths)
+  index_paths = `git ls-files`.split("\n")
+  paths.filter_map do |p|
+    next p if index_paths.include?(p)
+    next nil unless p.end_with?(".")
+
+    json_path = "#{p.sub(/\.$/, "")}.json"
+    index_paths.include?(json_path) ? json_path : nil
+  end.uniq
+end
+
 def run_git_add_deleted(paths)
   return if paths.empty?
 
-  add_u_cmd = ["git", "add", "-u", "--", *paths].map { |p| Shellwords.escape(p) }.join(" ")
+  resolved = resolve_deleted_paths_for_index(paths)
+  return if resolved.empty?
+
+  add_u_cmd = ["git", "add", "-u", "--", *resolved].map { |p| Shellwords.escape(p) }.join(" ")
   puts "Running: #{add_u_cmd}".green
   abort_staging unless system(add_u_cmd)
 end
