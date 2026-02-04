@@ -3,6 +3,7 @@
 require 'digest'
 require 'oj'
 require 'fileutils'
+require 'open3'
 
 # Tracks session state per project (directory). Many sessions; continuation uses latest.
 # Session: request, history, failed_sessions_count, applied_fixes_count.
@@ -143,26 +144,46 @@ class SessionTracker
 
   # Classifies the new request as continuing an existing session or new; returns continuation, tags, description.
   def analyze_continuation_and_description(new_request, _previous_session = nil)
-    client = create_ask_client
     default = {continuation: false, tags: [], description: default_description(new_request), continuation_id: nil}
-    return default unless client
-
     sessions_newest_first = active_sessions_newest_first
     return default if sessions_newest_first.empty?
 
     prompt, title = continuation_prompt_and_title(new_request, sessions_newest_first)
-    run_continuation_query(client, prompt, title, new_request, sessions_newest_first)
+    run_continuation_query(prompt, title, new_request, sessions_newest_first)
   rescue StandardError => e
     @display.puts "Warning: Failed to analyze: #{e.message}".yellow
     default
   end
 
-  def run_continuation_query(client, prompt, title, new_request, sessions_newest_first)
-    response = query_ask_client(client, prompt, title: title)
-    @display.puts response.light_black if response && !response.to_s.strip.empty?
+  def run_continuation_query(prompt, title, new_request, sessions_newest_first)
+    @display.puts "Running: agent --mode ask#{title.to_s.strip.empty? ? '' : " (#{title})"}".green
+    response = run_superagent_ask(prompt, title: title)
+    return default_continuation_result(new_request) unless response
+
+    @display.puts response.light_black if !response.to_s.strip.empty?
     result = parse_continuation_and_description_response(response, sessions_newest_first, new_request)
     result[:description] = description_or_default(result[:description], new_request)
     result
+  end
+
+  def default_continuation_result(new_request)
+    {continuation: false, tags: [], description: default_description(new_request), continuation_id: nil}
+  end
+
+  def run_superagent_ask(prompt, title: nil)
+    script = File.join(Utility::PROJECT_ROOT, 'superagent.rb')
+    return nil unless File.file?(script)
+
+    stdin_data = title.to_s.strip.empty? ? prompt : "TITLE: #{title}\n\n#{prompt}"
+    out, _, status = Open3.capture3(
+      { 'RUBYOPT' => nil },
+      RbConfig.ruby, script, '--mode', 'ask',
+      stdin_data: stdin_data,
+      chdir: Utility::PROJECT_ROOT
+    )
+    return nil unless status.success?
+
+    out.to_s.strip
   end
 
   # UI title for the classification LLM call: "Classifying to a session" when there are existing
@@ -508,26 +529,6 @@ class SessionTracker
     age > MAX_SESSION_AGE
   end
 
-  def create_ask_client
-    env = ENV.to_h.merge(Utility.load_env_vars)
-    model = LlmRouter.default_model(env)
-    config = LlmRouter.config_for_model(model, env)
-    return nil if config.nil?
-
-    common = {
-      model: config[:model],
-      api_base_url: config[:base_url],
-      api_key: config[:access_token],
-      debug: false,
-      progress: true
-    }
-    if config[:backend] == :gemini
-      AskGeminiClient.new(**common)
-    else
-      AskGptClient.new(**common, backend: config[:backend])
-    end
-  end
-
   def build_classification_prompt(request)
     <<~HEREDOC
       Classify the following request by identifying applicable tags.
@@ -645,20 +646,6 @@ class SessionTracker
         2,
         "TAGS: comma-separated tags or NONE\nDESCRIPTION: one sentence summary"
       )
-    end
-  end
-
-  def query_ask_client(client, prompt, title: nil)
-    if client.is_a?(AskGeminiClient)
-      client.ask([{role: "user", content: prompt}], title: title)
-    else
-      system_msg = "You are a request analyzer. Provide concise, structured responses. " \
-        "For external products or APIs, use web fetch to consult official docs to classify accurately."
-      messages = [
-        {role: "system", content: system_msg},
-        {role: "user", content: prompt}
-      ]
-      client.ask(messages, title: title)
     end
   end
 

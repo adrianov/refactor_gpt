@@ -44,4 +44,13 @@ module TestRunnerDetector
     cmdline = `ps -p #{pid} -o args= 2>/dev/null`.strip
     cmdline.include?(runner)
   end
+
+  # Returns the first matching runner name (e.g. "rspec") among agent descendants, or nil.
+  def matched_runner_name(pid)
+    return nil unless pid
+    return nil unless RbConfig::CONFIG['host_os'] =~ /linux|darwin|bsd/
+
+    descendants = ProcessDescendants.get_all_descendants(pid)
+    TEST_RUNNERS.find { |runner| descendants.any? { |d_pid| process_matches_runner?(d_pid, runner) } }
+  end
 end
