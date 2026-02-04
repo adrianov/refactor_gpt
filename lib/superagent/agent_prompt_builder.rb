@@ -43,10 +43,14 @@ class AgentPromptBuilder
   end
 
   # Single place to build the user request block sent to the agent. Prepends CONTINUATION/TAGS/DESCRIPTION when present.
+  # If request_text is a classification title (e.g. "TITLE: Classifying to a session"), use a placeholder so the
+  # prompt never shows the title as the request.
   def format_user_request_content(request_text, continuation_analysis)
     return request_text.to_s if continuation_analysis.nil? || continuation_analysis.empty?
 
-    continuation_request_header(continuation_analysis) + "Current request (not yet addressed):\n" + request_text.to_s
+    text = request_text.to_s.strip
+    text = '(current request; see context)' if classification_title_as_request?(text)
+    continuation_request_header(continuation_analysis) + "Request to classify (not yet addressed):\n" + text
   end
 
   def user_context_section
@@ -163,6 +167,10 @@ class AgentPromptBuilder
 
   def format_continuation_description(desc)
     (desc && !desc.to_s.strip.empty?) ? "DESCRIPTION: #{desc}" : nil
+  end
+
+  def classification_title_as_request?(text)
+    @session_tracker&.classification_title_as_request?(text) == true
   end
 
   def format_truncated_section(label, content, max_lines: CONTEXT_MAX_LINES)
