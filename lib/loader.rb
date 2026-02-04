@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Zeitwerk autoloading for lib; lib/superagent is collapsed so files define top-level constants.
-# Shared types (SystemInfo, Utility, AskGptClient, etc.) live only in lib; root scripts must not redefine.
+# Shared types (SystemInfo, Utility, OpenAiClient, GeminiClient, etc.) live in lib; AskGptClient/AskGeminiClient are used by ask_gpt only.
 # openai_client.rb defines OpenAiClient (capital I); Zeitwerk infers OpenaiClient from the path.
 require 'zeitwerk'
 loader = Zeitwerk::Loader.new
