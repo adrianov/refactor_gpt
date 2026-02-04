@@ -66,7 +66,7 @@ module AttemptExecution
 
   # Runs implementation step only (agent run, no verification). Returns success, output, elapsed, reason.
   def run_implementation(model, idx, req)
-    run_model_attempt_start(model, idx)
+    run_model_attempt_start(model, idx, req)
     start = Time.now
     run_opts = { new_session: !@session_continuation, defer_full_prompt: false,
                  continuation_analysis: @continuation_analysis }
@@ -77,10 +77,16 @@ module AttemptExecution
   end
 
 
-  def run_model_attempt_start(model, idx)
+  def run_model_attempt_start(model, idx, req)
     attempt_number = (@attempt_count_per_model[model] || 0) + 1
     update_terminal_title("Attempting: #{model} (attempt #{attempt_number}/#{ATTEMPTS_PER_MODEL})")
-    @display.display_attempt_header(model, idx, models.size)
+    title = attempt_title(req)
+    @display.display_attempt_header(model, idx, models.size, title: title)
+  end
+
+  def attempt_title(req)
+    return RequestHistoryFormatter.queue_preview(req) if @session_description.to_s.strip.empty?
+    @session_description.to_s.strip
   end
 
   def run_model_attempt_on_failure(model, output, elapsed, reason)
