@@ -551,6 +551,7 @@ class Superagent
     @session_continuation = analysis[:continuation]
     @session_tags = analysis[:tags] || []
     @session_description = analysis[:description]
+    @session_request_type = @session_tracker.request_type_from_tags(@session_tags)
   end
 
   def save_request_to_histories(raw)
@@ -560,10 +561,11 @@ class Superagent
 
   def save_current_session(req, summary = :not_provided, update_in_place: false, all_attempts_failed: false,
                            applied_fix_this_run: false)
+    request_type = @session_request_type || SessionTracker::DEFAULT_REQUEST_TYPE
     @session_tracker.save_session(
       req, @session_description, @session_tags, @session_continuation, summary,
-      update_in_place: update_in_place, all_attempts_failed: all_attempts_failed,
-      applied_fix_this_run: applied_fix_this_run
+      request_type: request_type, update_in_place: update_in_place,
+      all_attempts_failed: all_attempts_failed, applied_fix_this_run: applied_fix_this_run
     )
   end
 
