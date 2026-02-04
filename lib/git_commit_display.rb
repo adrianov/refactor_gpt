@@ -19,12 +19,73 @@ module GitCommitDisplay
     get_user_confirmation
   end
 
-  def get_file_stats(files)
+  def get_file_stats(files, all_stats = nil)
     return {} unless files.any?
 
+    batch = all_stats || fetch_all_numstat_stats
     stats = {}
-    files.each { |file| stats[file] = get_single_file_stats(file) || "" }
+    files.each do |file|
+      path = file.to_s.strip
+      stats[file] = lookup_stat(batch, path) || get_single_file_stats(path) || ""
+    end
     stats
+  end
+
+  def lookup_stat(batch, path)
+    batch[path] || batch[path.delete_prefix("./")] || batch["./#{path}"]
+  end
+
+  def fetch_all_numstat_stats
+    cached = parse_numstat_to_hash(`git diff --cached --numstat 2>/dev/null`)
+    unstaged = parse_numstat_to_hash(`git diff --numstat 2>/dev/null`)
+    merge_stat_hashes(cached, unstaged)
+  end
+
+  def parse_numstat_to_hash(out)
+    return {} unless out && !out.strip.empty?
+
+    hash = {}
+    out.each_line do |line|
+      stat = parse_numstat_line_to_stat(line)
+      hash[stat[:path]] = stat[:stat] if stat
+    end
+    hash
+  end
+
+  def parse_numstat_line_to_stat(line)
+    add_str, del_str, path = line.strip.split("\t", 3)
+    return nil if add_str.nil? || del_str.nil? || path.nil? || path.empty?
+    return nil if add_str == "-" || del_str == "-"
+
+    add = add_str.to_i
+    del = del_str.to_i
+    return nil unless (add + del).positive?
+
+    { path: path.strip, stat: "#{add}+#{del}-" }
+  end
+
+  def merge_stat_hashes(cached, unstaged)
+    result = cached.dup
+    unstaged.each do |path, stat|
+      add, del = parse_stat_string(stat)
+      next unless add && del
+
+      add = add.to_i + sum_from_stat(result[path], 0)
+      del = del.to_i + sum_from_stat(result[path], 1)
+      result[path] = "#{add}+#{del}-"
+    end
+    result
+  end
+
+  def sum_from_stat(stat_str, index)
+    captures = parse_stat_string(stat_str)
+    (captures && captures[index]) ? captures[index].to_i : 0
+  end
+
+  def parse_stat_string(stat)
+    return nil unless stat
+
+    stat.match(/(\d+)\+(\d+)-/)&.captures
   end
 
   def display_warnings(warnings)
@@ -63,7 +124,8 @@ module GitCommitDisplay
   def display_planned_commits(commits)
     puts
     puts "✓ Commits Planned".green
-    commits.each_with_index { |commit, idx| display_single_commit(commit, idx) }
+    all_stats = fetch_all_numstat_stats
+    commits.each_with_index { |commit, idx| display_single_commit(commit, idx, all_stats) }
   end
 
   def get_user_confirmation
@@ -77,20 +139,25 @@ module GitCommitDisplay
   end
 
   def get_single_file_stats(file)
-    status = `git status --porcelain "#{file}" 2>/dev/null`.strip
-    return "" unless $?.success?
+    path = file.to_s.strip
+    return "" if path.empty?
+
+    status = `git status --porcelain #{Shellwords.escape(path)} 2>/dev/null`.strip
+    return get_modified_file_stats(path) unless $?.success?
 
     case status
     when /^D /, /^ D/
-      get_deleted_file_stats(file)
+      get_deleted_file_stats(path)
     when /^A/
-      get_added_file_stats(file)
+      get_added_file_stats(path)
     when /^M/, /^ M/
-      get_modified_file_stats(file)
-    when /^?/
-      get_new_file_stats(file)
+      get_modified_file_stats(path)
+    when /^R/, /^C/
+      get_modified_file_stats(path)
+    when /^\?\?/
+      get_new_file_stats(path)
     else
-      ""
+      get_modified_file_stats(path)
     end
   end
 
@@ -110,17 +177,33 @@ module GitCommitDisplay
   end
 
   def get_modified_file_stats(file)
-    get_stat_from_command("git diff --cached --stat -- #{Shellwords.escape(file)}") ||
+    get_stat_from_numstat("git diff --cached --numstat -- #{Shellwords.escape(file)}") ||
+      get_stat_from_numstat("git diff --numstat -- #{Shellwords.escape(file)}") ||
+      get_stat_from_command("git diff --cached --stat -- #{Shellwords.escape(file)}") ||
       get_stat_from_command("git diff --stat -- #{Shellwords.escape(file)}")
   end
 
-  def display_single_commit(commit, idx)
+  def get_stat_from_numstat(command)
+    out = `#{command} 2>/dev/null`.strip
+    $?.success? && out.lines.any? ? parse_numstat_line(out.lines.first) : ""
+  end
+
+  def parse_numstat_line(line)
+    add_str, del_str = line.strip.split("\t", 3).first(2)
+    return "" if add_str.nil? || del_str.nil? || add_str == "-" || del_str == "-"
+
+    add = add_str.to_i
+    del = del_str.to_i
+    (add + del).positive? ? "#{add}+#{del}-" : ""
+  end
+
+  def display_single_commit(commit, idx, all_stats = nil)
     puts "Commit ##{idx + 1}: #{commit["message"]}".cyan
     files = Array(commit["files"])
 
     return puts unless files.any?
 
-    file_stats = get_file_stats(files)
+    file_stats = get_file_stats(files, all_stats)
     max_filename_length = files.map(&:length).max
 
     display_commit_total_stats(file_stats, files)
@@ -223,13 +306,18 @@ module GitCommitDisplay
   end
 
   def process_stat_line_for_file(line)
-    match = line.match(/^\s*(.+?)\s+\|\s*(\d+)\s*([+-]+)?\s*$/)
+    match = line.strip.match(/^\s*(.+?)\s+\|\s*(\d+)\s*([+-]+)?\s*$/)
     return "" unless match
 
     total_changes = match[2].to_i
     plus_minus = match[3] || ""
 
     return "" unless total_changes > 0
+
+    # When git omits the +/- graph (e.g. narrow stat width), use total so we don't show 0 changes.
+    if plus_minus.empty?
+      return "#{total_changes}+0-"
+    end
 
     additions = plus_minus.count("+")
     deletions = plus_minus.count("-")
