@@ -30,12 +30,19 @@ module AttemptExecution
       result = run_model_attempt(model, idx, req)
       return [true, highest_index_reached] if result == :success
       return [handle_switch_to_auto_only(req), highest_index_reached] if result == :switch_to_auto_only
+      return [handle_connection_error(req), highest_index_reached] if result == :connection_error
     end
     [false, highest_index_reached]
   end
 
   def handle_switch_to_auto_only(req)
     execute_attempts(0, req)
+    true
+  end
+
+  def handle_connection_error(_req)
+    update_terminal_title(false)
+    @display.puts "\n❌ Connection errors limit reached for this pass. Exiting request queue.".red
     true
   end
 
@@ -120,6 +127,7 @@ module AttemptExecution
     set_pass_total_time(pass_timing)
     @pass_timings << pass_timing
     @display.display_pass_timing(pass_timing)
+    return :connection_error if reason == :max_retries_exceeded
     @auto_only ? :switch_to_auto_only : nil
   end
 

@@ -206,7 +206,9 @@ class AgentExecutor
 
     reason = RunFailureClassifier.failure_reason(output, status, stdout, timeout_reason)
     can_retry = reason == :recoverable && retries < MAX_RECOVERABLE_RETRIES
-    return { done: true, tuple: [false, output.to_s, reason] } unless can_retry
+    unless can_retry
+      return { done: true, tuple: [false, output.to_s, reason == :recoverable ? :max_retries_exceeded : reason] }
+    end
 
     { done: false, retries: run_retry_recoverable(retries, base_delay) }
   end
