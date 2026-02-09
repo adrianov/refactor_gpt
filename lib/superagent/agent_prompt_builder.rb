@@ -8,6 +8,13 @@ class AgentPromptBuilder
   CONTEXT_MAX_LINES = 500
   MAX_PREVIOUS_REQUESTS = 5
 
+  # Agent outputs this when request is out of scope; we then set Failed and skip verification.
+  OUT_OF_SCOPE_MARKER = 'FAILED: OUT_OF_SCOPE'
+
+  OUT_OF_SCOPE_INSTRUCTION = "\n\nIf the feature or request is out of scope for this project (e.g. unrelated to the " \
+    "project mission, or not a coding task within the project's technologies), do not implement. " \
+    "Instead output exactly: #{OUT_OF_SCOPE_MARKER}"
+
   # Phrase used when instructing the model to follow project rules (e.g. in refactor/verification prompts).
   # Files are attached; do not tell the model to read specific filenames.
   GUIDELINE_REFERENCE_PHRASE = 'Follow the project rules already provided in context.'
@@ -29,7 +36,8 @@ class AgentPromptBuilder
       current_request: current_request, session_description: session_desc
     )
     summary = summary_section(session_description: session_desc)
-    prompt_parts_ordered(history, summary, user_content, rest, session_desc)
+    base = prompt_parts_ordered(history, summary, user_content, rest, session_desc)
+    implementation_prompt?(verification_mode, fix_stage) ? base + OUT_OF_SCOPE_INSTRUCTION : base
   end
 
   # Continuation: already-addressed list first, then current (new) request last; otherwise user content first.
@@ -230,6 +238,10 @@ class AgentPromptBuilder
     line1 = parts.first(mid).join(' | ')
     line2 = parts.drop(mid).join(' | ')
     [line1, line2].reject(&:empty?).join("\n")
+  end
+
+  def implementation_prompt?(verification_mode, fix_stage)
+    !verification_mode && !fix_stage
   end
 
   def recent_request_history_slice(current_request, session_description = nil)

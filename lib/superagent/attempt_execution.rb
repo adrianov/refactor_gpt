@@ -52,6 +52,10 @@ module AttemptExecution
     success, output, elapsed, reason = run_implementation(model, idx, req)
     return run_model_attempt_on_failure(model, output, elapsed, reason) unless success
 
+    if out_of_scope?(@current_agent_output)
+      return handle_out_of_scope(model, req, elapsed)
+    end
+
     run_refactor_step_if_triggered(model, req, mtimes_before)
     result = process_verification_and_fix(model, req)
     record_attempt_failure(model) if result != :success
@@ -282,5 +286,23 @@ module AttemptExecution
 
   def record_attempt_failure(model)
     @attempt_count_per_model[model] = (@attempt_count_per_model[model] || 0) + 1
+  end
+
+  def out_of_scope?(result_content)
+    result_content.to_s.include?(AgentPromptBuilder::OUT_OF_SCOPE_MARKER)
+  end
+
+  def handle_out_of_scope(model, _req, implementation_time)
+    @display.puts "Request out of scope (#{AgentPromptBuilder::OUT_OF_SCOPE_MARKER}). Skipping verification.".yellow
+    record_attempt_failure(model)
+    pass_timing = PassTimingBuilder.build(
+      @current_pass, model,
+      implementation_time: implementation_time,
+      refactor_time: 0
+    )
+    set_pass_total_time(pass_timing)
+    @pass_timings << pass_timing
+    @display.display_pass_timing(pass_timing)
+    :continue
   end
 end
