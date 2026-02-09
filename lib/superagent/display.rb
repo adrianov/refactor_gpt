@@ -28,25 +28,26 @@ class Display
     ts = timestamp_str
     str = args.first.is_a?(String) ? format_with_timestamp(args[0], ts) : args[0].to_s
     out_puts(str)
-    $stdout.flush
+    @out.flush
   end
 
-  def initialize(skip_midnight_check: false)
-      @at_start_of_line = true
-      @current_stream_id = nil
-      @has_printed_in_stream = false
-      @thinking_indicator_count = 0
-      @last_thinking_indicator_time = nil
-      @tool_line_in_progress = false
-      @skip_midnight_check = skip_midnight_check
-      @output_paused = false
-      @output_buffer = []
-      @output_buffer_mutex = Mutex.new
-      @pass_timing_display = PassTimingDisplay.new(self)
-      @verification_display = VerificationDisplay.new(self)
-      @outcome_display = OutcomeDisplay.new(self)
-      @queue_display = QueueDisplay.new(self)
-    end
+  def initialize(skip_midnight_check: false, io: nil)
+    @out = io || $stdout
+    @at_start_of_line = true
+    @current_stream_id = nil
+    @has_printed_in_stream = false
+    @thinking_indicator_count = 0
+    @last_thinking_indicator_time = nil
+    @tool_line_in_progress = false
+    @skip_midnight_check = skip_midnight_check
+    @output_paused = false
+    @output_buffer = []
+    @output_buffer_mutex = Mutex.new
+    @pass_timing_display = PassTimingDisplay.new(self)
+    @verification_display = VerificationDisplay.new(self)
+    @outcome_display = OutcomeDisplay.new(self)
+    @queue_display = QueueDisplay.new(self)
+  end
 
   def set_output_paused(paused)
     @output_paused = paused
@@ -71,8 +72,8 @@ class Display
       @output_buffer.clear
       buf
     end
-    $stdout.print to_print
-    $stdout.flush
+    @out.print to_print
+    @out.flush
   end
 
   def reset_after_pause
@@ -88,7 +89,7 @@ class Display
     str.to_s.each_line do |line|
       out_puts color ? line.chomp.to_s.public_send(color) : line.chomp
     end
-    $stdout.flush unless @output_paused
+    @out.flush unless @output_paused
   end
 
     def check_late_night_reminder
@@ -129,7 +130,7 @@ class Display
       out_puts '' unless stripped.end_with?("\n")
       @at_start_of_line = stripped.end_with?("\n")
       @has_printed_in_stream = true
-      $stdout.flush
+      @out.flush
     end
 
     def assistant_text_to_print(text)
@@ -146,7 +147,7 @@ class Display
 
       out_puts ''
       @at_start_of_line = true
-      $stdout.flush
+      @out.flush
     end
 
     # Ensure newline after think block ends so next line (e.g. tool call) does not run on (regression fix).
@@ -186,7 +187,7 @@ class Display
                     else '⠸'
                     end
         out_print "\r#{timestamp_str}#{indicator.colorize(:light_black)}"
-        $stdout.flush
+        @out.flush
         @last_thinking_indicator_time = now
       end
     end
@@ -224,9 +225,9 @@ class Display
         padding: [0, 1],
         border: :light
       )
-      $stdout.print box
-      $stdout.puts ''
-      $stdout.flush
+      @out.print box
+      @out.puts ''
+      @out.flush
     end
 
     # Lists queued requests; shows running request preview if any.
@@ -490,8 +491,8 @@ class Display
         @output_buffer_mutex.synchronize { @output_buffer << str.to_s }
         return
       end
-      $stdout.print str
-      $stdout.flush
+      @out.print str
+      @out.flush
     end
 
     def out_puts(str = '')
@@ -500,8 +501,8 @@ class Display
         @output_buffer_mutex.synchronize { @output_buffer << s }
         return
       end
-      $stdout.print s
-      $stdout.flush
+      @out.print s
+      @out.flush
     end
 
     private
@@ -550,7 +551,7 @@ class Display
       line = "#{timestamp_str}#{body(text)}"
       out_print line
       @at_start_of_line = false
-      $stdout.flush
+      @out.flush
     end
 
     def overwrite_line_with_timestamp(text)
@@ -558,7 +559,7 @@ class Display
       out_print "#{timestamp_str}#{body(text)}"
       out_puts ''
       @at_start_of_line = true
-      $stdout.flush
+      @out.flush
     end
 
   end
