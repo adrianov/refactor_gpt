@@ -116,6 +116,7 @@ Usage:
 Features:
 - **Multi-model fallback**: Sequentially tries Gemini, Claude, and other models.
 - **Automatic verification**: Uses a separate agent pass to verify that changes solve the request.
+- **Out-of-scope handling**: If the request is out of project scope, the agent may output `FAILED: OUT_OF_SCOPE`; verification is skipped and the run is treated as failed.
 - **Self-correction**: Automatically retries with specific fix instructions if verification fails.
 - **Queue requests during run**: Visible queue UI (hint at start, "Queue (N): type request, Enter twice to add" before each attempt); extra requests are sent together to the next run.
 - **Detailed logging**: Provides timestamped logs and tracks git status throughout the process.
