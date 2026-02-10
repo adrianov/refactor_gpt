@@ -30,6 +30,22 @@ class CommitPlanClient
     parse_commit_plan_response(raw_response, payload_size_kb)
   end
 
+  # First pass: given only the list of changed file paths, returns files that
+  # should be excluded from the diff sent to the main commit plan (e.g. build
+  # logs, temp files). Enables a smaller second pass with actual diffs.
+  def assess_files_to_exclude(file_paths, cli_hint)
+    return [] if file_paths.empty?
+
+    user_content = build_file_list_assessment_content(file_paths, cli_hint)
+    messages = [
+      {role: "system", content: file_list_assessment_instruction},
+      {role: "user", content: user_content}
+    ]
+    raw = ask(messages, json: true)
+    parsed = parse_file_list_assessment_response(raw)
+    Array(parsed["excluded"])
+  end
+
   private
 
   MAX_CONTENT_SIZE_KB = 100
@@ -112,6 +128,39 @@ class CommitPlanClient
     puts "Payload size: #{payload_size_kb} KB".yellow
     puts "Raw response:\n#{raw_response}".red
     exit 1
+  end
+
+  def file_list_assessment_instruction
+    <<~HEREDOC
+      You are a filter for git commit planning. You receive a list of changed file paths.
+      Your task: identify which files must be EXCLUDED from the diff sent to the commit planner.
+      Exclude only files that are clearly not source code, e.g.:
+      - Build or run logs (nohup.out, *.log, build output)
+      - Temporary or cache files (*.tmp, *.temp, *.bak, *.swp, *.swo, tmp/, .cache/)
+      - Generated artifacts that are not committed by convention
+      - IDE/editor backups
+      Return JSON: {"excluded": [{"path": "<exact path from the list>", "reason": "brief reason"}]}.
+      Use only paths that appear in the provided list. If none should be excluded, return {"excluded": []}.
+      Do not include any text outside the JSON.
+    HEREDOC
+  end
+
+  def build_file_list_assessment_content(file_paths, cli_hint)
+    list = file_paths.join("\n")
+    hint = cli_hint.empty? ? "" : "\nUser hint (optional): #{cli_hint}\n"
+    "Changed file paths:\n\n#{list}#{hint}"
+  end
+
+  def parse_file_list_assessment_response(raw_response)
+    json_str = raw_response.strip
+    stripped = raw_response.gsub(/^```.*\n?/, "").gsub(/```$/, "").strip
+    begin
+      Oj.load(json_str)
+    rescue Oj::ParseError
+      Oj.load(stripped)
+    end
+  rescue Oj::ParseError
+    {}
   end
 
   def calculate_payload_size(messages)
