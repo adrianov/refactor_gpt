@@ -216,14 +216,30 @@ def get_diff_output
   diff_output
 end
 
+def build_filtered_diff(diff_output, pre_excluded)
+  return diff_output if pre_excluded.empty?
+
+  excluded_paths = pre_excluded.map { |h| h["path"] }
+  DiffProcessor.new.diff_without_paths(diff_output, excluded_paths)
+end
+
+def merge_excluded_by_path(pre_excluded, plan_excluded)
+  seen = {}
+  (pre_excluded + plan_excluded).each_with_object([]) do |entry, out|
+    path = entry["path"].to_s
+    next if path.empty? || seen[path]
+    seen[path] = true
+    out << entry
+  end
+end
+
 def call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
-  CommitPlanClient.new(debug: debug_mode).commit_plan(
-    status_output,
-    diff_output,
-    cli_hint,
-    recent_commits,
-    recent_commands
-  )
+  client = CommitPlanClient.new(debug: debug_mode)
+  file_paths = extract_porcelain_filenames(status_output)
+  pre_excluded = client.assess_files_to_exclude(file_paths, cli_hint)
+  filtered_diff = build_filtered_diff(diff_output, pre_excluded)
+  plan = client.commit_plan(status_output, filtered_diff, cli_hint, recent_commits, recent_commands)
+  [plan, pre_excluded]
 end
 
 def extract_plan_results(plan, status_output)
@@ -254,10 +270,12 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
   prepare_untracked_files
   show_git_diff_if_needed(show_diff, recent_commands)
   diff_output = get_diff_output
-  plan = call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
+  plan, pre_excluded = call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits,
+    recent_commands)
   result = extract_plan_results(plan, status_output)
   return nil if result.nil?
 
+  result["excluded_files"] = merge_excluded_by_path(pre_excluded, result["excluded_files"] || [])
   result["status_output"] = status_output
   result
 end
