@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "set"
+
 # Builds and truncates unified diffs for commit planning. Truncation prefers
 # newline boundaries (full lines); mid-line cut only when line exceeds threshold.
 class DiffProcessor
@@ -31,6 +33,19 @@ class DiffProcessor
 
     included_diffs, skipped_count = collect_diffs(sorted_files, file_statuses, max_bytes)
     assemble_result(included_diffs, skipped_count)
+  end
+
+  # Returns diff with file sections for given paths removed. Used to drop
+  # build logs and other non-source files before sending diff to the LLM.
+  def diff_without_paths(diff_output, excluded_paths)
+    return diff_output if diff_output.empty? || excluded_paths.empty?
+
+    file_diffs = parse_file_diffs(diff_output)
+    return diff_output if file_diffs.empty?
+
+    set = excluded_paths.to_set
+    kept = file_diffs.reject { |path, _| set.include?(path) }
+    kept.values.join(FILE_DIFF_SEPARATOR)
   end
 
   private
@@ -219,19 +234,21 @@ class DiffProcessor
   def parse_file_statuses(status_output)
     statuses = {}
     status_output.lines.each do |line|
-      next if line.nil? || line.to_s.strip.empty? || line.start_with?("##")
+      file_path = extract_status_file_path(line)
+      next unless file_path
 
-      status_flag = line[0..1]
-      file_path = line[3..] && line[3..].to_s.strip
-      next if file_path.nil? || file_path.empty?
-
-      if file_path.include?(" -> ")
-        file_path = file_path.split(" -> ").last
-      end
-
-      statuses[file_path] = status_flag
+      statuses[file_path] = line[0..1]
     end
     statuses
+  end
+
+  def extract_status_file_path(line)
+    return nil if line.nil? || line.to_s.strip.empty? || line.start_with?("##")
+
+    file_path = line[3..]&.to_s&.strip
+    return nil if file_path.nil? || file_path.empty?
+
+    file_path.include?(" -> ") ? file_path.split(" -> ").last : file_path
   end
 
   def sort_files_by_importance(file_diffs, file_statuses)
