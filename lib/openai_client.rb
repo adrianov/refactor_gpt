@@ -33,7 +33,7 @@ end
 class OpenAiClient
   include AgentsFileHandler
   attr_reader :model
-  DEFAULT_MODEL = "glm-4.6"
+  DEFAULT_MODEL = "glm-5"
   REQUEST_TIMEOUT = 300
   DEFAULT_PROGRESS_SPEED = 300
   PROGRESS_SPEED_FILE = File.join(Dir.home, ".refactor_gpt").freeze
