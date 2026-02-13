@@ -453,11 +453,11 @@ class AgentExecutor
 
   def timeout_exemption_message(pid)
     if test_runner_running?(pid)
-      name = TestRunnerDetector.matched_runner_name(pid)
+      name = TestRunnerDetector.matched_runner_name(pid) || 'test runner'
       return "⚠️  Test runner detected (#{name}), disabling timeout"
     end
     if long_build_running?(pid)
-      name = LongBuildDetector.matched_build_name(pid)
+      name = LongBuildDetector.matched_build_name(pid) || 'build'
       return "⚠️  Long build detected (#{name}), disabling timeout"
     end
 
