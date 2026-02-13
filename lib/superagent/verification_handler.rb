@@ -167,6 +167,9 @@ class VerificationHandler
       Multiple requests in one run:
       The implementation may have addressed multiple requests in a single run. When "Other requests that may have been in scope" are listed, treat changes that clearly fulfill those requests as requested. Only respond NO when the diff introduces changes that are not requested by the current request nor by any of the other listed requests. Do not treat changes that fulfill other listed requests as unrequested.
 
+      Autonomous verification (no post-fix user feedback):
+      You do not receive feedback from the user after the implementation. Do not respond NO solely because the request text sounds like a complaint (e.g. "X is still present" or "fix did not work"). That text is the pre-fix request. Base your verdict only on the code and diff: if the changes appear to fully address the request and the code quality is acceptable, respond YES. Respond NO only when the code clearly fails to implement the request or has obvious defects.
+
       Available information:
       - Current user request
       - Other requests that may have been in scope for this implementation (if listed)
