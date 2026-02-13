@@ -7,9 +7,9 @@ class Superagent
   # Single source for model queue. @-mention hints (tags) resolve in RequestPreparer: exact match, then word-boundary.
   MODELS = %w[
     auto
+    composer-1.5
     grok
     gemini-3-flash
-    composer-1
     sonnet-4.5
     opus-4.5
     sonnet-4.5-thinking
