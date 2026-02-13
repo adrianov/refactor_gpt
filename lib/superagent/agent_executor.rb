@@ -143,7 +143,7 @@ class AgentExecutor
 
     @state_mutex.synchronize do
       @state = { detected: false, complete: false, pid: nil, disabled: false, timed_out: false, last_chunk: nil,
-                 start: nil, queue_prompt_active: false }
+                 start: nil, queue_prompt_active: false, shell_tool_has_timeout: false }
     end
     monitor_thread = start_monitor_thread
     timeout_thread = start_timeout_thread
@@ -286,7 +286,29 @@ class AgentExecutor
 
   def record_tool_outcome(tool)
     record_tool_used(tool)
+    update_shell_tool_timeout_state(tool)
     on_tool_completed(tool) if (tool[:subtype] || tool['subtype']).to_s == 'completed'
+  end
+
+  # When a shell tool is invoked with its own timeout param, do not enforce our execution timeout until it completes.
+  def update_shell_tool_timeout_state(tool)
+    return unless tool && @state_mutex.synchronize { @state && !@state[:timed_out] }
+
+    new_value = shell_tool_timeout_state_value(tool)
+    return if new_value.nil?
+
+    @state_mutex.synchronize { @state[:shell_tool_has_timeout] = new_value if @state }
+  end
+
+  def shell_tool_timeout_state_value(tool)
+    return nil unless tool[:name]&.to_s&.match?(/^(shell|run|execute|command)/i)
+
+    args = tool[:arguments] || tool['arguments']
+    completed = (tool[:subtype] || tool['subtype']).to_s == 'completed'
+    return false if completed
+    return true if args.is_a?(Hash) && (args.key?('timeout') || args.key?(:timeout))
+
+    nil
   end
 
   def reset_run_tool_state
@@ -446,11 +468,11 @@ class AgentExecutor
     Thread.new do
       loop do
         sleep TEST_RUNNER_CHECK_INTERVAL
-        complete, disabled, pid = @state_mutex.synchronize do
-          [@state[:complete], @state[:disabled], @state[:pid]]
+        complete, disabled, shell_has_timeout, pid = @state_mutex.synchronize do
+          [@state[:complete], @state[:disabled], @state[:shell_tool_has_timeout], @state[:pid]]
         end
         break if complete
-        next if disabled || (pid && (test_runner_running?(pid) || long_build_running?(pid)))
+        next if disabled || shell_has_timeout || (pid && (test_runner_running?(pid) || long_build_running?(pid)))
         check_timeouts
       end
     end
