@@ -77,18 +77,20 @@ class DiffProcessor
     sorted_files_size, skipped_count)
     status = file_statuses[file_path] || "??"
     is_new_file = status.match?(/^A/) || status == "??"
+    code_file = code_file?(file_path)
     diff_size = diff_content.bytesize
 
     if diff_size > max_bytes
-      return handle_oversized_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs,
+      return handle_oversized_diff(is_new_file, code_file, diff_content, current_size, max_bytes, included_diffs,
         skipped_count)
     end
 
-    handle_normal_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs, sorted_files_size,
-      skipped_count)
+    handle_normal_diff(is_new_file, code_file, diff_content, current_size, max_bytes, included_diffs,
+      sorted_files_size, skipped_count)
   end
 
-  def handle_oversized_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs, skipped_count)
+  def handle_oversized_diff(is_new_file, code_file, diff_content, current_size, max_bytes, included_diffs,
+    skipped_count)
     remaining = max_bytes - current_size
     return [current_size, skipped_count + 1, false] if remaining <= 0
 
@@ -96,33 +98,34 @@ class DiffProcessor
     if compacted && compacted.bytesize <= remaining
       included_diffs << compacted
       [current_size + compacted.bytesize, skipped_count, false]
-    elsif try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes, included_diffs)
+    elsif try_include_truncated(is_new_file || code_file, diff_content, current_size, max_bytes, included_diffs)
       [included_diffs.sum { |d| d.bytesize }, skipped_count, false]
     else
       [current_size, skipped_count + 1, false]
     end
   end
 
-  def handle_normal_diff(is_new_file, diff_content, current_size, max_bytes, included_diffs, sorted_files_size,
-    skipped_count)
+  def handle_normal_diff(is_new_file, code_file, diff_content, current_size, max_bytes, included_diffs,
+    sorted_files_size, skipped_count)
     if current_size + diff_content.bytesize <= max_bytes
       included_diffs << diff_content
       current_size += diff_content.bytesize
       [current_size, skipped_count, nil]
     else
       [current_size, skipped_count, true].tap do |result|
-        result[0] = handle_remaining_space(is_new_file, diff_content, current_size, max_bytes, included_diffs)
+        result[0] = handle_remaining_space(is_new_file, code_file, diff_content, current_size, max_bytes,
+          included_diffs)
         result[1] += sorted_files_size - included_diffs.size - result[1]
       end
     end
   end
 
-  def handle_remaining_space(is_new_file, diff_content, current_size, max_bytes, included_diffs)
+  def handle_remaining_space(is_new_file, code_file, diff_content, current_size, max_bytes, included_diffs)
     remaining = max_bytes - current_size
     return current_size if remaining <= 0
 
-    if is_new_file
-      try_include_truncated_new_file(true, diff_content, current_size, max_bytes, included_diffs)
+    if is_new_file || code_file
+      try_include_truncated(true, diff_content, current_size, max_bytes, included_diffs)
       included_diffs.sum { |d| d.bytesize }
     else
       compacted = @compactor.compact(diff_content, remaining)
@@ -135,9 +138,8 @@ class DiffProcessor
     end
   end
 
-  def try_include_truncated_new_file(is_new_file, diff_content, current_size, max_bytes,
-    included_diffs)
-    return false unless is_new_file && current_size < max_bytes
+  def try_include_truncated(allow_truncate, diff_content, current_size, max_bytes, included_diffs)
+    return false unless allow_truncate && current_size < max_bytes
 
     remaining = max_bytes - current_size
     truncated = truncate_file_diff(diff_content, remaining)
@@ -145,6 +147,10 @@ class DiffProcessor
 
     included_diffs << truncated
     true
+  end
+
+  def code_file?(file_path)
+    CODE_EXTENSIONS.include?(File.extname(file_path).to_s.downcase)
   end
 
   def truncate_file_diff(diff_content, max_bytes)

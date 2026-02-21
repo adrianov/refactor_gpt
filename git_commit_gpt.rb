@@ -233,6 +233,41 @@ def merge_excluded_by_path(pre_excluded, plan_excluded)
   end
 end
 
+TRUNCATION_REASON = /truncat|incomplete|cannot analyze/i
+
+def code_file_excluded_for_truncation?(entry, code_exts)
+  path = entry["path"].to_s
+  return false if path.empty?
+
+  code_exts.include?(File.extname(path).downcase) && entry["reason"].to_s.match?(TRUNCATION_REASON)
+end
+
+def partition_truncation_excluded(excluded, code_exts)
+  to_reinclude, kept = excluded.partition { |e| code_file_excluded_for_truncation?(e, code_exts) }
+  paths = to_reinclude.map { |e| e["path"].to_s }.reject(&:empty?)
+  [kept, paths]
+end
+
+def reinclude_code_files_excluded_for_truncation(result)
+  excluded = result["excluded_files"] || []
+  commits = result["commits"] || []
+  return if excluded.empty? || commits.empty?
+
+  code_exts = DiffProcessor::CODE_EXTENSIONS
+  kept, paths = partition_truncation_excluded(excluded, code_exts)
+  return if paths.empty?
+
+  result["excluded_files"] = kept
+  append_paths_to_last_commit(commits, paths)
+end
+
+def append_paths_to_last_commit(commits, paths)
+  return if paths.empty?
+
+  last = commits.last
+  last["files"] = Array(last["files"]) + paths
+end
+
 def call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
   client = CommitPlanClient.new(debug: debug_mode)
   file_paths = extract_porcelain_filenames(status_output)
@@ -276,6 +311,7 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
   return nil if result.nil?
 
   result["excluded_files"] = merge_excluded_by_path(pre_excluded, result["excluded_files"] || [])
+  reinclude_code_files_excluded_for_truncation(result)
   result["status_output"] = status_output
   result
 end

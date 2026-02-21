@@ -246,6 +246,7 @@ class CommitPlanClient
           - Never truncate or modify file paths - always use the complete filename including extensions
           - Prefer coherent commits over many tiny ones
         - **File Exclusion Rules**:
+          - **Do not exclude source code for truncation**: Never put source code files (e.g. .c, .h, .mm, .rb, .py, .js, .swift) in excluded_files solely because the diff was truncated or incomplete. Include them in the appropriate commit(s) using the partial diff when present.
           - **schema.rb**: Exclude from commits if there are no database migration files in the changeset. Migration files are typically in `db/migrate/` directory with timestamps.
           - **Temporary and debug files**: Exclude from commits if changes are clearly temporary or debug-only, such as:
             - Files in `tmp/` directory
