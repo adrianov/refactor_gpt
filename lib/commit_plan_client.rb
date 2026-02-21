@@ -10,7 +10,6 @@ class CommitPlanClient
   def initialize(model: nil, debug: false)
     @client = OpenAiClient.new(model: model, debug: debug,
       progress_title: "Planning commits".cyan)
-    @diff_processor = DiffProcessor.new
   end
 
   def ask(prompts, json: false)
@@ -48,7 +47,7 @@ class CommitPlanClient
 
   private
 
-  MAX_CONTENT_SIZE_KB = 100
+  MAX_CONTENT_SIZE_KB = 200
 
   def append_section(parts, current_size_bytes, max_size_bytes, text)
     return current_size_bytes if text.empty? || current_size_bytes + text.bytesize > max_size_bytes
@@ -68,18 +67,31 @@ class CommitPlanClient
       "Here is the git status:\n\n#{status_output}\n")
   end
 
-  def append_diff_section(parts, current_size_bytes, max_size_bytes, diff_output, status_output)
+  def append_diff_section(parts, current_size_bytes, max_size_bytes, diff_output)
     diff_text = "Here is the git diff for all changes:\n\n"
     remaining = max_size_bytes - current_size_bytes - diff_text.bytesize
-    if remaining > 0
-      sorted_diff = @diff_processor.build_sorted_diff(diff_output, status_output, remaining)
-      diff_text += sorted_diff
-      parts << diff_text
-      current_size_bytes + diff_text.bytesize
-    else
+    if remaining <= 0
       parts << "#{diff_text}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_KB} KB limit)\n"
-      current_size_bytes
+      return current_size_bytes
     end
+    truncated = truncate_diff_at_newline(diff_output, remaining)
+    diff_text += truncated
+    if truncated.bytesize < diff_output.bytesize
+      diff_text += "\n\n... (diff truncated at #{MAX_CONTENT_SIZE_KB} KB limit)\n"
+    end
+    parts << diff_text
+    current_size_bytes + diff_text.bytesize
+  end
+
+  def truncate_diff_at_newline(diff_output, max_bytes)
+    return "" if max_bytes <= 0
+    return diff_output if diff_output.bytesize <= max_bytes
+
+    slice = diff_output.byteslice(0, max_bytes)
+    last_newline = slice.rindex("\n")
+    return diff_output.byteslice(0, last_newline + 1) unless last_newline.nil?
+
+    slice
   end
 
   def append_commits_section(parts, current_size_bytes, max_size_bytes, recent_commits)
@@ -104,8 +116,7 @@ class CommitPlanClient
 
     current_size_bytes = append_status_section(content_parts, current_size_bytes, max_size_bytes, status_output)
 
-    current_size_bytes = append_diff_section(content_parts, current_size_bytes, max_size_bytes, diff_output,
-      status_output)
+    current_size_bytes = append_diff_section(content_parts, current_size_bytes, max_size_bytes, diff_output)
 
     current_size_bytes = append_commits_section(content_parts, current_size_bytes, max_size_bytes, recent_commits)
 

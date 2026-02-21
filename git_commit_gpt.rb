@@ -174,17 +174,10 @@ end
 
 def prepare_untracked_files
   all_untracked = `git ls-files --others --exclude-standard`.split("\n")
-  additional_exclusions = [
-    "*.log", "*.tmp", "*.temp", "*.bak", "*.swp", "*.swo",
-    "*.pyc", "*.pyo", "*.class", "*.jar", "*.war", "*.ear",
-    "*.zip", "*.tar.gz", "*.tgz", "*.rar", "*.exe", "*.dll",
-    "*.so", "*.dylib", "*.bin", "*.dat", "*.orig", "*.rej",
-    ".DS_Store", "Thumbs.db"
-  ]
-  files_to_add = all_untracked.reject do |file|
-    additional_exclusions.any? { |pattern| File.fnmatch(pattern, File.basename(file)) }
+  code_exts = DiffProcessor::CODE_EXTENSIONS
+  files_to_add = all_untracked.select do |path|
+    code_exts.include?(File.extname(path).downcase)
   end
-
   return if files_to_add.empty?
 
   add_cmd = ["git", "add", "-N", *files_to_add].map { |p| Shellwords.escape(p) }.join(" ")
@@ -208,7 +201,7 @@ def show_git_diff_if_needed(show_diff, recent_commands)
 end
 
 def get_diff_output
-  diff_output = `git diff -U500`
+  diff_output = `git diff -U50`
   unless $?.success?
     warn "Failed to capture diff for analysis".red
     exit 1
