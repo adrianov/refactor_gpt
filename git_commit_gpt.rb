@@ -173,14 +173,10 @@ def current_model_display(debug_mode)
 end
 
 def prepare_untracked_files
-  all_untracked = `git ls-files --others --exclude-standard`.split("\n")
-  code_exts = DiffProcessor::CODE_EXTENSIONS
-  files_to_add = all_untracked.select do |path|
-    code_exts.include?(File.extname(path).downcase)
-  end
-  return if files_to_add.empty?
+  all_untracked = `git ls-files --others --exclude-standard`.split("\n").reject(&:empty?)
+  return if all_untracked.empty?
 
-  add_cmd = ["git", "add", "-N", *files_to_add].map { |p| Shellwords.escape(p) }.join(" ")
+  add_cmd = ["git", "add", "-N", *all_untracked].map { |p| Shellwords.escape(p) }.join(" ")
   puts "Running: #{add_cmd}".green
   system("#{add_cmd} 2>/dev/null")
 end
@@ -207,23 +203,6 @@ def get_diff_output
     exit 1
   end
   diff_output
-end
-
-def build_filtered_diff(diff_output, pre_excluded)
-  return diff_output if pre_excluded.empty?
-
-  excluded_paths = pre_excluded.map { |h| h["path"] }
-  DiffProcessor.new.diff_without_paths(diff_output, excluded_paths)
-end
-
-def merge_excluded_by_path(pre_excluded, plan_excluded)
-  seen = {}
-  (pre_excluded + plan_excluded).each_with_object([]) do |entry, out|
-    path = entry["path"].to_s
-    next if path.empty? || seen[path]
-    seen[path] = true
-    out << entry
-  end
 end
 
 def code_file_excluded?(entry, code_exts)
@@ -261,11 +240,7 @@ end
 
 def call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
   client = CommitPlanClient.new(debug: debug_mode)
-  file_paths = extract_porcelain_filenames(status_output)
-  pre_excluded = client.assess_files_to_exclude(file_paths, cli_hint)
-  filtered_diff = build_filtered_diff(diff_output, pre_excluded)
-  plan = client.commit_plan(status_output, filtered_diff, cli_hint, recent_commits, recent_commands)
-  [plan, pre_excluded]
+  client.commit_plan(status_output, diff_output, cli_hint, recent_commits, recent_commands)
 end
 
 def extract_plan_results(plan, status_output)
@@ -296,12 +271,10 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
   prepare_untracked_files
   show_git_diff_if_needed(show_diff, recent_commands)
   diff_output = get_diff_output
-  plan, pre_excluded = call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits,
-    recent_commands)
+  plan = call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
   result = extract_plan_results(plan, status_output)
   return nil if result.nil?
 
-  result["excluded_files"] = merge_excluded_by_path(pre_excluded, result["excluded_files"] || [])
   reinclude_excluded_code_files(result)
   result["status_output"] = status_output
   result
