@@ -233,22 +233,20 @@ def merge_excluded_by_path(pre_excluded, plan_excluded)
   end
 end
 
-TRUNCATION_REASON = /truncat|incomplete|cannot analyze/i
-
-def code_file_excluded_for_truncation?(entry, code_exts)
+def code_file_excluded?(entry, code_exts)
   path = entry["path"].to_s
   return false if path.empty?
 
-  code_exts.include?(File.extname(path).downcase) && entry["reason"].to_s.match?(TRUNCATION_REASON)
+  code_exts.include?(File.extname(path).downcase)
 end
 
 def partition_truncation_excluded(excluded, code_exts)
-  to_reinclude, kept = excluded.partition { |e| code_file_excluded_for_truncation?(e, code_exts) }
+  to_reinclude, kept = excluded.partition { |e| code_file_excluded?(e, code_exts) }
   paths = to_reinclude.map { |e| e["path"].to_s }.reject(&:empty?)
   [kept, paths]
 end
 
-def reinclude_code_files_excluded_for_truncation(result)
+def reinclude_excluded_code_files(result)
   excluded = result["excluded_files"] || []
   commits = result["commits"] || []
   return if excluded.empty? || commits.empty?
@@ -311,7 +309,7 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
   return nil if result.nil?
 
   result["excluded_files"] = merge_excluded_by_path(pre_excluded, result["excluded_files"] || [])
-  reinclude_code_files_excluded_for_truncation(result)
+  reinclude_excluded_code_files(result)
   result["status_output"] = status_output
   result
 end
