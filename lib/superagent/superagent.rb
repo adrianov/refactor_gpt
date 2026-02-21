@@ -10,9 +10,9 @@ class Superagent
     composer-1.5
     grok
     gemini-3-flash
-    sonnet-4.5
+    sonnet-4.6
     opus-4.5
-    sonnet-4.5-thinking
+    sonnet-4.6-thinking
     opus-4.5-thinking
   ].freeze
   MODELS_AUTO_ONLY = Array.new(5, MODELS.first).freeze

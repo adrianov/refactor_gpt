@@ -13,7 +13,7 @@ module LlmRouter
   OPENAI_PREFIX = /^(gpt-|composer-|dall-e)/i
   GEMINI_PREFIX = /^gemini-/i
 
-  DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-5'
+  DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6'
   DEFAULT_OPENAI_MODEL = 'gpt-5-nano'
   DEFAULT_GEMINI_MODEL = 'gemini-3-flash'
 

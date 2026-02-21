@@ -10,14 +10,14 @@ class TestRequestPreparer < Minitest::Test
 
   def test_extract_model_index_exact_tag
     assert_equal 0, RequestPreparer.extract_model_index('@auto fix bug', models)
-    assert_equal 1, RequestPreparer.extract_model_index('use @grok', models)
+    assert_equal 2, RequestPreparer.extract_model_index('use @grok', models)
   end
 
   def test_extract_model_index_word_boundary_tag
     assert_equal 4, RequestPreparer.extract_model_index('@sonnet refactor', models)
     assert_equal 5, RequestPreparer.extract_model_index('@opus please', models)
-    assert_equal 3, RequestPreparer.extract_model_index('@composer help', models)
-    assert_equal 2, RequestPreparer.extract_model_index('@gemini task', models)
+    assert_equal 1, RequestPreparer.extract_model_index('@composer help', models)
+    assert_equal 3, RequestPreparer.extract_model_index('@gemini task', models)
   end
 
   def test_extract_model_index_standalone_word_ignored

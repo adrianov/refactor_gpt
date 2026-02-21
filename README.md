@@ -40,7 +40,7 @@ A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring
 
    **Unified model names:**
    ```
-   MODEL=claude-sonnet-4-5
+   MODEL=claude-sonnet-4-6
    TECHNICAL_MODEL=claude-haiku-4-5
    IMAGE_MODEL=gemini-2.0-flash-exp
    ```
