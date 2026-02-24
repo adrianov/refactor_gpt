@@ -16,13 +16,13 @@ class CommitPlanClient
     @client.ask(prompts, json: json)
   end
 
-  def commit_plan(status_output, diff_output, cli_hint, recent_commits,
+  def commit_plan(status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits,
     recent_commands)
     messages = [
       {role: "system", content: system_instruction},
       {role: "user",
-       content: build_user_content(status_output, diff_output, cli_hint, recent_commits,
-         recent_commands)}
+       content: build_user_content(status_output, mr_diff_output, uncommitted_diff_output, cli_hint,
+         recent_commits, recent_commands)}
     ]
     payload_size_kb = calculate_payload_size(messages)
     raw_response = ask(messages, json: true)
@@ -51,8 +51,10 @@ class CommitPlanClient
       "Here is the git status:\n\n#{status_output}\n")
   end
 
-  def append_diff_section(parts, current_size_bytes, max_size_bytes, diff_output)
-    diff_text = "Here is the git diff for all changes:\n\n"
+  def append_labeled_diff_section(parts, current_size_bytes, max_size_bytes, label, diff_output)
+    return current_size_bytes if diff_output.to_s.strip.empty?
+
+    diff_text = "#{label}\n\n"
     remaining = max_size_bytes - current_size_bytes - diff_text.bytesize
     if remaining <= 0
       parts << "#{diff_text}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_KB} KB limit)\n"
@@ -90,20 +92,25 @@ class CommitPlanClient
       "(most recent last):\n\n#{recent_commands}\n")
   end
 
-  def build_user_content(status_output, diff_output, cli_hint, recent_commits,
+  def build_user_content(status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits,
     recent_commands)
     content_parts = []
     current_size_bytes = 0
     max_size_bytes = MAX_CONTENT_SIZE_KB * 1024
 
     current_size_bytes = append_hint_section(content_parts, current_size_bytes, max_size_bytes, cli_hint)
-
     current_size_bytes = append_status_section(content_parts, current_size_bytes, max_size_bytes, status_output)
-
-    current_size_bytes = append_diff_section(content_parts, current_size_bytes, max_size_bytes, diff_output)
-
+    current_size_bytes = append_labeled_diff_section(
+      content_parts, current_size_bytes, max_size_bytes,
+      "(1) Current MR — committed changes vs origin/HEAD (git diff origin/HEAD...):",
+      mr_diff_output
+    )
+    current_size_bytes = append_labeled_diff_section(
+      content_parts, current_size_bytes, max_size_bytes,
+      "(2) Uncommitted changes (git diff):",
+      uncommitted_diff_output
+    )
     current_size_bytes = append_commits_section(content_parts, current_size_bytes, max_size_bytes, recent_commits)
-
     append_commands_section(content_parts, current_size_bytes, max_size_bytes, recent_commands)
 
     content_parts.join("\n")
@@ -147,7 +154,8 @@ class CommitPlanClient
 
       Input:
       - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
-      - unified git diff for all changes (including new files)
+      - (1) Current MR: unified diff of committed changes vs origin/HEAD (`git diff origin/HEAD...`)
+      - (2) Uncommitted changes: unified diff of working tree vs index (`git diff`; includes new files after `git add -N`)
       - optional user-provided hints or preferences from the command line
       - last 15 git commit one-line messages to help you match existing style
       - last 5 shell commands from the user's terminal history to give you extra context

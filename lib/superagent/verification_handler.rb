@@ -6,6 +6,8 @@
 class VerificationHandler
   include AgentsFileHandler
 
+  MAX_VERIFICATION_DIFF_KB = 200
+
   # Refactor-stage prompt: intro line. Refactor runs after implementation.
   REFACTOR_STEP_INTRO = 'Refactor changed files: improve structure (e.g. split or simplify) while preserving behavior.'
   # Refactor-stage "You must:" bullets (guideline added in build_refactor_prompt). Edit wording for humans/LLMs.
@@ -174,6 +176,8 @@ class VerificationHandler
       - Current user request
       - Other requests that may have been in scope for this implementation (if listed)
       - Final summary/response from the previous agent run that attempted to implement the feature
+      - (1) Current MR: unified diff of committed changes vs origin/HEAD (git diff origin/HEAD...), when in a git repo with remote
+      - (2) Uncommitted changes: unified diff of working tree (git diff), when in a git repo
 
       Verification approach:
       - Review the previous agent's response to understand what was implemented
@@ -199,16 +203,29 @@ class VerificationHandler
   # previous_agent_response: NDJSON type=result content when present (current_recap_text), else full output.
   # additional_requests: optional array of { type:, text: } (other requests in scope for this implementation).
   def build_verification_user_content(user_request, previous_agent_response, additional_requests: nil)
+    content_parts = verification_content_base_parts(user_request, previous_agent_response, additional_requests)
+    append_verification_diffs(content_parts)
+    content_parts.map { |p| to_utf8(p) }.join("\n")
+  end
+
+  def verification_content_base_parts(user_request, previous_agent_response, additional_requests)
     req_utf8 = to_utf8(user_request)
     prev_embedded = agent_response_for_verification_content(previous_agent_response)
-    content_parts = []
-    content_parts << "Current user request: #{req_utf8}\n\n"
+    parts = []
+    parts << "Current user request: #{req_utf8}\n\n"
     other_section = format_other_requests_section(additional_requests)
-    content_parts << "#{other_section}\n\n" if other_section && !other_section.empty?
-    if prev_embedded && !prev_embedded.empty?
-      content_parts << "Final response from previous agent run:\n#{prev_embedded}\n"
-    end
-    content_parts.map { |p| to_utf8(p) }.join("\n")
+    parts << "#{other_section}\n\n" if other_section && !other_section.empty?
+    parts << "Final response from previous agent run:\n#{prev_embedded}\n" if prev_embedded && !prev_embedded.empty?
+    parts
+  end
+
+  def append_verification_diffs(content_parts)
+    diff_budget = MAX_VERIFICATION_DIFF_KB * 1024
+    size = 0
+    size = append_verification_diff_section(content_parts, size, diff_budget,
+      "(1) Current MR — committed changes vs origin/HEAD (git diff origin/HEAD...):", mr_diff_output)
+    append_verification_diff_section(content_parts, size, diff_budget,
+      "(2) Uncommitted changes (git diff):", uncommitted_diff_output)
   end
 
   def format_other_requests_section(additional_requests)
@@ -364,7 +381,49 @@ additional_requests: additional_requests)
     s.valid_encoding? ? s : s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
   end
 
+  def mr_diff_output
+    out = `git diff origin/HEAD... -U50 2>#{File::NULL}`.strip
+    $?.success? ? out : ''
+  end
+
+  def uncommitted_diff_output
+    out = `git diff -U50 2>#{File::NULL}`.strip
+    $?.success? ? out : ''
+  end
+
+  def append_verification_diff_section(parts, current_size_bytes, max_size_bytes, label, diff_output)
+    return current_size_bytes if diff_output.to_s.strip.empty?
+
+    diff_header = "#{label}\n\n"
+    remaining = max_size_bytes - current_size_bytes - diff_header.bytesize
+    if remaining <= 0
+      parts << "#{diff_header}(Diff truncated: exceeds #{MAX_VERIFICATION_DIFF_KB} KB limit)\n"
+      return current_size_bytes
+    end
+    truncated = truncate_diff_at_newline(diff_output, remaining)
+    diff_text = diff_header + truncated
+    if truncated.bytesize < diff_output.bytesize
+      diff_text += "\n\n... (diff truncated at #{MAX_VERIFICATION_DIFF_KB} KB limit)\n"
+    end
+    parts << diff_text
+    current_size_bytes + diff_text.bytesize
+  end
+
+  def truncate_diff_at_newline(diff_output, max_bytes)
+    return '' if max_bytes <= 0
+    return diff_output if diff_output.bytesize <= max_bytes
+
+    slice = diff_output.byteslice(0, max_bytes)
+    last_newline = slice.rindex("\n")
+    return diff_output.byteslice(0, last_newline + 1) unless last_newline.nil?
+
+    slice
+  end
+
   private :verification_response_for_parsing, :line_based_verdict, :whole_text_verdict, :to_utf8,
-          :incomplete_verification_output?, :format_other_requests_section
+          :incomplete_verification_output?, :format_other_requests_section,
+          :verification_content_base_parts, :append_verification_diffs,
+          :mr_diff_output, :uncommitted_diff_output, :append_verification_diff_section,
+          :truncate_diff_at_newline
 
 end

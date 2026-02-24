@@ -196,13 +196,18 @@ def show_git_diff_if_needed(show_diff, recent_commands)
   puts
 end
 
-def get_diff_output
-  diff_output = `git diff -U50`
+def get_mr_diff_output
+  out = `git diff origin/HEAD... -U50 2>/dev/null`
+  $?.success? ? out : ""
+end
+
+def get_uncommitted_diff_output
+  out = `git diff -U50`
   unless $?.success?
-    warn "Failed to capture diff for analysis".red
+    warn "Failed to capture uncommitted diff for analysis".red
     exit 1
   end
-  diff_output
+  out
 end
 
 def code_file_excluded?(entry, code_exts)
@@ -238,9 +243,10 @@ def append_paths_to_last_commit(commits, paths)
   last["files"] = Array(last["files"]) + paths
 end
 
-def call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
+def call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits, 
+recent_commands)
   client = CommitPlanClient.new(debug: debug_mode)
-  client.commit_plan(status_output, diff_output, cli_hint, recent_commits, recent_commands)
+  client.commit_plan(status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits, recent_commands)
 end
 
 def extract_plan_results(plan, status_output)
@@ -270,8 +276,10 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
 
   prepare_untracked_files
   show_git_diff_if_needed(show_diff, recent_commands)
-  diff_output = get_diff_output
-  plan = call_openai_for_plan(debug_mode, status_output, diff_output, cli_hint, recent_commits, recent_commands)
+  mr_diff_output = get_mr_diff_output
+  uncommitted_diff_output = get_uncommitted_diff_output
+  plan = call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint, 
+recent_commits, recent_commands)
   result = extract_plan_results(plan, status_output)
   return nil if result.nil?
 
