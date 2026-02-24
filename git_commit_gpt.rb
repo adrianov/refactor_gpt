@@ -192,7 +192,12 @@ def show_git_diff_if_needed(show_diff, recent_commands)
   return unless show_diff
   return if recent_commands.lines.last&.include?("git diff")
 
-  system("git diff")
+  mb = `git merge-base origin/HEAD HEAD 2>/dev/null`.strip
+  has_mb = mb != "" && $?.success?
+  cmd = has_mb ? "git diff #{Shellwords.escape(mb)} -U50" : "git diff -U50"
+  label = has_mb ? "git diff $(git merge-base origin/HEAD HEAD)" : "git diff -U50"
+  puts label.cyan
+  system(cmd)
   puts
 end
 

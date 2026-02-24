@@ -250,7 +250,7 @@ class VerificationHandler
     diff_budget = MAX_VERIFICATION_DIFF_KB * 1024
     size = 0
     size = append_verification_diff_section(content_parts, size, diff_budget,
-      "(1) Current MR — committed changes vs origin/HEAD (git diff origin/HEAD...):", mr_diff_output)
+      "(1) Current MR — committed vs origin/HEAD (git diff origin/HEAD...):", mr_diff_output)
     append_verification_diff_section(content_parts, size, diff_budget,
       "(2) Uncommitted changes (git diff):", uncommitted_diff_output)
   end

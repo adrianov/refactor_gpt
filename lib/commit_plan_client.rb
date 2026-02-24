@@ -102,7 +102,7 @@ class CommitPlanClient
     current_size_bytes = append_status_section(content_parts, current_size_bytes, max_size_bytes, status_output)
     current_size_bytes = append_labeled_diff_section(
       content_parts, current_size_bytes, max_size_bytes,
-      "(1) Current MR — committed changes vs origin/HEAD (git diff origin/HEAD...):",
+      "(1) Current MR — committed vs origin/HEAD (git diff origin/HEAD...):",
       mr_diff_output
     )
     current_size_bytes = append_labeled_diff_section(
