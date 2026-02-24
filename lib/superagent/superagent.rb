@@ -251,7 +251,7 @@ class Superagent
     RequestPreparer.extract_model_index(raw_text, models)
   end
 
-  # Model tier from applied_fixes_count. Same for continuation and new request.
+  # Model tier from applied_fixes_count (continuation only; new session uses 0).
   def resolve_start_index(request_model_index, _start_model_index, continuation:, current_model_index:,
                           applied_fixes_count: 0)
     tier = [(applied_fixes_count / STEPS_PER_MODEL), models.size - 1].min
@@ -486,9 +486,14 @@ class Superagent
     run(start_model_index: start_index, request: new_req, continuation_analysis: analysis)
   end
 
-  def start_index_for_new_request(analysis, model_index)
+  def applied_fixes_for_analysis(analysis)
     session = @session_tracker.session_for_continuation_analysis(analysis[:description])
-    applied = session ? @session_tracker.applied_fixes_for_session(session) : 0
+    session ? @session_tracker.applied_fixes_for_session(session) : 0
+  end
+
+  # New sessions (CONTINUATION: NEW) must start from first model; only continuations use session applied_fixes tier.
+  def start_index_for_new_request(analysis, model_index)
+    applied = analysis[:continuation] ? applied_fixes_for_analysis(analysis) : 0
     idx = resolve_start_index(
       model_index, 0,
       continuation: analysis[:continuation], current_model_index: @current_model_index,
