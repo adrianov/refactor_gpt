@@ -32,6 +32,10 @@ class CommitPlanClient
   private
 
   MAX_CONTENT_SIZE_KB = 200
+  MAX_DIFF_CONTEXT_LINES = 500
+  DIFF_CONTEXT_MIN = 1
+  # Bytes reserved for both diffs combined; rest of MAX_CONTENT_SIZE_KB for status, commits, commands, labels.
+  DIFF_BUDGET_KB = 150
 
   def append_section(parts, current_size_bytes, max_size_bytes, text)
     return current_size_bytes if text.empty? || current_size_bytes + text.bytesize > max_size_bytes

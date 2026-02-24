@@ -188,31 +188,35 @@ def check_for_changes(status_output)
   false
 end
 
-def show_git_diff_if_needed(show_diff, recent_commands)
+def show_git_diff_if_needed(show_diff, recent_commands, context_lines)
   return unless show_diff
   return if recent_commands.lines.last&.include?("git diff")
 
   mb = `git merge-base origin/HEAD HEAD 2>/dev/null`.strip
   has_mb = mb != "" && $?.success?
-  cmd = has_mb ? "git diff #{Shellwords.escape(mb)} -U50" : "git diff -U50"
-  label = has_mb ? "git diff $(git merge-base origin/HEAD HEAD)" : "git diff -U50"
+  cmd = has_mb ? "git diff #{Shellwords.escape(mb)} -U#{context_lines}" : "git diff -U#{context_lines}"
+  label = has_mb ? "git diff $(git merge-base origin/HEAD HEAD)" : "git diff -U#{context_lines}"
   puts label.cyan
   system(cmd)
   puts
 end
 
-def get_mr_diff_output
-  out = `git diff origin/HEAD... -U50 2>/dev/null`
-  $?.success? ? out : ""
-end
-
-def get_uncommitted_diff_output
-  out = `git diff -U50`
-  unless $?.success?
-    warn "Failed to capture uncommitted diff for analysis".red
-    exit 1
+# Returns [context_lines, mr_diff, uncommitted_diff] with context_lines in 1..MAX_DIFF_CONTEXT_LINES
+# so combined diff size fits in DIFF_BUDGET_KB.
+def fetch_diffs_with_context
+  budget = CommitPlanClient::DIFF_BUDGET_KB * 1024
+  u = CommitPlanClient::MAX_DIFF_CONTEXT_LINES
+  loop do
+    mr = `git diff origin/HEAD... -U#{u} 2>/dev/null`
+    unc = `git diff -U#{u} 2>/dev/null`
+    unless $?.success?
+      warn "Failed to capture uncommitted diff for analysis".red
+      exit 1
+    end
+    total = mr.bytesize + unc.bytesize
+    return [u, mr, unc] if total <= budget || u <= CommitPlanClient::DIFF_CONTEXT_MIN
+    u = (u * budget / total).clamp(CommitPlanClient::DIFF_CONTEXT_MIN, u - 1)
   end
-  out
 end
 
 def code_file_excluded?(entry, code_exts)
@@ -280,11 +284,10 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
   return nil unless check_for_changes(status_output)
 
   prepare_untracked_files
-  show_git_diff_if_needed(show_diff, recent_commands)
-  mr_diff_output = get_mr_diff_output
-  uncommitted_diff_output = get_uncommitted_diff_output
-  plan = call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint, 
-recent_commits, recent_commands)
+  context_lines, mr_diff_output, uncommitted_diff_output = fetch_diffs_with_context
+  show_git_diff_if_needed(show_diff, recent_commands, context_lines)
+  plan = call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint,
+    recent_commits, recent_commands)
   result = extract_plan_results(plan, status_output)
   return nil if result.nil?
 
