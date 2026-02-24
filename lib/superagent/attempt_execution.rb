@@ -13,9 +13,9 @@ module AttemptExecution
     @attempt_count_per_model = {} unless @session_continuation
     @pass_refactor_time = nil
     early_exit, highest_index_reached = execute_attempts_loop(req, start_index)
-    return if early_exit
-
+    # Always update so continuation starts at least at the level we reached (regression: early-exit used to skip this).
     @current_model_index = highest_index_reached
+    return if early_exit
   end
 
   def execute_attempts_loop(req, start_index)
