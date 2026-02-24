@@ -60,12 +60,14 @@ class VerificationHandler
     HEREDOC
   end
 
-  def build_refactor_prompt(req, triggering_files: [], shotgun_file_count: nil, shotgun_file_paths: nil)
-    if shotgun_file_count
-      build_shotgun_refactor_prompt(req, shotgun_file_count, shotgun_file_paths)
-    else
-      build_line_count_refactor_prompt(req, triggering_files)
-    end
+  def build_refactor_prompt(req, triggering_files: [], shotgun_file_count: nil, shotgun_file_paths: nil,
+                            changed_files: [], project_root: nil)
+    base = if shotgun_file_count
+             build_shotgun_refactor_prompt(req, shotgun_file_count, shotgun_file_paths)
+           else
+             build_line_count_refactor_prompt(req, triggering_files)
+           end
+    refactor_prompt_append_changed_files(base, changed_files, project_root)
   end
 
   def build_shotgun_refactor_prompt(req, file_count, file_paths)
@@ -90,6 +92,31 @@ class VerificationHandler
       You must:
       #{bullets}
     HEREDOC
+  end
+
+  def refactor_prompt_append_changed_files(base_prompt, changed_files, project_root)
+    return base_prompt if project_root.to_s.strip.empty? || changed_files.nil? || changed_files.empty?
+
+    paths = changed_files.filter_map { |e| e.is_a?(Hash) ? e[:path] : e.to_s }.compact.uniq
+    return base_prompt if paths.empty?
+
+    section = build_changed_files_full_content_section(paths, project_root)
+    section.empty? ? base_prompt : "#{base_prompt}\n\n#{section}"
+  end
+
+  def build_changed_files_full_content_section(paths, project_root)
+    root = project_root.to_s
+    parts = ["Changed files (full content):\n"]
+    paths.each do |rel_path|
+      full = File.join(root, rel_path)
+      next unless File.file?(full)
+
+      content = File.read(full)
+      parts << "\n--- #{rel_path} ---\n#{content}"
+    rescue SystemCallError
+      next
+    end
+    parts.size > 1 ? parts.join : ''
   end
 
   # Describes which changed files triggered this refactor step and why (line count >= threshold).
@@ -333,11 +360,13 @@ additional_requests: additional_requests)
     @refactor_output = nil
   end
 
-  def run_refactor(model, req, triggering_files: [], shotgun_file_count: nil, shotgun_file_paths: nil)
+  def run_refactor(model, req, triggering_files: [], changed_files: [], shotgun_file_count: nil,
+                   shotgun_file_paths: nil, project_root: nil)
     @refactor_output = nil
     refactor_prompt = build_refactor_prompt(req, triggering_files: triggering_files,
                                             shotgun_file_count: shotgun_file_count,
-                                            shotgun_file_paths: shotgun_file_paths)
+                                            shotgun_file_paths: shotgun_file_paths,
+                                            changed_files: changed_files, project_root: project_root)
     @display.puts "Refactoring: #{model}...".blue
     $stdout.puts ''
 
@@ -424,6 +453,7 @@ additional_requests: additional_requests)
           :incomplete_verification_output?, :format_other_requests_section,
           :verification_content_base_parts, :append_verification_diffs,
           :mr_diff_output, :uncommitted_diff_output, :append_verification_diff_section,
-          :truncate_diff_at_newline
+          :truncate_diff_at_newline,
+          :refactor_prompt_append_changed_files, :build_changed_files_full_content_section
 
 end

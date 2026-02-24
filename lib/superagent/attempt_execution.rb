@@ -71,8 +71,9 @@ module AttemptExecution
     return unless triggering.any? || shotgun_count
 
     shotgun_paths = shotgun_count ? changed.map { |e| e[:path] } : nil
-    run_refactor_step(model, req, triggering, shotgun_file_count: shotgun_count,
-                      shotgun_file_paths: shotgun_paths)
+    run_refactor_step(model, req, triggering, changed_files: changed,
+                      shotgun_file_count: shotgun_count, shotgun_file_paths: shotgun_paths,
+                      project_root: Dir.pwd)
   end
 
   # Runs implementation step only (agent run, no verification). Returns success, output, elapsed, reason.
@@ -191,14 +192,17 @@ module AttemptExecution
     @verification_handler.finalize_call_failed(h.verified, h.desc, h.review_time, h.raw_output) if exhausted
   end
 
-  def run_refactor_step(model, req, triggering_files = [], shotgun_file_count: nil, shotgun_file_paths: nil)
+  def run_refactor_step(model, req, triggering_files = [], changed_files: [], shotgun_file_count: nil,
+                        shotgun_file_paths: nil, project_root: nil)
     @pass_refactor_time = 0
     @session_tracker.append_to_request_history(RequestHistoryFormatter.refactor_entry(req), type: "refactor")
     update_terminal_title("Refactoring: #{model}")
     refactor_start = Time.now
     refactor_ok = @verification_handler.run_refactor(model, req, triggering_files: triggering_files,
+                                                     changed_files: changed_files,
                                                      shotgun_file_count: shotgun_file_count,
-                                                     shotgun_file_paths: shotgun_file_paths)
+                                                     shotgun_file_paths: shotgun_file_paths,
+                                                     project_root: project_root)
     @pass_refactor_time = (Time.now - refactor_start) if refactor_ok
     save_refactor_summary_if_present if refactor_ok
   end
