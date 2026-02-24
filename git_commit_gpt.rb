@@ -188,7 +188,7 @@ def check_for_changes(status_output)
   false
 end
 
-DIFF_OPTS = "-w -W"
+DIFF_OPTS = "-w -W --no-prefix --diff-algorithm=histogram"
 
 def show_git_diff_if_needed(show_diff, recent_commands)
   return unless show_diff
@@ -197,7 +197,7 @@ def show_git_diff_if_needed(show_diff, recent_commands)
   mb = `git merge-base origin/HEAD HEAD 2>/dev/null`.strip
   has_mb = mb != "" && $?.success?
   cmd = has_mb ? "git diff #{Shellwords.escape(mb)} #{DIFF_OPTS}" : "git diff #{DIFF_OPTS}"
-  label = has_mb ? "git diff $(git merge-base origin/HEAD HEAD)" : "git diff #{DIFF_OPTS}"
+  label = has_mb ? "git diff $(git merge-base origin/HEAD HEAD) #{DIFF_OPTS}" : "git diff #{DIFF_OPTS}"
   puts label.cyan
   system(cmd)
   puts

@@ -154,8 +154,8 @@ class CommitPlanClient
 
       Input:
       - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
-      - (1) Current MR: unified diff of committed changes vs origin/HEAD (`git diff origin/HEAD... -w -W`)
-      - (2) Uncommitted changes: unified diff of working tree vs index (`git diff -w -W`; includes new files after `git add -N`)
+      - (1) Current MR: unified diff of committed changes vs origin/HEAD (`git diff origin/HEAD... -w -W --no-prefix --diff-algorithm=histogram`)
+      - (2) Uncommitted changes: unified diff of working tree vs index (`git diff -w -W --no-prefix --diff-algorithm=histogram`; includes new files after `git add -N`)
       - optional user-provided hints or preferences from the command line
       - last 15 git commit one-line messages to help you match existing style
       - last 5 shell commands from the user's terminal history to give you extra context
