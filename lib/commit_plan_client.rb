@@ -32,10 +32,6 @@ class CommitPlanClient
   private
 
   MAX_CONTENT_SIZE_KB = 200
-  MAX_DIFF_CONTEXT_LINES = 500
-  DIFF_CONTEXT_MIN = 1
-  # Bytes reserved for both diffs combined; rest of MAX_CONTENT_SIZE_KB for status, commits, commands, labels.
-  DIFF_BUDGET_KB = 150
 
   def append_section(parts, current_size_bytes, max_size_bytes, text)
     return current_size_bytes if text.empty? || current_size_bytes + text.bytesize > max_size_bytes
@@ -158,8 +154,8 @@ class CommitPlanClient
 
       Input:
       - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
-      - (1) Current MR: unified diff of committed changes vs origin/HEAD (`git diff origin/HEAD...`)
-      - (2) Uncommitted changes: unified diff of working tree vs index (`git diff`; includes new files after `git add -N`)
+      - (1) Current MR: unified diff of committed changes vs origin/HEAD (`git diff origin/HEAD... -w -W`)
+      - (2) Uncommitted changes: unified diff of working tree vs index (`git diff -w -W`; includes new files after `git add -N`)
       - optional user-provided hints or preferences from the command line
       - last 15 git commit one-line messages to help you match existing style
       - last 5 shell commands from the user's terminal history to give you extra context

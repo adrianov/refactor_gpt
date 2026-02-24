@@ -411,12 +411,12 @@ additional_requests: additional_requests)
   end
 
   def mr_diff_output
-    out = `git diff origin/HEAD... -U50 2>#{File::NULL}`.strip
+    out = `git diff origin/HEAD... -w -W 2>#{File::NULL}`.strip
     $?.success? ? out : ''
   end
 
   def uncommitted_diff_output
-    out = `git diff -U50 2>#{File::NULL}`.strip
+    out = `git diff -w -W 2>#{File::NULL}`.strip
     $?.success? ? out : ''
   end
 
