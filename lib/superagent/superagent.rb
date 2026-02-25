@@ -11,9 +11,9 @@ class Superagent
     grok
     gemini-3-flash
     sonnet-4.6
-    opus-4.5
+    opus-4.6
     sonnet-4.6-thinking
-    opus-4.5-thinking
+    opus-4.6-thinking
   ].freeze
   MODELS_AUTO_ONLY = Array.new(5, MODELS.first).freeze
   STEPS_PER_MODEL = 2 # Requests 1-2 use model 1, 3-4 use model 2, etc.
@@ -259,9 +259,11 @@ class Superagent
     [[raw, 0].max, max_idx].min
   end
 
+  # New sessions must ignore previous session's applied_fixes; otherwise a retry of the same
+  # request would start from the 4th model (tier from prior run) instead of the first.
   def determine_start_index(model_index_from_request, start_model_index)
     @current_model_index = 0 unless @session_continuation
-    session = @session_tracker.session_for_continuation_analysis(@session_description)
+    session = @session_continuation ? @session_tracker.session_for_continuation_analysis(@session_description) : nil
     applied = session ? @session_tracker.applied_fixes_for_session(session) : 0
     session_highest = session ? @session_tracker.highest_model_index_for_session(session) : 0
     resolve_start_index(
@@ -357,11 +359,7 @@ class Superagent
     merged_list = @pending_queue.to_merged_requests_by_session(pending)
     @display.display_pending_list(merged_list)
     InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
-    unless InstanceLock.acquire_lock
-      msg = "Another instance is already running for this project (#{InstanceLock.project_base_name}). Exiting."
-      @display.puts msg.red
-      exit 1
-    end
+    return if acquire_lock_or_exit
     return if merged_list.empty?
 
     run_first_merged_and_prepend_rest(merged_list, previous_req)
@@ -415,12 +413,20 @@ class Superagent
 
   def prompt_after_read(raw_new_req, previous_req)
     return prompt_handle_reset(previous_req) if RequestReader.reset_command?(raw_new_req)
+    case prompt_next_action(raw_new_req)
+    when :quit then exit 0
+    when :loop then return prompt_for_new_request(previous_req)
+    else
+      prompt_save_history(raw_new_req)
+      @active_start = Time.now
+      prompt_execute_new_request(raw_new_req, previous_req)
+    end
+  end
 
-    prompt_save_history(raw_new_req) unless raw_new_req.nil? || raw_new_req.to_s.empty?
-    @active_start = Time.now
-    exit 0 if raw_new_req.nil? || raw_new_req.to_s.empty?
-
-    prompt_execute_new_request(raw_new_req, previous_req)
+  def prompt_next_action(raw_new_req)
+    return :quit if raw_new_req.nil? || raw_new_req.to_s.strip.empty?
+    return :quit if raw_new_req.to_s.strip == '/quit'
+    :execute
   end
 
   def prompt_handle_reset(previous_req)
@@ -445,14 +451,18 @@ class Superagent
     model_index = model_index_from_request_text(raw_new_req)
     new_req = RequestPreparer.sanitize_request(raw_new_req, models)
     return if new_req.nil? || new_req.to_s.empty?
+    return if acquire_lock_or_exit
 
-    unless InstanceLock.acquire_lock
-      msg = "Another instance is already running for this project (#{InstanceLock.project_base_name}). Exiting."
-      @display.puts msg.red
-      exit 1
-    end
     analysis = continuation_analysis_for_request(new_req)
     execute_new_request(new_req, previous_req, model_index, continuation_analysis: analysis)
+  end
+
+  def acquire_lock_or_exit
+    return false if InstanceLock.acquire_lock
+
+    msg = "Another instance is already running for this project (#{InstanceLock.project_base_name}). Exiting."
+    @display.puts msg.red
+    exit 1
   end
 
   def resolve_continuation_analysis_for_run(explicit_analysis, sanitized_req)
@@ -518,25 +528,65 @@ class Superagent
     @display.display_total_runtime(runtime_stats_for_display)
     CompletionNotifier.notify_completion(success: true)
     update_terminal_title(true)
-    exit 0
+    InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
+    prompt_for_new_request(nil)
   end
 
   def handle_final_failure
     @session_outcomes << {request: @current_request, success: false} if @current_request
     no_queued = @pending_queue.size == 0
+    display_and_save_final_failure
+    CompletionNotifier.notify_completion(success: false) if no_queued
+    update_terminal_title(false)
+    InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
+    prompt_after_failure
+  end
+
+  def display_and_save_final_failure
     @display.display_session_description(@session_description) if @session_description
     @display.display_feature_timing(@pass_timings, @feature_start_time) if @feature_start_time
     @display.display_all_attempts_failed(@current_request)
     display_done_requests_recap_if_any
     finalize_runtime_before_display
     @display.display_total_runtime(runtime_stats_for_display)
-    if @current_request
-      save_current_session(@current_request, :not_provided, update_in_place: true, all_attempts_failed: true)
+    save_current_session(@current_request, :not_provided, update_in_place: true, 
+all_attempts_failed: true) if @current_request
+  end
+
+  def prompt_after_failure
+    @waiting_start = Time.now
+    raw_new_req = @request_reader.read_request
+    prompt_accumulate_waiting
+    return prompt_after_failure_reset_then_retry if RequestReader.reset_command?(raw_new_req)
+    case prompt_after_failure_action(raw_new_req)
+    when :quit then exit 0
+    when :loop then return prompt_after_failure
+    else prompt_after_failure_execute(raw_new_req)
     end
-    CompletionNotifier.notify_completion(success: false) if no_queued
-    update_terminal_title(false)
-    # Exit when all models have failed (session was already reset above).
-    exit 1
+  end
+
+  def prompt_after_failure_reset_then_retry
+    @session_tracker.reset_failure_count(description: @session_description)
+    @display.puts "Failure count reset.".yellow
+    prompt_after_failure
+  end
+
+  def prompt_after_failure_action(raw_new_req)
+    return :quit if raw_new_req.nil? || raw_new_req.to_s.strip.empty?
+    return :quit if raw_new_req.to_s.strip == '/quit'
+    :execute
+  end
+
+  def prompt_after_failure_execute(raw_new_req)
+    prompt_save_history(raw_new_req)
+    @active_start = Time.now
+    new_req = RequestPreparer.sanitize_request(raw_new_req, models)
+    return prompt_after_failure if new_req.nil? || new_req.to_s.strip.empty?
+    return if acquire_lock_or_exit
+
+    model_index = model_index_from_request_text(raw_new_req)
+    analysis = continuation_analysis_for_request(new_req)
+    execute_new_request(new_req, nil, model_index, continuation_analysis: analysis)
   end
 
   def update_terminal_title(phase)

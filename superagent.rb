@@ -16,17 +16,15 @@ require "fileutils"
 InstanceLock.lock_dir_override = ConfigPath::CONFIG_DIR
 
 # Option strings stripped from ARGV by parse_superagent_cli_options. Add new flags here when adding options.
-SUPERAGENT_CLI_STRIP_FLAGS = %w[--skip-midnight --no-midnight --debug --stdin-commands].freeze
+SUPERAGENT_CLI_STRIP_FLAGS = %w[--skip-midnight --no-midnight --debug].freeze
 
 def parse_superagent_cli_options
   ask_mode = (ARGV.first == 'ask')
   ARGV.shift if ask_mode
   skip_midnight_check = ARGV.include?('--skip-midnight') || ARGV.include?('--no-midnight')
   show_full_prompt = ARGV.include?('--debug')
-  stdin_commands = ARGV.include?('--stdin-commands')
   ARGV.reject! { |a| SUPERAGENT_CLI_STRIP_FLAGS.include?(a) }
-  { ask_mode: ask_mode, skip_midnight_check: skip_midnight_check, show_full_prompt: show_full_prompt,
-    stdin_commands: stdin_commands }
+  { ask_mode: ask_mode, skip_midnight_check: skip_midnight_check, show_full_prompt: show_full_prompt }
 end
 
 def ask_mode_classification?(title)
@@ -218,22 +216,18 @@ if __FILE__ == $PROGRAM_NAME
       Usage: #{File.basename($PROGRAM_NAME)} [options] [request]
              #{File.basename($PROGRAM_NAME)} ask [question]
       Runs the agent; request can be given as an argument or entered interactively.
+      After each run, prompts for next request (same directory); type /quit to exit.
       Subcommand 'ask': one-shot Q&A from stdin or ARGV; in a TTY, press Enter to add more requests (type /quit to exit).
       Only one instance per project; if another is running, this process exits.
       Options:
         -h, --help           Show this help
         --debug              Show full system prompt
         --skip-midnight, --no-midnight   Skip midnight-rollover check
-        --stdin-commands     Reuse agent process: read JSON job lines from stdin, run one agent step per job, write {"done":true,"code":N} to stdout
     HELP
     exit 0
   end
 
   options = parse_superagent_cli_options
-  if options[:stdin_commands]
-    StdinCommandsRunner.new(stdin: $stdin, stdout: $stdout, stderr: $stderr).run
-    exit 0
-  end
   if options[:ask_mode]
     run_ask_mode(show_full_prompt: options[:show_full_prompt])
     # run_ask_mode exits; never reached

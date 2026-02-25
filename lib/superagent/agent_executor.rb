@@ -26,6 +26,7 @@ class AgentExecutor
     @full_prompt_buffer = nil
     @show_full_prompt = show_full_prompt
     @verification_mode = false
+    @process_tracker = AgentProcessTracker.new
   end
 
   def show_full_prompt?
@@ -500,6 +501,7 @@ class AgentExecutor
     rescue Errno::ESRCH
       # Process already exited
     end
+    @process_tracker.unregister(pid)
   end
 
   def execute_agent_process(model, wrapped, new_session: false,
@@ -512,6 +514,7 @@ class AgentExecutor
         @state[:pid] = wait_thr.pid
         @state[:start] = @state[:last_chunk] = now
       end
+      @process_tracker.register(wait_thr.pid)
       stdin.write(wrapped)
       stdin.close
       if prompt_request_reader && on_prompt_request
@@ -651,6 +654,7 @@ class AgentExecutor
     status = finalize_execution_status(wait_thr, timed_out)
     out = finalize_output(raw, final)
     finalize_display(status.success? || (@verification_mode && (out && !out.to_s.strip.empty?))) unless @passthrough
+    @process_tracker.unregister(@state_mutex.synchronize { @state[:pid] })
     [out, '', status, timeout_reason]
   end
 

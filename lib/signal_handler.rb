@@ -4,12 +4,17 @@
 module SignalHandler
   EXIT_SIGINT = 130
 
-  def self.install
+  def self.install(cleanup_proc = nil)
     Signal.trap("INT") do
       $stderr.puts
+      cleanup_proc&.call
       exit EXIT_SIGINT
+    end
+    Signal.trap("TERM") do
+      cleanup_proc&.call
+      exit 0
     end
   end
 end
 
-SignalHandler.install
+# SignalHandler.install is called by components that need it
