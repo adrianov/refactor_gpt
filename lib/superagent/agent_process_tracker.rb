@@ -28,7 +28,7 @@ class AgentProcessTracker
 
   def kill_pid(pid)
     Process.kill('TERM', pid)
-    sleep 0.1
+    sleep 0.5
     Process.kill('KILL', pid) unless Process.waitpid(pid, Process::WNOHANG)
   rescue Errno::ESRCH, Errno::ECHILD
     # Process already exited
