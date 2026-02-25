@@ -6,8 +6,8 @@ require 'fileutils'
 require 'open3'
 
 # Tracks session state per project (directory). Many sessions; continuation uses latest.
-# Session: request, history, failed_sessions_count, applied_fixes_count.
-# Model selection uses applied_fixes_count (verification + bug/regression/hotfix). /reset clears applied_fixes_count.
+# Session: request, history, failed_sessions_count, applied_fixes_count, highest_model_index.
+# Model selection: applied_fixes_count (verification + bug/regression/hotfix), highest_model_index (continuation floor).
 # failed_sessions_count only when tags are #bug/#regression/#hotfix.
 # Classification: Before running a request, the LLM is asked whether it continues an existing session
 # or starts a new one. The UI title for this step is "Classifying to a session" when there are
@@ -120,6 +120,11 @@ class SessionTracker
   def applied_fixes_for_session(session)
     return 0 unless session
     session[:applied_fixes_count] || 0
+  end
+
+  def highest_model_index_for_session(session)
+    return 0 unless session
+    session[:highest_model_index] || 0
   end
 
   def load_sessions
@@ -246,15 +251,17 @@ class SessionTracker
 
   def save_session(request, description, tags, continuation, last_agent_summary = :not_provided,
                    request_type: DEFAULT_REQUEST_TYPE, update_in_place: false, all_attempts_failed: false,
-                   applied_fix_this_run: false)
+                   applied_fix_this_run: false, highest_model_index_this_run: nil)
     previous_session = session_for_continuation_analysis(description)
     ctx = session_save_context(previous_session, request, continuation, last_agent_summary, request_type,
                               tags: tags, all_attempts_failed: all_attempts_failed,
-                              applied_fix_this_run: applied_fix_this_run)
+                              applied_fix_this_run: applied_fix_this_run,
+                              highest_model_index_this_run: highest_model_index_this_run)
     session_data = build_session_data(
       request: request, description: description, tags: tags, continuation: continuation,
       request_history: ctx[:request_history], last_agent_summary: ctx[:agent_summary],
-      failed_sessions_count: ctx[:failed_sessions_count], applied_fixes_count: ctx[:applied_fixes_count]
+      failed_sessions_count: ctx[:failed_sessions_count], applied_fixes_count: ctx[:applied_fixes_count],
+      highest_model_index: ctx[:highest_model_index]
     )
     list = session_list_for_save(load_sessions, session_data, continuation, update_in_place)
     write_sessions(list.last(MAX_SESSIONS))
@@ -292,7 +299,7 @@ class SessionTracker
   end
 
   def build_session_data(request:, description:, tags:, continuation:, request_history:, last_agent_summary:,
-                         failed_sessions_count: 0, applied_fixes_count: 0)
+                         failed_sessions_count: 0, applied_fixes_count: 0, highest_model_index: 0)
     session_data = {
       request: request,
       description: description,
@@ -302,6 +309,7 @@ class SessionTracker
       last_agent_summary: last_agent_summary,
       failed_sessions_count: failed_sessions_count,
       applied_fixes_count: applied_fixes_count,
+      highest_model_index: highest_model_index,
       timestamp: Time.now.to_i,
       cwd: Dir.pwd,
       session_id: description_to_session_id(description)
@@ -338,6 +346,7 @@ class SessionTracker
     defaults = {}
     defaults[:failed_sessions_count] = 0 unless session.key?(:failed_sessions_count)
     defaults[:applied_fixes_count] = applied_fixes_for_session(session) unless session.key?(:applied_fixes_count)
+    defaults[:highest_model_index] = highest_model_index_for_session(session) unless session.key?(:highest_model_index)
     defaults.empty? ? session : session.merge(defaults)
   end
 
@@ -359,12 +368,17 @@ class SessionTracker
   end
 
   def set_session_defaults(session)
-    session[:failed_sessions_count] ||= 0
-    session[:applied_fixes_count] = applied_fixes_for_session(session)
+    set_session_count_defaults(session)
     session[:request_history] ||= []
     session[:tags] ||= []
     session[:continuation] ||= false
     session[:session_id] ||= description_to_session_id(session[:description]) if session[:description]
+  end
+
+  def set_session_count_defaults(session)
+    session[:failed_sessions_count] ||= 0
+    session[:applied_fixes_count] = applied_fixes_for_session(session)
+    session[:highest_model_index] = highest_model_index_for_session(session) if session[:highest_model_index].nil?
   end
 
   public
@@ -434,7 +448,8 @@ class SessionTracker
       timestamp: Time.now.to_i,
       cwd: Dir.pwd,
       failed_sessions_count: base_session[:failed_sessions_count] || 0,
-      applied_fixes_count: applied_fixes_for_session(base_session)
+      applied_fixes_count: applied_fixes_for_session(base_session),
+      highest_model_index: highest_model_index_for_session(base_session)
     )
   end
 
@@ -467,16 +482,24 @@ class SessionTracker
   end
 
   def session_save_context(previous_session, request, continuation, last_agent_summary, request_type,
-                           tags: [], all_attempts_failed: false, applied_fix_this_run: false)
+                           tags: [], all_attempts_failed: false, applied_fix_this_run: false,
+                           highest_model_index_this_run: nil)
     count_as_failure = all_attempts_failed && counts_as_failure?(tags)
     failed_sessions_count = calculate_failed_sessions_count_context(previous_session, count_as_failure)
     prev_applied = applied_fixes_for_session(previous_session)
     applied_fixes_count = prev_applied + (count_as_failure || applied_fix_this_run ? 1 : 0)
+    prev_highest = highest_model_index_for_session(previous_session)
+    highest_model_index = if highest_model_index_this_run.nil?
+                            prev_highest
+                          else
+                            [prev_highest, highest_model_index_this_run].max
+                          end
     {
       request_history: build_request_history_context(previous_session, request, request_type),
       agent_summary: determine_agent_summary_context(continuation, previous_session, last_agent_summary),
       failed_sessions_count: failed_sessions_count,
-      applied_fixes_count: applied_fixes_count
+      applied_fixes_count: applied_fixes_count,
+      highest_model_index: highest_model_index
     }
   end
 

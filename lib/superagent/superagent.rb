@@ -111,9 +111,7 @@ class Superagent
   def model_selection_reason(request_model_idx, start_index)
     return "from request hint" if request_model_idx && request_model_idx == start_index
     return "continuation" if @session_continuation
-    return "from applied fixes" if start_index.positive?
-
-    "default"
+    start_index.positive? ? "from applied fixes" : "default"
   end
 
   def run_read_request(request)
@@ -251,22 +249,23 @@ class Superagent
     RequestPreparer.extract_model_index(raw_text, models)
   end
 
-  # Model tier from applied_fixes_count (continuation only; new session uses 0).
+  # Model tier from applied_fixes_count (continuation only; new session uses 0). Continuation floor from session.
   def resolve_start_index(request_model_index, _start_model_index, continuation:, current_model_index:,
-                          applied_fixes_count: 0)
+                          applied_fixes_count: 0, session_highest_model_index: 0)
     tier = [(applied_fixes_count / STEPS_PER_MODEL), models.size - 1].min
     idx = request_model_index || tier
-    continuation ? [idx, current_model_index].max : idx
+    continuation ? [idx, current_model_index, session_highest_model_index].max : idx
   end
 
   def determine_start_index(model_index_from_request, start_model_index)
     @current_model_index = 0 unless @session_continuation
     session = @session_tracker.session_for_continuation_analysis(@session_description)
     applied = session ? @session_tracker.applied_fixes_for_session(session) : 0
+    session_highest = session ? @session_tracker.highest_model_index_for_session(session) : 0
     resolve_start_index(
       model_index_from_request, start_model_index,
       continuation: @session_continuation, current_model_index: @current_model_index,
-      applied_fixes_count: applied
+      applied_fixes_count: applied, session_highest_model_index: session_highest
     )
   end
 
@@ -330,7 +329,8 @@ class Superagent
     @session_outcomes << {request: current_req, success: true}
     if current_req
       save_current_session(
-        current_req, :not_provided, update_in_place: true, applied_fix_this_run: @applied_fix_this_run
+        current_req, :not_provided, update_in_place: true, applied_fix_this_run: @applied_fix_this_run,
+        highest_model_index: @current_model_index
       )
       @applied_fix_this_run = false
     end
@@ -494,10 +494,12 @@ class Superagent
   # New sessions (CONTINUATION: NEW) must start from first model; only continuations use session applied_fixes tier.
   def start_index_for_new_request(analysis, model_index)
     applied = analysis[:continuation] ? applied_fixes_for_analysis(analysis) : 0
+    session = analysis[:continuation] ? @session_tracker.session_for_continuation_analysis(analysis[:description]) : nil
+    session_highest = session ? @session_tracker.highest_model_index_for_session(session) : 0
     idx = resolve_start_index(
       model_index, 0,
       continuation: analysis[:continuation], current_model_index: @current_model_index,
-      applied_fixes_count: applied
+      applied_fixes_count: applied, session_highest_model_index: session_highest
     )
     [[idx, 0].max, models.size - 1].min
   end
@@ -565,12 +567,13 @@ class Superagent
   end
 
   def save_current_session(req, summary = :not_provided, update_in_place: false, all_attempts_failed: false,
-                           applied_fix_this_run: false)
+                           applied_fix_this_run: false, highest_model_index: nil)
     request_type = @session_request_type || SessionTracker::DEFAULT_REQUEST_TYPE
     @session_tracker.save_session(
       req, @session_description, @session_tags, @session_continuation, summary,
       request_type: request_type, update_in_place: update_in_place,
-      all_attempts_failed: all_attempts_failed, applied_fix_this_run: applied_fix_this_run
+      all_attempts_failed: all_attempts_failed, applied_fix_this_run: applied_fix_this_run,
+      highest_model_index_this_run: highest_model_index
     )
   end
 
