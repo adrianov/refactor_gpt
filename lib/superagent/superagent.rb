@@ -249,12 +249,14 @@ class Superagent
     RequestPreparer.extract_model_index(raw_text, models)
   end
 
-  # Model tier from applied_fixes_count (continuation only; new session uses 0). Continuation floor from session.
+  # Tier from applied_fixes_count (continuation only). Continuation floor: session_highest + 1 (bump per continuation).
   def resolve_start_index(request_model_index, _start_model_index, continuation:, current_model_index:,
-                          applied_fixes_count: 0, session_highest_model_index: 0)
-    tier = [(applied_fixes_count / STEPS_PER_MODEL), models.size - 1].min
+                          applied_fixes_count: 0, session_highest_model_index: 0, max_model_index: nil)
+    max_idx = max_model_index || (models.size - 1)
+    tier = [(applied_fixes_count / STEPS_PER_MODEL), max_idx].min
     idx = request_model_index || tier
-    continuation ? [idx, current_model_index, session_highest_model_index].max : idx
+    raw = continuation ? [idx, current_model_index, session_highest_model_index + 1].max : idx
+    [[raw, 0].max, max_idx].min
   end
 
   def determine_start_index(model_index_from_request, start_model_index)
