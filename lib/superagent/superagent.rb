@@ -359,7 +359,7 @@ class Superagent
     merged_list = @pending_queue.to_merged_requests_by_session(pending)
     @display.display_pending_list(merged_list)
     InstanceLock.release_lock(InstanceLock.current_lock_path) if InstanceLock.current_lock_path
-    return if acquire_lock_or_exit
+    acquire_lock_or_exit
     return if merged_list.empty?
 
     run_first_merged_and_prepend_rest(merged_list, previous_req)
@@ -451,14 +451,14 @@ class Superagent
     model_index = model_index_from_request_text(raw_new_req)
     new_req = RequestPreparer.sanitize_request(raw_new_req, models)
     return if new_req.nil? || new_req.to_s.empty?
-    return if acquire_lock_or_exit
+    acquire_lock_or_exit
 
     analysis = continuation_analysis_for_request(new_req)
     execute_new_request(new_req, previous_req, model_index, continuation_analysis: analysis)
   end
 
   def acquire_lock_or_exit
-    return false if InstanceLock.acquire_lock
+    return if InstanceLock.acquire_lock
 
     msg = "Another instance is already running for this project (#{InstanceLock.project_base_name}). Exiting."
     @display.puts msg.red
@@ -582,7 +582,7 @@ all_attempts_failed: true) if @current_request
     @active_start = Time.now
     new_req = RequestPreparer.sanitize_request(raw_new_req, models)
     return prompt_after_failure if new_req.nil? || new_req.to_s.strip.empty?
-    return if acquire_lock_or_exit
+    acquire_lock_or_exit
 
     model_index = model_index_from_request_text(raw_new_req)
     analysis = continuation_analysis_for_request(new_req)
