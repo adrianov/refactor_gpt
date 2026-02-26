@@ -194,12 +194,24 @@ def show_git_diff_if_needed(show_diff, recent_commands)
   return unless show_diff
   return if recent_commands.lines.last&.include?("git diff")
 
-  mb = `git merge-base origin/HEAD HEAD 2>/dev/null`.strip
-  has_mb = mb != "" && $?.success?
-  cmd = has_mb ? "git diff #{Shellwords.escape(mb)} #{DIFF_OPTS}" : "git diff #{DIFF_OPTS}"
-  label = has_mb ? "git diff $(git merge-base origin/HEAD HEAD) #{DIFF_OPTS}" : "git diff #{DIFF_OPTS}"
-  puts label.cyan
-  system(cmd)
+  show_mr_style_diff
+  show_plain_diff
+end
+
+def show_mr_style_diff
+  mr_cmd = "git diff origin/HEAD... #{DIFF_OPTS}"
+  return unless system("git rev-parse --verify origin/HEAD >#{File::NULL} 2>&1")
+
+  puts "--- MR style (branch vs origin) ---".cyan
+  puts "git diff origin/HEAD... #{DIFF_OPTS}".cyan
+  system(mr_cmd)
+  puts
+end
+
+def show_plain_diff
+  puts "--- Plain git diff (working tree) ---".cyan
+  puts "git diff #{DIFF_OPTS}".cyan
+  system("git diff #{DIFF_OPTS}")
   puts
 end
 
