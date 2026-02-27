@@ -22,7 +22,7 @@ Reline::LineEditor.prepend(RelineNilSafeBuffer)
 # Handles reading user requests from argv, stdin, or interactive input. History is per-directory.
 # Reline path used when running the agent (history, editing); chunked stdin when queue-only (large paste safe).
 class RequestReader
-  REQUEST_PROMPT = 'Enter request (press Enter twice to submit):'
+  REQUEST_PROMPT = 'Enter request (press Enter twice to submit; empty to exit):'
   SHELL_CMD_PREFIX = '! '
   DISCARD_CMD = '/discard'
   RESET_CMD = '/reset'

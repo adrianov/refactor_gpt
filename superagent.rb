@@ -139,7 +139,7 @@ def ask_handle_queue_input(queue, request_reader, display, raw)
     return :next
   end
   return :quit if raw.to_s.strip == "/quit"
-  return :next if raw.nil? || raw.to_s.strip.empty?
+  return :quit if raw.nil? || raw.to_s.strip.empty?
 
   text = RequestPreparer.normalized_request_text(raw)
   request_reader.add_to_request_history(raw)

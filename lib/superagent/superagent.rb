@@ -181,7 +181,7 @@ class Superagent
       break if line.nil?
       next unless line.chomp.empty? # Only react to empty Enter
 
-      handle_queue_input_request
+      break if handle_queue_input_request == :exit_prompt
     end
   rescue IOError, Errno::EIO
     # Terminal closed or unavailable
@@ -190,6 +190,7 @@ class Superagent
   end
 
   # Pause agent output, show prompt, read with Reline, add to queue, resume output.
+  # Returns :exit_prompt when user submitted empty (press Enter twice with no content).
   def handle_queue_input_request
     @display.set_output_paused(true)
     @display.flush_assistant_text_buffer
@@ -198,7 +199,9 @@ class Superagent
     $stdout.flush
 
     raw = @request_reader.read_until_non_shell(use_reline: true, for_queue: true)
-    process_queue_input(raw) if raw
+    return :exit_prompt if raw.nil?
+    process_queue_input(raw)
+    nil
   ensure
     @display.set_output_paused(false)
     @display.flush_paused_output
