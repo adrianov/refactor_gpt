@@ -154,8 +154,8 @@ class CommitPlanClient
 
       Input:
       - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
-      - (1) Current MR: unified diff of committed changes vs origin/HEAD (`git diff origin/HEAD... -w -W --no-prefix --diff-algorithm=histogram`)
-      - (2) Uncommitted changes: unified diff of working tree vs index (`git diff -w -W --no-prefix --diff-algorithm=histogram`; includes new files after `git add -N`)
+      - (1) Current MR: unified diff of **already committed** changes vs origin/HEAD (`git diff origin/HEAD... -w -W --no-prefix --diff-algorithm=histogram`) — provided for CONTEXT ONLY; these files are already committed and must NOT appear in any commit's file list
+      - (2) Uncommitted changes: unified diff of working tree vs index (`git diff -w -W --no-prefix --diff-algorithm=histogram`; includes new files after `git add -N`) — these are the ONLY files eligible to be committed
       - optional user-provided hints or preferences from the command line
       - last 15 git commit one-line messages to help you match existing style
       - last 5 shell commands from the user's terminal history to give you extra context
@@ -211,7 +211,8 @@ class CommitPlanClient
           - If the original development followed TDD (tests written before code), preserve this sequence in commit ordering
           - Example ordering: "add failing tests for user authentication" → "implement user authentication logic"
           - When tests were written after implementation, group implementation and tests together in a single commit
-          - Every changed file from status must appear in exactly one group OR in excluded_files
+          - Every changed file from status must appear in **exactly one** commit OR in excluded_files — never in more than one commit
+          - **Only files present in `git status` output are eligible for commits.** Files that appear only in the MR diff (1) are already committed — do NOT include them in any commit's file list
           - Extract complete file paths from status output by taking the full path after status flags (e.g., from "new file:   manifest.json", extract "manifest.json")
           - Never truncate or modify file paths - always use the complete filename including extensions
           - Prefer coherent commits over many tiny ones
