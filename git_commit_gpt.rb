@@ -188,7 +188,7 @@ def check_for_changes(status_output)
   false
 end
 
-DIFF_OPTS = "-w -W --no-prefix --diff-algorithm=histogram"
+DIFF_OPTS = "-w -W --no-prefix --histogram"
 
 def show_git_diff_if_needed(show_diff, recent_commands)
   return unless show_diff
@@ -210,14 +210,14 @@ end
 
 def show_plain_diff
   puts "--- Plain git diff (working tree) ---".cyan
-  puts "git diff #{DIFF_OPTS}".cyan
-  system("git diff #{DIFF_OPTS}")
+  puts "git diff #{DIFF_OPTS} HEAD".cyan
+  system("git diff #{DIFF_OPTS} HEAD")
   puts
 end
 
 def fetch_diffs
   mr = `git diff origin/HEAD... #{DIFF_OPTS} 2>/dev/null`
-  unc = `git diff #{DIFF_OPTS} 2>/dev/null`
+  unc = `git diff #{DIFF_OPTS} HEAD 2>/dev/null`
   unless $?.success?
     warn "Failed to capture uncommitted diff for analysis".red
     exit 1
