@@ -194,22 +194,11 @@ def show_git_diff_if_needed(show_diff, recent_commands)
   return unless show_diff
   return if recent_commands.lines.last&.include?("git diff")
 
-  show_mr_style_diff
-  show_plain_diff
+  show_uncommitted_diff
 end
 
-def show_mr_style_diff
-  mr_cmd = "git diff origin/HEAD... #{DIFF_OPTS}"
-  return unless system("git rev-parse --verify origin/HEAD >#{File::NULL} 2>&1")
-
-  puts "--- MR style (branch vs origin) ---".cyan
-  puts "git diff origin/HEAD... #{DIFF_OPTS}".cyan
-  system(mr_cmd)
-  puts
-end
-
-def show_plain_diff
-  puts "--- Plain git diff (working tree) ---".cyan
+def show_uncommitted_diff
+  puts "Uncommitted changes:".cyan
   puts "git diff #{DIFF_OPTS} HEAD".cyan
   system("git diff #{DIFF_OPTS} HEAD")
   puts
