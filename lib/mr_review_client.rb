@@ -32,8 +32,8 @@ class MrReviewClient
     parts << "Branch under review: `#{branch}` → `#{base_branch}`\n"
     parts << "Recent commits on this branch (most recent first):\n#{recent_commits}\n" unless recent_commits.empty?
 
-    max_bytes = MAX_DIFF_SIZE_KB * 1024
-    truncated = diff.bytesize > max_bytes ? diff.byteslice(0, max_bytes) + "\n\n...(diff truncated)" : diff
+    max_chars = MAX_DIFF_SIZE_KB * 1024
+    truncated = diff.length > max_chars ? diff[0, max_chars] + "\n\n...(diff truncated)" : diff
     parts << "MR diff (`git diff -w -W --histogram #{base_branch}...HEAD`):\n\n```diff\n#{truncated}\n```\n"
     parts.join("\n")
   end
