@@ -126,6 +126,11 @@ if diff.strip.empty?
   exit 0
 end
 
+puts
+puts "Diff (git diff -w -W --histogram #{base}...#{branch}):".cyan
+puts diff
+puts
+
 recent_commits = recent_commits_on_branch(branch, base)
 
 result = MrReviewClient.new(debug: debug_mode).review(
