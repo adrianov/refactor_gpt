@@ -98,16 +98,24 @@ class ConflictResolver
   end
 
   def system_instruction
-    <<~TEXT.strip
-      You are an expert developer resolving git merge conflicts.
-      When given a file with conflict markers, produce the fully resolved version by:
-      - Choosing the correct code from each conflict block based on intent and context
-      - Merging both sides when both contain useful, non-duplicate changes
-      - Removing all conflict markers (<<<<<<, =======, >>>>>>>)
-      - Preserving all non-conflicting code exactly as-is
+    agents = load_agents_file(Dir.pwd)
+    project_context = agents.empty? ? "" : "Project guidelines:\n#{agents}\n\n"
 
-      Return ONLY the resolved file content, with no explanation, no markdown fences, no extra text.
-      The output must be the exact bytes to write to disk.
+    <<~TEXT.strip
+      #{project_context}You are an expert developer resolving git merge conflicts.
+
+      For each conflict block:
+      - Keep the correct side when one side is clearly right.
+      - Merge both sides when each contains distinct, non-duplicate changes.
+      - Remove all conflict markers (<<<<<<, =======, >>>>>>>).
+      - Leave all non-conflicting code untouched.
+
+      The resolved file must:
+      - Be syntactically valid and pass linting under the project's rules.
+      - Satisfy project specs and conventions defined in the guidelines above.
+      - Compile and run without errors introduced by the merge.
+
+      Return ONLY the complete resolved file content — no explanation, no markdown fences, no surrounding text.
     TEXT
   end
 
