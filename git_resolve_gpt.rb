@@ -27,13 +27,7 @@ class ConflictResolver
     root = git_root
     Dir.chdir(root)
     abort "Not in a conflicted merge state.".yellow unless merge_in_progress?(root)
-
-    files = conflicted_files
-    abort "No conflicted files found.".yellow if files.empty?
-
-    puts "Resolving #{files.size} conflicted file(s)...".cyan
-    files.each { |f| resolve_file(f) }
-    puts "\nAll conflicts resolved and staged. Review and commit when ready.".green
+    resolve_all
   end
 
   private
@@ -55,16 +49,30 @@ class ConflictResolver
       File.exist?(File.join(root, ".git", "rebase-apply"))
   end
 
+  def resolve_all
+    files = conflicted_files
+    abort "No conflicted files found.".yellow if files.empty?
+
+    file_contents = read_files(files)
+    puts "Resolving #{files.size} conflicted file(s)...".cyan
+    files.each { |f| resolve_file(f, file_contents) }
+    puts "\nAll conflicts resolved and staged. Review and commit when ready.".green
+  end
+
   def conflicted_files
     `git diff --name-only --diff-filter=U`.split("\n").map(&:strip).reject(&:empty?)
   end
 
-  def resolve_file(path)
-    content = File.read(path)
+  def read_files(paths)
+    paths.each_with_object({}) { |p, h| h[p] = File.read(p) }
+  end
+
+  def resolve_file(path, all_contents)
+    content = all_contents[path]
     return puts "  #{path}: no conflict markers, skipping.".yellow unless has_conflict_markers?(content)
 
     puts "  Resolving #{path}...".blue
-    resolved = ask_llm(path, content)
+    resolved = ask_llm(path, content, all_contents)
     return warn "  #{path}: LLM returned empty content, skipping.".red if resolved.nil? || resolved.strip.empty?
 
     write_and_stage(path, resolved)
@@ -80,10 +88,10 @@ class ConflictResolver
     content.match?(CONFLICT_START) && content.match?(CONFLICT_MID) && content.match?(CONFLICT_END)
   end
 
-  def ask_llm(path, content)
+  def ask_llm(path, content, all_contents)
     messages = [
       {role: "system", content: system_instruction},
-      {role: "user", content: user_prompt(path, content)}
+      {role: "user", content: user_prompt(path, content, all_contents)}
     ]
     response = @client.ask(messages, title: "Resolving #{File.basename(path)}".cyan)
     extract_resolved(response, path)
@@ -103,11 +111,17 @@ class ConflictResolver
     TEXT
   end
 
-  def user_prompt(path, content)
+  def user_prompt(path, content, all_contents)
+    context = all_contents.reject { |p, _| p == path }
+    context_section = context.map { |p, c| "<context filename=\"#{p}\">\n#{c}\n</context>" }.join("\n\n")
+
     <<~TEXT
       Resolve all merge conflicts in this file: #{path}
 
+      <conflicted_file filename="#{path}">
       #{content}
+      </conflicted_file>
+      #{context_section.empty? ? "" : "\nOther files in the merge for context (do not modify):\n\n#{context_section}"}
     TEXT
   end
 
