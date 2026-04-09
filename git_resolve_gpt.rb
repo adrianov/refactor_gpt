@@ -15,27 +15,17 @@ class ConflictResolver
 
   def initialize(debug: false)
     @debug = debug
-    env = ENV.to_h.merge(load_env_vars)
-    model = LlmRouter.default_model(env)
-    config = LlmRouter.config_for_model(model, env)
-    abort "No API configuration found. Set MODEL and access token in .env".red unless config
-
-    @client = build_client(config)
+    @client = OpenAiClient.new(debug: debug)
   end
 
   def run
     root = git_root
     Dir.chdir(root)
-    abort "Not in a conflicted merge state.".yellow unless merge_in_progress?(root)
+    abort "Not in a conflicted merge state.".yellow unless merge_in_progress?(root) || conflicted_files.any?
     resolve_all
   end
 
   private
-
-  def build_client(config)
-    common = {model: config[:model], debug: @debug, api_base_url: config[:base_url], api_key: config[:access_token]}
-    config[:backend] == :gemini ? AskGeminiClient.new(**common, progress: true) : AskGptClient.new(**common)
-  end
 
   def git_root
     root = `git rev-parse --show-toplevel 2>/dev/null`.strip
@@ -44,16 +34,24 @@ class ConflictResolver
   end
 
   def merge_in_progress?(root)
-    File.exist?(File.join(root, ".git", "MERGE_HEAD")) ||
-      File.exist?(File.join(root, ".git", "rebase-merge")) ||
-      File.exist?(File.join(root, ".git", "rebase-apply"))
+    git_dir = git_dir(root)
+    File.exist?(File.join(git_dir, "MERGE_HEAD")) ||
+      File.exist?(File.join(git_dir, "rebase-merge")) ||
+      File.exist?(File.join(git_dir, "rebase-apply"))
+  end
+
+  def git_dir(root)
+    dir = `git rev-parse --git-dir 2>/dev/null`.strip
+    abort "Could not determine git metadata directory.".red unless $?.success? && !dir.empty?
+
+    File.expand_path(dir, root)
   end
 
   def resolve_all
     files = conflicted_files
     abort "No conflicted files found.".yellow if files.empty?
 
-    file_contents = read_files(files)
+    file_contents = read_files(reference_files(files))
     puts "Resolving #{files.size} conflicted file(s)...".cyan
     files.each { |f| resolve_file(f, file_contents) }
     puts "\nAll conflicts resolved and staged. Review and commit when ready.".green
@@ -61,6 +59,12 @@ class ConflictResolver
 
   def conflicted_files
     `git diff --name-only --diff-filter=U`.split("\n").map(&:strip).reject(&:empty?)
+  end
+
+  def reference_files(files)
+    staged = `git diff --name-only --cached`.split("\n")
+    unstaged = `git diff --name-only`.split("\n")
+    (files + staged + unstaged).map(&:strip).reject(&:empty?).uniq.select { |path| File.file?(path) }
   end
 
   def read_files(paths)
