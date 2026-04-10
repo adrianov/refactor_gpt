@@ -3,7 +3,7 @@
 require "oj"
 require "colorize"
 
-# Calls the LLM to produce a commit plan (commits, warnings, quality_assessment, excluded_files).
+# Calls the LLM to produce a commit plan (commits, warnings, quality_assessment impact summary, excluded_files).
 class CommitPlanClient
   include AgentsFileHandler
 
@@ -195,16 +195,16 @@ class CommitPlanClient
         - If no JIRA reference exists in branch name or recent commits, do NOT add one
         - JIRA reference MUST be placed at the beginning of commit messages (e.g., "[PT-4668] type: description")
         - NEVER mix different JIRA issue references in the same commit batch
-       - For each logical group, produce:
-          - A one-line, conventional-style commit message (no trailing period) describing the atomic change
+        - For each logical group, produce:
+          - A one-line, conventional-style commit message (no trailing period). **Prioritize business and system value**: state the problem solved, risk removed, or capability delivered (what stakeholders or production gain). Use implementation detail (framework, pattern, file type) only when there is no clearer outcome-level summary.
           - **Language principles**:
             - **English**: Use imperative verbs - "add X", "fix Y", "remove Z"
             - **Russian**: Use verbal nouns - "добавление X", "исправление Y", "удаление Z"
             - **Other languages**: Follow standard commit message conventions for that language
           - **Universal principles**:
-            - Be specific about what changed and why
-            - Avoid vague terms like "optimization", "improvement", "fix issues"
-            - Focus on concrete actions and outcomes
+            - Prefer **why it matters** (correct data, fewer incidents, safer releases, clearer behavior) over **how it was coded**
+            - Be specific; avoid vague terms like "optimization", "improvement", "fix issues" without naming the effect
+            - Technical jargon is fine in the subject only when it *is* the change (e.g. dependency bump); otherwise lead with impact
           - A list of file paths to include in that commit
         - **Commit Ordering**: Organize commits to follow Test-Driven Development principles:
           - When implementing a new feature or fixing a bug, place test commits before implementation commits
@@ -225,10 +225,11 @@ class CommitPlanClient
             - Debug console output added with `puts`, `p`, `pp`, or `debugger` statements that are not part of actual functionality
             - Test stub files in `spec/stubs/`, `test/stubs/`, `test/fixtures/` when unrelated to test code changes
           - For each excluded file, provide a clear reason in the excluded_files section.
-        - **Overall Code Quality Assessment**: Analyze all changes and provide:
-          - Whether overall code quality has increased or decreased
-          - A brief explanation of why (focus on code organization, clarity, maintainability, bug fixes, or potential issues)
-          - Keep assessment concise (2-3 sentences maximum)
+        - **Overall impact assessment** (`quality_assessment` in JSON — same schema, value-focused wording):
+          - Set `direction` to increased / decreased / unchanged from the perspective of **product, reliability, security, or maintainability risk** — not from "more elegant code" alone.
+          - In `explanation`, **lead with the goal or risk**: what becomes truer, safer, faster, or easier for the team or users, and what failure mode is avoided. Treat technical edits (RSpec helpers, refactors, typing) as **evidence** in a second sentence, not as the headline.
+          - Do **not** open with low-level mechanics (e.g. "Changing let_it_be to let…") unless the diff is purely internal with no user-facing story — then still state **what correctness or stability** is preserved.
+          - Keep to 2–3 sentences maximum; no bullet lists inside the string.
         - For each detected issue, create a warning entry with:
           - The affected file path
           - A clear description of the potential error
@@ -244,7 +245,7 @@ class CommitPlanClient
       {
         "quality_assessment": {
           "direction": "increased" | "decreased" | "unchanged",
-          "explanation": "Brief explanation of why (2-3 sentences maximum)"
+          "explanation": "2-3 sentences: outcome and risk/value first; technical detail only to support that story"
         },
         "commits": [
           {
@@ -272,7 +273,7 @@ class CommitPlanClient
       If no issues are detected, return "warnings": [].
       For warnings: include start_line and end_line only when the issue can be pinpointed to specific lines in the diff. Omit these fields if the issue is general or spans the entire file.
       If no files are excluded, return "excluded_files": [].
-      If code quality assessment is neutral/unclear, use "unchanged" for direction.
+      If impact is neutral or unclear from the diff, use "unchanged" for direction and say so briefly in `explanation`.
 
       Do not include any text outside of the JSON.
     HEREDOC

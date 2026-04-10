@@ -3,7 +3,7 @@
 require "shellwords"
 require "colorize"
 
-# Renders commit plan output: warnings, excluded files, quality assessment, planned commits with file stats.
+# Renders commit plan output: warnings, excluded files, impact summary, proposed commits with file stats.
 module GitCommitDisplay
   module_function
 
@@ -112,24 +112,24 @@ module GitCommitDisplay
 
     case direction
     when "increased"
-      puts "Code quality assessment: #{"Increased".green} - #{explanation}"
+      puts "Impact: #{"positive".green} — #{explanation}"
     when "decreased"
-      puts "Code quality assessment: #{"Decreased".red} - #{explanation}"
+      puts "Impact: #{"negative".red} — #{explanation}"
     else
-      puts "Code quality assessment: #{"Unchanged".yellow} - #{explanation}"
+      puts "Impact: #{"neutral".yellow} — #{explanation}"
     end
     puts
   end
 
   def display_planned_commits(commits)
     puts
-    puts "✓ Commits Planned".green
+    puts "✓ Proposed commits".green
     all_stats = fetch_all_numstat_stats
     commits.each_with_index { |commit, idx| display_single_commit(commit, idx, all_stats) }
   end
 
   def get_user_confirmation
-    puts "Do you want to run these git add/commit commands? (y/N)".white
+    puts "Run git add/commit for the plan above? (y/N)".white
     answer = PromptReader.read_line("", downcase: true)
 
     unless answer == "y"
