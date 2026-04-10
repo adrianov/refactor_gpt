@@ -109,17 +109,10 @@ class OpenrouterClient
 
   def warn_failure(response)
     status = response&.status || "Unknown"
-    message = extract_error_message(response&.body.to_s)
-    details = message.to_s.empty? ? response&.body.to_s : message
-    warn "⚠️  OpenRouter fallback failed (#{status}): #{details}"
+    raw = response&.body.to_s
+    warn "⚠️  OpenRouter fallback failed (#{status})"
+    ErrorResponseBody.warn_if_present("", raw)
     nil
-  end
-
-  def extract_error_message(body)
-    parsed = Oj.load(body)
-    parsed.dig("error", "message").to_s
-  rescue Oj::ParseError
-    body.to_s
   end
 
   def debug_request(body, source_model)

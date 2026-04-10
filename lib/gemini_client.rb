@@ -6,20 +6,22 @@ require "ruby-progressbar"
 
 # Custom error for rate limiting (429)
 class RateLimitError < StandardError
-  attr_reader :retry_after
+  attr_reader :retry_after, :raw_body
 
-  def initialize(message = "Rate limited", retry_after: nil)
+  def initialize(message = "Rate limited", retry_after: nil, raw_body: nil)
     @retry_after = retry_after
+    @raw_body = raw_body
     super(message)
   end
 end
 
 # Custom error for server errors (5xx)
 class ServerError < StandardError
-  attr_reader :status
+  attr_reader :status, :raw_body
 
-  def initialize(message = "Server error", status: 500)
+  def initialize(message = "Server error", status: 500, raw_body: nil)
     @status = status
+    @raw_body = raw_body
     super(message)
   end
 end
@@ -32,6 +34,7 @@ end
 class GeminiClient
   include AgentsFileHandler
   include PrimaryApiBackoff
+  include PrimaryApiErrorBody
   DEFAULT_MODEL = "gemini-3-flash"
   REQUEST_TIMEOUT = 300
   DEFAULT_PROGRESS_SPEED = 300
@@ -63,6 +66,7 @@ class GeminiClient
   end
 
   def stream_answer(messages, json: false)
+    reset_primary_error_body_warned!
     execute_with_network_retry do
       retry_with_backoff do
         body = build_request_body(messages, json: json)
@@ -85,9 +89,11 @@ class GeminiClient
   private
 
   def stream_with_openrouter_fallback(messages, json: false, error:)
+    warn_primary_api_error_body_once(error)
     answer = try_openrouter(messages, json: json)
     return answer.to_s.each_char { |char| yield char } if answer
 
+    warn_primary_api_error_body_once(error)
     warn retry_failure_message(error)
     exit 1
   end
@@ -121,11 +127,14 @@ class GeminiClient
   end
 
   def with_openrouter_fallback(messages, json: false)
+    reset_primary_error_body_warned!
     yield
   rescue RateLimitError, ServerError, NetworkResourceError => e
+    warn_primary_api_error_body_once(e)
     answer = try_openrouter(messages, json: json)
     return answer if answer
 
+    warn_primary_api_error_body_once(e)
     warn retry_failure_message(e)
     exit 1
   end
@@ -168,7 +177,7 @@ class GeminiClient
     when RateLimitError
       "❌ Rate limit exceeded after OpenRouter fallback: #{error.message}"
     when ServerError
-      "❌ Server error persisted after OpenRouter fallback"
+      "❌ Server error (#{error.status}) persisted after OpenRouter fallback: #{error.message}"
     when NetworkResourceError
       "❌ Network/resource error persisted after OpenRouter fallback: #{error.message}"
     else
@@ -202,8 +211,7 @@ class GeminiClient
   end
 
   def exhaust_httpx_network_retries(e, max_retries)
-    warn "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}"
-    exit 1
+    exhaust_retry(e, "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}")
   end
 
   def handle_retry_with_exponential_backoff(error, retries, max_retries, base_delay)
@@ -226,6 +234,10 @@ class GeminiClient
       msg.include?("stream closed") || msg.include?("0x8")
   end
 
+  # Outer retry after inner `retry_with_backoff` gives up. When OpenRouter is configured,
+  # `PrimaryApiBackoff` re-raises the first `NetworkResourceError` from the inner block; that
+  # exception is still caught here, so `rethrow_for_openrouter_fallback` must run again — otherwise
+  # this loop would sleep and retry instead of propagating to `with_openrouter_fallback`.
   def execute_with_network_retry(max_retries: 3, base_delay: 1)
     retries = 0
     begin
@@ -244,6 +256,7 @@ class GeminiClient
   end
 
   def handle_rate_limit_retry(error, retries, max_retries, _base_delay)
+    warn_rate_limit_body_on_first_retry(error, retries)
     delays = [5, 10, 30]
     delay = error.retry_after || delays[retries - 1] || delays.last
     error_msg = error.message.include?("Rate limited by API:") ? error.message.split(": ", 2).last : nil
@@ -254,6 +267,7 @@ class GeminiClient
   end
 
   def handle_server_error_retry(error, retries, max_retries, base_delay)
+    warn_server_body_on_first_retry(error, retries)
     delay = base_delay * (2**(retries - 1))
     warn "⚠️  Server error (#{error.status}), retrying in #{delay}s... (#{retries}/#{max_retries})"
     sleep(delay)
@@ -311,6 +325,10 @@ class GeminiClient
     warn "--- end response ---\n"
   end
 
+  def primary_api_error_endpoint
+    "#{@api_base_url}/models/#{@model}:streamGenerateContent"
+  end
+
   def raw_api_request(body)
     http = HTTPX.plugin(:proxy).with(
       timeout: {read_timeout: @request_timeout,
@@ -321,9 +339,7 @@ class GeminiClient
 
     http = http.with_proxy(uri: @proxy_url) if @proxy_url && !@proxy_url.empty?
 
-    endpoint = "#{@api_base_url}/models/#{@model}:streamGenerateContent"
-
-    http.post(endpoint,
+    http.post(primary_api_error_endpoint,
       headers: {
         "Content-Type" => "application/json",
         "x-goog-api-key" => @api_key
@@ -412,25 +428,28 @@ class GeminiClient
       raise NetworkResourceError.new("Network/resource error: #{response.body}")
     end
 
-    pretty_print_error("API Error", response.status, response.body)
+    pretty_print_error("API Error", response.status, ErrorResponseBody.format_body(response.body.to_s))
     exit 1
   end
 
   def raise_rate_limit_error(response)
     retry_after = extract_retry_after(response)
+    raw = ErrorResponseBody.raw_body_from_http_response(response)
     error_message = extract_error_message_from_response(response)
     message = error_message ? "Rate limited by API: #{error_message}" : "Rate limited by API"
 
     if error_message&.include?("Insufficient balance") || error_message&.include?("no resource package")
-      pretty_print_error("API Error", response.status, message)
+      detail = [message, ErrorResponseBody.format_body(raw)].reject { |s| s.to_s.strip.empty? }.join("\n\n")
+      pretty_print_error("API Error", response.status, detail)
       exit 1
     end
 
-    raise RateLimitError.new(message, retry_after: retry_after)
+    raise RateLimitError.new(message, retry_after: retry_after, raw_body: raw)
   end
 
   def raise_server_error(response)
-    raise ServerError.new("Server error", status: response.status)
+    raw = ErrorResponseBody.raw_body_from_http_response(response)
+    raise ServerError.new("Server error", status: response.status, raw_body: raw)
   end
 
   def handle_error_response_without_status(response)
@@ -438,15 +457,21 @@ class GeminiClient
 
     if error_status == 429
       error_message = extract_error_message_from_response_object(response)
+      raw = ErrorResponseBody.raw_body_from_http_response(response)
       if error_message&.include?("Insufficient balance") || error_message&.include?("no resource package")
         error_details = format_error_response(response)
         pretty_print_error("API Error", error_status, error_details)
         exit 1
       end
-      raise RateLimitError.new("Rate limited by API")
+      msg = error_message ? "Rate limited by API: #{error_message}" : "Rate limited by API"
+      ra = extract_retry_after_from_error_response(response)
+      raise RateLimitError.new(msg, retry_after: ra, raw_body: raw)
     end
 
-    raise ServerError.new("Server error", status: error_status) if error_status && error_status >= 500
+    if error_status && error_status >= 500
+      raw = ErrorResponseBody.raw_body_from_http_response(response)
+      raise ServerError.new("Server error", status: error_status, raw_body: raw)
+    end
 
     error_message = extract_error_message_from_response_object(response)
     if error_message && is_network_resource_error?(error_message)
@@ -465,7 +490,18 @@ class GeminiClient
     exit 1
   end
 
+  def extract_retry_after_from_error_response(response)
+    if response.respond_to?(:headers)
+      ra = extract_retry_after(response)
+      return ra if ra
+    end
+    nested = response.response if response.respond_to?(:response)
+    extract_retry_after(nested) if nested.respond_to?(:headers)
+  end
+
   def extract_retry_after(response)
+    return nil if response.nil? || !response.respond_to?(:headers)
+
     retry_header = response.headers["retry-after"]&.first
     return nil unless retry_header
 
