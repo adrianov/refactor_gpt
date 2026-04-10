@@ -51,6 +51,9 @@ A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring
 
    **Gemini** (for `gemini-*`): `GEMINI_BASE_URL`, `GEMINI_ACCESS_TOKEN`
 
+   **OpenRouter fallback** (optional, used automatically after retryable `429`, `5xx`, or network failures): `OPENROUTER_API_KEY`
+   Optional overrides: `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`
+
    Default model is inferred from which token is set (Claude preferred, then Gemini, then OpenAI). The `--search` flag uses OpenAI's search model.
 
    **Proxy Configuration (Optional):**
@@ -189,6 +192,7 @@ Features:
   - **Gemini 3 Flash** (preferred, if `GEMINI_ACCESS_TOKEN` is configured)
   - **GPT models** via OpenAI API (if `OPENAI_ACCESS_TOKEN` is configured)
   - **Search mode** (`--search` flag) always uses OpenAI's `gpt-4o-search-preview` model
+  - **OpenRouter fallback** for retryable primary API failures when `OPENROUTER_API_KEY` is configured
 
 ### git_commit_gpt.rb
 
@@ -205,6 +209,7 @@ Features:
 - Ensures every changed file is included in exactly one suggested commit
 - Prints a clear commit plan and asks for confirmation before running any `git add`/`git commit` commands
 - Reviews diffs for potential issues and prints warnings with a probability score
+- Falls back to OpenRouter automatically when the primary API is rate-limited or temporarily unavailable
 
 ### git_explain_gpt.rb
 
