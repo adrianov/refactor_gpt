@@ -52,46 +52,97 @@ class OpenAiClient
     @progress_mutex = Mutex.new
     @progress_stop = false
     @raise_on_server_error = raise_on_server_error
+    @openrouter_client = build_openrouter_client
   end
 
   def ask(messages, json: false, title: nil)
     title ||= @progress_title
-    return ask_with_progress(messages, json: json, title: title) if title
-
-    execute_with_network_retry do
-      retry_with_backoff do
-        body = build_request_body(messages, json: json)
-        debug_request(body) if @debug
-
-        response = make_api_request(body)
-        handle_response_errors(response)
-        answer = extract_answer(response)
-        debug_response(answer) if @debug
-        answer
-      end
-    end
-  rescue HTTPX::Error => e
-    if is_network_resource_error?(e.message.to_s)
-      execute_with_network_retry do
-        retry_with_backoff do
-          body = build_request_body(messages, json: json)
-          debug_request(body) if @debug
-
-          response = make_api_request(body)
-          handle_response_errors(response)
-          answer = extract_answer(response)
-          debug_response(answer) if @debug
-          answer
-        end
-      end
-    else
-      handle_http_error(e)
+    with_openrouter_fallback(messages, json: json) do
+      title ? perform_progress_request(messages, json: json, title: title) : perform_request(messages, json: json)
     end
   rescue Oj::ParseError => e
     handle_parse_error(e, response)
   end
 
   private
+
+  def perform_request(messages, json: false)
+    execute_with_network_retry { make_request_with_debug(messages, json: json) }
+  rescue HTTPX::Error => e
+    raise NetworkResourceError, "Network/resource error: #{e.message}" if is_network_resource_error?(e.message.to_s)
+
+    handle_http_error(e)
+  end
+
+  def perform_progress_request(messages, json: false, title: nil)
+    execute_with_network_retry { setup_progress_tracking(messages, json: json, title: title) }
+  rescue HTTPX::Error => e
+    raise NetworkResourceError, "Network/resource error: #{e.message}" if is_network_resource_error?(e.message.to_s)
+
+    handle_http_error(e)
+  end
+
+  def with_openrouter_fallback(messages, json: false)
+    yield
+  rescue RateLimitError, ServerError, NetworkResourceError => e
+    answer = try_openrouter(messages, json: json)
+    return answer if answer
+
+    handle_retry_failure(e)
+  end
+
+  def try_openrouter(messages, json: false)
+    return nil unless fallback_configured?
+
+    warn "⚠️  Primary API unavailable, trying OpenRouter fallback..."
+    @openrouter_client.ask(messages, json: json, max_completion_tokens: @max_completion_tokens,
+      source_model: @model)
+  end
+
+  def fallback_configured?
+    @openrouter_client&.configured?
+  end
+
+  def build_openrouter_client
+    OpenrouterClient.new(
+      api_key: fetch_env("OPENROUTER_API_KEY", nil),
+      api_base_url: fetch_env("OPENROUTER_BASE_URL", OpenrouterClient::DEFAULT_BASE_URL),
+      model: fetch_env("OPENROUTER_MODEL", OpenrouterClient::DEFAULT_MODEL),
+      proxy_url: @proxy_url,
+      request_timeout: @request_timeout,
+      debug: @debug
+    )
+  end
+
+  def exhaust_retry(error, message)
+    if fallback_configured? || (error.is_a?(ServerError) && @raise_on_server_error)
+      warn "#{message}#{fallback_configured? ? " Trying OpenRouter fallback..." : ""}"
+      raise error
+    end
+
+    warn message
+    exit 1
+  end
+
+  def handle_retry_failure(error)
+    raise error if error.is_a?(ServerError) && @raise_on_server_error
+
+    warn retry_failure_message(error)
+    exit 1
+  end
+
+  def retry_failure_message(error)
+    case error
+    when RateLimitError
+      "❌ Rate limit exceeded after OpenRouter fallback: #{error.message}"
+    when ServerError
+      "❌ Server error persisted after OpenRouter fallback"
+    when NetworkResourceError
+      "❌ Network/resource error persisted after OpenRouter fallback: #{error.message}"
+    else
+      "❌ Request failed after OpenRouter fallback: #{error.message}"
+    end
+  end
 
   def retry_with_backoff(max_retries: 3, base_delay: 1)
     retries = 0
@@ -108,8 +159,7 @@ class OpenAiClient
           handle_network_resource_retry(e, retries, max_retries, base_delay)
           retry
         else
-          warn "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}"
-          exit 1
+          exhaust_retry(e, "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}")
         end
       else
         retries += 1
@@ -126,8 +176,7 @@ class OpenAiClient
         handle_network_resource_retry(e, retries, max_retries, base_delay)
         retry
       else
-        warn "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}"
-        exit 1
+        exhaust_retry(e, "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}")
       end
     rescue RateLimitError => e
       retries += 1
@@ -135,8 +184,7 @@ class OpenAiClient
         handle_rate_limit_retry(e, retries, max_retries, base_delay)
         retry
       else
-        warn "❌ Rate limit exceeded after #{max_retries} retries: #{e.message}"
-        exit 1
+        exhaust_retry(e, "❌ Rate limit exceeded after #{max_retries} retries: #{e.message}")
       end
     rescue ServerError => e
       retries += 1
@@ -144,12 +192,7 @@ class OpenAiClient
         handle_server_error_retry(e, retries, max_retries, base_delay)
         retry
       else
-        warn "❌ Server error persisted after #{max_retries} retries"
-        if @raise_on_server_error
-          raise e
-        else
-          exit 1
-        end
+        exhaust_retry(e, "❌ Server error persisted after #{max_retries} retries")
       end
     end
   end
@@ -185,8 +228,7 @@ class OpenAiClient
         handle_network_resource_retry(e, retries, max_retries, base_delay)
         retry
       else
-        warn "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}"
-        exit 1
+        exhaust_retry(e, "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}")
       end
     end
   end
@@ -430,16 +472,8 @@ class OpenAiClient
   end
 
   def ask_with_progress(messages, json: false, title: nil)
-    execute_with_network_retry do
-      setup_progress_tracking(messages, json: json, title: title)
-    end
-  rescue HTTPX::Error => e
-    if is_network_resource_error?(e.message.to_s)
-      execute_with_network_retry do
-        setup_progress_tracking(messages, json: json, title: title)
-      end
-    else
-      handle_http_error(e)
+    with_openrouter_fallback(messages, json: json) do
+      perform_progress_request(messages, json: json, title: title)
     end
   rescue Oj::ParseError => e
     handle_parse_error(e, response)
