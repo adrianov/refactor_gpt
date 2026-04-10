@@ -226,9 +226,9 @@ class CommitPlanClient
             - Test stub files in `spec/stubs/`, `test/stubs/`, `test/fixtures/` when unrelated to test code changes
           - For each excluded file, provide a clear reason in the excluded_files section.
         - **Overall impact assessment** (`quality_assessment` in JSON — same schema, value-focused wording):
-          - Set `direction` to increased / decreased / unchanged from the perspective of **product, reliability, security, or maintainability risk** — not from "more elegant code" alone.
-          - In `explanation`, **lead with the goal or risk**: what becomes truer, safer, faster, or easier for the team or users, and what failure mode is avoided. Treat technical edits (RSpec helpers, refactors, typing) as **evidence** in a second sentence, not as the headline.
-          - Do **not** open with low-level mechanics (e.g. "Changing let_it_be to let…") unless the diff is purely internal with no user-facing story — then still state **what correctness or stability** is preserved.
+          - Set `direction` to increased / decreased / unchanged from the perspective of **overall code and product quality** (reliability, security, maintainability, correctness) — not from "more elegant code" alone. Bug fixes, crash prevention, and new safety checks **increase** quality. Regressions, removed safeguards, or introduced defects **decrease** quality.
+          - In `explanation`, **lead with the outcome**: what becomes safer, more correct, more reliable, or easier for the team or users, and what failure mode is eliminated. Treat technical edits (RSpec helpers, refactors, typing) as **evidence** in a second sentence, not as the headline.
+          - Do **not** open with low-level mechanics (e.g. "Changing let_it_be to let…") unless the diff is purely internal with no user-facing story — then still state **what correctness or stability** is preserved or improved.
           - Keep to 2–3 sentences maximum; no bullet lists inside the string.
         - For each detected issue, create a warning entry with:
           - The affected file path
@@ -245,7 +245,7 @@ class CommitPlanClient
       {
         "quality_assessment": {
           "direction": "increased" | "decreased" | "unchanged",
-          "explanation": "2-3 sentences: outcome and risk/value first; technical detail only to support that story"
+          "explanation": "2-3 sentences: quality/reliability outcome first; technical detail only to support that story"
         },
         "commits": [
           {
