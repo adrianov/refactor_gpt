@@ -31,6 +31,7 @@ end
 
 class GeminiClient
   include AgentsFileHandler
+  include PrimaryApiBackoff
   DEFAULT_MODEL = "gemini-3-flash"
   REQUEST_TIMEOUT = 300
   DEFAULT_PROGRESS_SPEED = 300
@@ -200,58 +201,9 @@ class GeminiClient
     nil
   end
 
-  def retry_with_backoff(max_retries: 3, base_delay: 1)
-    retries = 0
-
-    begin
-      yield
-    rescue HTTPX::Connection::HTTP2::GoawayError,
-      HTTPX::TimeoutError,
-      HTTPX::ConnectionError => e
-
-      if is_network_resource_error?(e.message.to_s)
-        retries += 1
-        if retries <= max_retries
-          handle_network_resource_retry(e, retries, max_retries, base_delay)
-          retry
-        else
-          warn "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}"
-          exit 1
-        end
-      else
-        retries += 1
-        if retries <= max_retries
-          handle_retry_with_exponential_backoff(e, retries, max_retries, base_delay)
-          retry
-        else
-          raise e
-        end
-      end
-    rescue NetworkResourceError => e
-      retries += 1
-      if retries <= max_retries
-        handle_network_resource_retry(e, retries, max_retries, base_delay)
-        retry
-      else
-        exhaust_retry(e, "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}")
-      end
-    rescue RateLimitError => e
-      retries += 1
-      if retries <= max_retries
-        handle_rate_limit_retry(e, retries, max_retries, base_delay)
-        retry
-      else
-        exhaust_retry(e, "❌ Rate limit exceeded after #{max_retries} retries: #{e.message}")
-      end
-    rescue ServerError => e
-      retries += 1
-      if retries <= max_retries
-        handle_server_error_retry(e, retries, max_retries, base_delay)
-        retry
-      else
-        exhaust_retry(e, "❌ Server error persisted after #{max_retries} retries")
-      end
-    end
+  def exhaust_httpx_network_retries(e, max_retries)
+    warn "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}"
+    exit 1
   end
 
   def handle_retry_with_exponential_backoff(error, retries, max_retries, base_delay)
@@ -279,6 +231,8 @@ class GeminiClient
     begin
       yield
     rescue NetworkResourceError => e
+      rethrow_for_openrouter_fallback(e)
+
       retries += 1
       if retries <= max_retries
         handle_network_resource_retry(e, retries, max_retries, base_delay)
