@@ -32,6 +32,43 @@ class CommitPlanClient
   private
 
   MAX_CONTENT_SIZE_CHARS = 200 * 1024
+  USER_CONTENT_SECTIONS = [
+    {
+      type: :static,
+      key: :cli_hint,
+      optional: true,
+      template: "Here are hints or preferences from the user:\n\n%s\n"
+    },
+    {
+      type: :static,
+      key: :status_output,
+      optional: false,
+      template: "Here is the git status:\n\n%s\n"
+    },
+    {
+      type: :diff,
+      label: "(1) Current MR — committed vs origin/HEAD (git diff origin/HEAD...):",
+      key: :mr_diff_output
+    },
+    {
+      type: :diff,
+      label: "(2) Uncommitted changes (git diff):",
+      key: :uncommitted_diff_output
+    },
+    {
+      type: :static,
+      key: :recent_commits,
+      optional: false,
+      template: "Here are the last 15 git commit one-line messages (most recent first):\n\n%s\n"
+    },
+    {
+      type: :static,
+      key: :recent_commands,
+      optional: true,
+      template: "Here are the last 5 shell commands from the user's terminal history " \
+        "(most recent last):\n\n%s\n"
+    }
+  ].freeze
 
   def append_section(parts, current_size_chars, max_size_chars, text)
     return current_size_chars if text.empty? || current_size_chars + text.length > max_size_chars
@@ -40,21 +77,17 @@ class CommitPlanClient
     current_size_chars + text.length
   end
 
-  def append_hint_section(parts, current_size_chars, max_size_chars, cli_hint)
-    return current_size_chars if cli_hint.empty?
-    append_section(parts, current_size_chars, max_size_chars,
-      "Here are hints or preferences from the user:\n\n#{cli_hint}\n")
+  def append_static_section(parts, current_size_chars, max_size_chars, value, config)
+    return current_size_chars if config[:optional] && value.empty?
+
+    append_section(parts, current_size_chars, max_size_chars, format(config[:template], value))
   end
 
-  def append_status_section(parts, current_size_chars, max_size_chars, status_output)
-    append_section(parts, current_size_chars, max_size_chars,
-      "Here is the git status:\n\n#{status_output}\n")
-  end
-
-  def append_labeled_diff_section(parts, current_size_chars, max_size_chars, label, diff_output)
+  def append_labeled_diff_section(parts, current_size_chars, max_size_chars, section, data)
+    diff_output = data.fetch(section[:key], "").to_s
     return current_size_chars if diff_output.to_s.strip.empty?
 
-    diff_text = "#{label}\n\n"
+    diff_text = "#{section[:label]}\n\n"
     remaining = max_size_chars - current_size_chars - diff_text.length
     if remaining <= 0
       parts << "#{diff_text}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_CHARS} chars limit)\n"
@@ -80,56 +113,58 @@ class CommitPlanClient
     slice
   end
 
-  def append_commits_section(parts, current_size_chars, max_size_chars, recent_commits)
-    append_section(parts, current_size_chars, max_size_chars,
-      "Here are the last 15 git commit one-line messages (most recent first):\n\n#{recent_commits}\n")
+  def append_configured_section(parts, current_size_chars, max_size_chars, section, data)
+    return append_labeled_diff_section(parts, current_size_chars, max_size_chars, section, data) if section[:type] == :diff
+
+    append_static_section(
+      parts,
+      current_size_chars,
+      max_size_chars,
+      data.fetch(section[:key], "").to_s,
+      section
+    )
   end
 
-  def append_commands_section(parts, current_size_chars, max_size_chars, recent_commands)
-    return current_size_chars if recent_commands.empty?
-    append_section(parts, current_size_chars, max_size_chars,
-      "Here are the last 5 shell commands from the user's terminal history " \
-      "(most recent last):\n\n#{recent_commands}\n")
+  def append_user_content_sections(parts, max_size_chars, data)
+    current_size_chars = 0
+    USER_CONTENT_SECTIONS.each do |section|
+      current_size_chars = append_configured_section(parts, current_size_chars, max_size_chars, section, data)
+    end
+    current_size_chars
   end
 
   def build_user_content(status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits,
     recent_commands)
-    content_parts = []
-    current_size_chars = 0
-    max_size_chars = MAX_CONTENT_SIZE_CHARS
-
-    current_size_chars = append_hint_section(content_parts, current_size_chars, max_size_chars, cli_hint)
-    current_size_chars = append_status_section(content_parts, current_size_chars, max_size_chars, status_output)
-    current_size_chars = append_labeled_diff_section(
-      content_parts, current_size_chars, max_size_chars,
-      "(1) Current MR — committed vs origin/HEAD (git diff origin/HEAD...):",
-      mr_diff_output
-    )
-    current_size_chars = append_labeled_diff_section(
-      content_parts, current_size_chars, max_size_chars,
-      "(2) Uncommitted changes (git diff):",
-      uncommitted_diff_output
-    )
-    current_size_chars = append_commits_section(content_parts, current_size_chars, max_size_chars, recent_commits)
-    append_commands_section(content_parts, current_size_chars, max_size_chars, recent_commands)
-
-    content_parts.join("\n")
+    data = {
+      status_output: status_output,
+      mr_diff_output: mr_diff_output,
+      uncommitted_diff_output: uncommitted_diff_output,
+      cli_hint: cli_hint,
+      recent_commits: recent_commits,
+      recent_commands: recent_commands
+    }
+    parts = []
+    append_user_content_sections(parts, MAX_CONTENT_SIZE_CHARS, data)
+    parts.join("\n")
   end
 
   def parse_commit_plan_response(raw_response, payload_size_kb)
-    json_str = raw_response.strip
-    stripped_json_str = raw_response.gsub(/^```.*\n?/, "").gsub(/```$/, "").strip
-
-    begin
-      Oj.load(json_str)
-    rescue Oj::ParseError
-      Oj.load(stripped_json_str)
+    [raw_response.strip, strip_code_fence(raw_response)].each do |candidate|
+      begin
+        return Oj.load(candidate)
+      rescue Oj::ParseError
+        next
+      end
     end
-  rescue Oj::ParseError
+
     puts "Failed to parse model response as JSON.".red
     puts "Payload size: #{payload_size_kb} KB".yellow
     puts "Raw response:\n#{raw_response}".red
     exit 1
+  end
+
+  def strip_code_fence(text)
+    text.gsub(/^```.*\n?/, "").gsub(/```$/, "").strip
   end
 
   def calculate_payload_size(messages)
