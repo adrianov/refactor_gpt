@@ -52,8 +52,9 @@ class ConflictResolver
     abort "No conflicted files found.".yellow if files.empty?
 
     file_contents = read_files(reference_files(files))
+    commit_context = conflict_commit_context
     puts "Resolving #{files.size} conflicted file(s)...".cyan
-    files.each { |f| resolve_file(f, file_contents) }
+    files.each { |f| resolve_file(f, file_contents, commit_context) }
     puts "\nAll conflicts resolved and staged. Review and commit when ready.".green
   end
 
@@ -71,12 +72,12 @@ class ConflictResolver
     paths.each_with_object({}) { |p, h| h[p] = File.read(p) }
   end
 
-  def resolve_file(path, all_contents)
+  def resolve_file(path, all_contents, commit_context)
     content = all_contents[path]
     return puts "  #{path}: no conflict markers, skipping.".yellow unless has_conflict_markers?(content)
 
     puts "  Resolving #{path}...".blue
-    resolved = ask_llm(path, content, all_contents)
+    resolved = ask_llm(path, content, all_contents, commit_context)
     return warn "  #{path}: LLM returned empty content, skipping.".red if resolved.nil? || resolved.strip.empty?
 
     write_and_stage(path, resolved)
@@ -92,10 +93,10 @@ class ConflictResolver
     content.match?(CONFLICT_START) && content.match?(CONFLICT_MID) && content.match?(CONFLICT_END)
   end
 
-  def ask_llm(path, content, all_contents)
+  def ask_llm(path, content, all_contents, commit_context)
     messages = [
       {role: "system", content: system_instruction},
-      {role: "user", content: user_prompt(path, content, all_contents)}
+      {role: "user", content: user_prompt(path, content, all_contents, commit_context)}
     ]
     response = @client.ask(messages, title: "Resolving #{File.basename(path)}".cyan)
     extract_resolved(response, path)
@@ -111,6 +112,7 @@ class ConflictResolver
       For each conflict block:
       - Keep the correct side when one side is clearly right.
       - Merge both sides when each contains distinct, non-duplicate changes.
+      - Use commit descriptions for both conflicting sides to infer intent before resolving.
       - Remove all conflict markers (<<<<<<, =======, >>>>>>>).
       - Leave all non-conflicting code untouched.
 
@@ -123,7 +125,7 @@ class ConflictResolver
     TEXT
   end
 
-  def user_prompt(path, content, all_contents)
+  def user_prompt(path, content, all_contents, commit_context)
     context = all_contents.reject { |p, _| p == path }
     context_section = context.map { |p, c| "<context filename=\"#{p}\">\n#{c}\n</context>" }.join("\n\n")
 
@@ -133,7 +135,37 @@ class ConflictResolver
       <conflicted_file filename="#{path}">
       #{content}
       </conflicted_file>
+      #{commit_context.empty? ? "" : "\nConflicting commit descriptions (critical context for intent):\n\n#{commit_context}"}
       #{context_section.empty? ? "" : "\nOther files in the merge for context (do not modify):\n\n#{context_section}"}
+    TEXT
+  end
+
+  def conflict_commit_context
+    shas = [head_sha, *merge_head_shas].compact.uniq
+    shas.filter_map { |sha| format_commit_context(sha) }.join("\n\n")
+  end
+
+  def head_sha
+    sha = `git rev-parse HEAD 2>/dev/null`.strip
+    return sha if $?.success? && !sha.empty?
+  end
+
+  def merge_head_shas
+    heads = `git rev-parse --verify MERGE_HEAD 2>/dev/null`.split("\n").map(&:strip).reject(&:empty?)
+    return heads if $?.success?
+
+    []
+  end
+
+  def format_commit_context(sha)
+    details = `git show -s --format=%B #{Shellwords.escape(sha)} 2>/dev/null`.strip
+    return nil unless $?.success?
+
+    description = details.empty? ? "(no commit message body)" : details
+    <<~TEXT.strip
+      <conflict_commit sha="#{sha}">
+      #{description}
+      </conflict_commit>
     TEXT
   end
 
