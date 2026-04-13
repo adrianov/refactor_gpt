@@ -31,63 +31,63 @@ class CommitPlanClient
 
   private
 
-  MAX_CONTENT_SIZE_KB = 200
+  MAX_CONTENT_SIZE_CHARS = 200 * 1024
 
-  def append_section(parts, current_size_bytes, max_size_bytes, text)
-    return current_size_bytes if text.empty? || current_size_bytes + text.bytesize > max_size_bytes
+  def append_section(parts, current_size_chars, max_size_chars, text)
+    return current_size_chars if text.empty? || current_size_chars + text.length > max_size_chars
 
     parts << text
-    current_size_bytes + text.bytesize
+    current_size_chars + text.length
   end
 
-  def append_hint_section(parts, current_size_bytes, max_size_bytes, cli_hint)
-    return current_size_bytes if cli_hint.empty?
-    append_section(parts, current_size_bytes, max_size_bytes,
+  def append_hint_section(parts, current_size_chars, max_size_chars, cli_hint)
+    return current_size_chars if cli_hint.empty?
+    append_section(parts, current_size_chars, max_size_chars,
       "Here are hints or preferences from the user:\n\n#{cli_hint}\n")
   end
 
-  def append_status_section(parts, current_size_bytes, max_size_bytes, status_output)
-    append_section(parts, current_size_bytes, max_size_bytes,
+  def append_status_section(parts, current_size_chars, max_size_chars, status_output)
+    append_section(parts, current_size_chars, max_size_chars,
       "Here is the git status:\n\n#{status_output}\n")
   end
 
-  def append_labeled_diff_section(parts, current_size_bytes, max_size_bytes, label, diff_output)
-    return current_size_bytes if diff_output.to_s.strip.empty?
+  def append_labeled_diff_section(parts, current_size_chars, max_size_chars, label, diff_output)
+    return current_size_chars if diff_output.to_s.strip.empty?
 
     diff_text = "#{label}\n\n"
-    remaining = max_size_bytes - current_size_bytes - diff_text.bytesize
+    remaining = max_size_chars - current_size_chars - diff_text.length
     if remaining <= 0
-      parts << "#{diff_text}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_KB} KB limit)\n"
-      return current_size_bytes
+      parts << "#{diff_text}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_CHARS} chars limit)\n"
+      return current_size_chars
     end
     truncated = truncate_diff_at_newline(diff_output, remaining)
     diff_text += truncated
-    if truncated.bytesize < diff_output.bytesize
-      diff_text += "\n\n... (diff truncated at #{MAX_CONTENT_SIZE_KB} KB limit)\n"
+    if truncated.length < diff_output.length
+      diff_text += "\n\n... (diff truncated at #{MAX_CONTENT_SIZE_CHARS} chars limit)\n"
     end
     parts << diff_text
-    current_size_bytes + diff_text.bytesize
+    current_size_chars + diff_text.length
   end
 
-  def truncate_diff_at_newline(diff_output, max_bytes)
-    return "" if max_bytes <= 0
-    return diff_output if diff_output.bytesize <= max_bytes
+  def truncate_diff_at_newline(diff_output, max_chars)
+    return "" if max_chars <= 0
+    return diff_output if diff_output.length <= max_chars
 
-    slice = diff_output.byteslice(0, max_bytes)
+    slice = diff_output[0, max_chars]
     last_newline = slice.rindex("\n")
-    return diff_output.byteslice(0, last_newline + 1) unless last_newline.nil?
+    return diff_output[0, last_newline + 1] unless last_newline.nil?
 
     slice
   end
 
-  def append_commits_section(parts, current_size_bytes, max_size_bytes, recent_commits)
-    append_section(parts, current_size_bytes, max_size_bytes,
+  def append_commits_section(parts, current_size_chars, max_size_chars, recent_commits)
+    append_section(parts, current_size_chars, max_size_chars,
       "Here are the last 15 git commit one-line messages (most recent first):\n\n#{recent_commits}\n")
   end
 
-  def append_commands_section(parts, current_size_bytes, max_size_bytes, recent_commands)
-    return current_size_bytes if recent_commands.empty?
-    append_section(parts, current_size_bytes, max_size_bytes,
+  def append_commands_section(parts, current_size_chars, max_size_chars, recent_commands)
+    return current_size_chars if recent_commands.empty?
+    append_section(parts, current_size_chars, max_size_chars,
       "Here are the last 5 shell commands from the user's terminal history " \
       "(most recent last):\n\n#{recent_commands}\n")
   end
@@ -95,23 +95,23 @@ class CommitPlanClient
   def build_user_content(status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits,
     recent_commands)
     content_parts = []
-    current_size_bytes = 0
-    max_size_bytes = MAX_CONTENT_SIZE_KB * 1024
+    current_size_chars = 0
+    max_size_chars = MAX_CONTENT_SIZE_CHARS
 
-    current_size_bytes = append_hint_section(content_parts, current_size_bytes, max_size_bytes, cli_hint)
-    current_size_bytes = append_status_section(content_parts, current_size_bytes, max_size_bytes, status_output)
-    current_size_bytes = append_labeled_diff_section(
-      content_parts, current_size_bytes, max_size_bytes,
+    current_size_chars = append_hint_section(content_parts, current_size_chars, max_size_chars, cli_hint)
+    current_size_chars = append_status_section(content_parts, current_size_chars, max_size_chars, status_output)
+    current_size_chars = append_labeled_diff_section(
+      content_parts, current_size_chars, max_size_chars,
       "(1) Current MR — committed vs origin/HEAD (git diff origin/HEAD...):",
       mr_diff_output
     )
-    current_size_bytes = append_labeled_diff_section(
-      content_parts, current_size_bytes, max_size_bytes,
+    current_size_chars = append_labeled_diff_section(
+      content_parts, current_size_chars, max_size_chars,
       "(2) Uncommitted changes (git diff):",
       uncommitted_diff_output
     )
-    current_size_bytes = append_commits_section(content_parts, current_size_bytes, max_size_bytes, recent_commits)
-    append_commands_section(content_parts, current_size_bytes, max_size_bytes, recent_commands)
+    current_size_chars = append_commits_section(content_parts, current_size_chars, max_size_chars, recent_commits)
+    append_commands_section(content_parts, current_size_chars, max_size_chars, recent_commands)
 
     content_parts.join("\n")
   end
