@@ -100,7 +100,7 @@ class OpenAiClient
   def try_openrouter(messages, json: false)
     return nil unless fallback_configured?
 
-    warn "⚠️  Primary API unavailable, trying OpenRouter fallback..."
+    warn "⚠️  Primary API unavailable, trying OpenRouter fallback... #{format_payload_size}"
     @openrouter_client.ask(messages, json: json, max_completion_tokens: @max_completion_tokens,
       source_model: @model)
   end
@@ -219,7 +219,16 @@ class OpenAiClient
     body = {model: @model, messages: messages}
     body[:response_format] = {type: "json_object"} if json
     body[:max_completion_tokens] = @max_completion_tokens if @max_completion_tokens
+    @last_payload_bytes = Oj.dump(body, mode: :compat).bytesize
     body
+  end
+
+  def format_payload_size
+    return "" unless @last_payload_bytes
+
+    bytes = @last_payload_bytes
+    size = bytes >= 1_048_576 ? "#{(bytes / 1_048_576.0).round(2)} MB" : "#{(bytes / 1024.0).round(2)} KB"
+    "(payload: #{size})"
   end
 
   def debug_request(body)

@@ -142,13 +142,21 @@ class GeminiClient
   def try_openrouter(messages, json: false)
     return nil unless fallback_configured?
 
-    warn "⚠️  Primary API unavailable, trying OpenRouter fallback..."
+    warn "⚠️  Primary API unavailable, trying OpenRouter fallback... #{format_payload_size}"
     @openrouter_client.ask(messages, json: json, max_completion_tokens: @max_completion_tokens,
       source_model: @model)
   end
 
   def fallback_configured?
     @openrouter_client&.configured?
+  end
+
+  def format_payload_size
+    return "" unless @last_payload_bytes
+
+    bytes = @last_payload_bytes
+    size = bytes >= 1_048_576 ? "#{(bytes / 1_048_576.0).round(2)} MB" : "#{(bytes / 1024.0).round(2)} KB"
+    "(payload: #{size})"
   end
 
   def build_openrouter_client
@@ -286,7 +294,9 @@ class GeminiClient
 
     config[:generationConfig][:temperature] = 0.7
 
-    body.merge(config)
+    merged = body.merge(config)
+    @last_payload_bytes = Oj.dump(merged, mode: :compat).bytesize
+    merged
   end
 
   def convert_to_gemini_format(messages)
