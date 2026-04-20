@@ -149,7 +149,9 @@ class CommitPlanClient
   end
 
   def parse_commit_plan_response(raw_response, payload_size_kb)
-    [raw_response.strip, strip_code_fence(raw_response)].each do |candidate|
+    [raw_response.strip, extract_json_object(raw_response)].each do |candidate|
+      next unless candidate
+
       begin
         return Oj.load(candidate)
       rescue Oj::ParseError
@@ -163,8 +165,10 @@ class CommitPlanClient
     exit 1
   end
 
-  def strip_code_fence(text)
-    text.gsub(/^```.*\n?/, "").gsub(/```$/, "").strip
+  def extract_json_object(text)
+    start = text.index("{")
+    finish = text.rindex("}")
+    text[start..finish] if start && finish && finish > start
   end
 
   def calculate_payload_size(messages)
