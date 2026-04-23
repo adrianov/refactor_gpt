@@ -47,13 +47,13 @@ class CommitPlanClient
     },
     {
       type: :diff,
-      label: "(1) Current MR — committed vs origin/HEAD (git diff origin/HEAD...):",
-      key: :mr_diff_output
+      label: "(1) Uncommitted changes — SOURCE OF TRUTH for commit messages (git diff vs HEAD):",
+      key: :uncommitted_diff_output
     },
     {
       type: :diff,
-      label: "(2) Uncommitted changes (git diff):",
-      key: :uncommitted_diff_output
+      label: "(2) Already on branch vs origin/HEAD — context only, not for message wording (git diff origin/HEAD...):",
+      key: :mr_diff_output
     },
     {
       type: :static,
@@ -193,10 +193,10 @@ class CommitPlanClient
 
       Input:
       - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
-      - (1) Current MR: unified diff of **already committed** changes vs origin/HEAD (`git diff origin/HEAD... -w -W --no-prefix --diff-algorithm=histogram`) — provided for CONTEXT ONLY; these files are already committed and must NOT appear in any commit's file list
-      - (2) Uncommitted changes: unified diff of working tree vs index (`git diff -w -W --no-prefix --diff-algorithm=histogram`; includes new files after `git add -N`) — these are the ONLY files eligible to be committed
+      - (1) Uncommitted changes: unified diff of working tree and index vs HEAD (`git diff HEAD -w -W --no-prefix --diff-algorithm=histogram`; includes new paths after `git add -N`) — **sole source of truth** for what each commit `message` and `quality_assessment.explanation` describe; these hunks are the ONLY files eligible to be committed
+      - (2) Already on branch: unified diff of **committed** changes vs origin/HEAD (`git diff origin/HEAD...`) — **context only** so you do not assign already-committed paths to new commits; **never** copy themes, bug titles, or technical topics from this diff into new commit messages unless the same topic appears in (1) for the files you are committing
       - optional user-provided hints or preferences from the command line
-      - last 15 git commit one-line messages to help you match existing style
+      - last 15 git commit one-line messages — **style only** (language, JIRA bracket format, conventional-commit shape); **never** reuse their subject-matter or problem description for new messages unless (1) clearly shows that same work continues
       - last 5 shell commands from the user's terminal history to give you extra context
 
       Porcelain v1 format guide:
@@ -212,7 +212,8 @@ class CommitPlanClient
   def build_task_section
     <<~HEREDOC
       Task:
-      - Analyze the status and diff to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
+      - Analyze the status and **section (1) uncommitted diff** to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
+      - **Commit message accuracy (critical)**: Every substantive word in each `message` and in `quality_assessment.explanation` MUST match a change visible in section (1) for the files in that commit. If section (1) does not show a topic (e.g. a library, subsystem, or bug class), that topic MUST NOT appear in new commit text — even if section (2) or recent commit titles discuss it.
       - **Code Assessment**: Thoroughly review all changes for potential issues:
         - Syntax errors or typos
         - Logic errors or incorrect implementations
@@ -224,7 +225,7 @@ class CommitPlanClient
         - Security vulnerabilities or unsafe practices
         - Performance issues or anti-patterns
       - **Language Detection**: Analyze recent commit messages to determine the primary language. Use the same language for new commits to maintain consistency. Default to English if no recent commits exist.
-      - Create commit messages consistent with the style and language of provided recent commit messages.
+      - Create commit messages consistent with the **format and language** of recent commit messages, not their **topics** (unless section (1) proves the same work).
       - Respect user-provided hints when choosing commit messages or grouping files, unless they conflict with actual diffs.
       - **JIRA Issue Reference Consistency** (critical rule):
         - Check branch name and recent commits for JIRA task references (patterns like PT-4668, ABC-123, etc.).
@@ -251,7 +252,7 @@ class CommitPlanClient
           - Example ordering: "add failing tests for user authentication" → "implement user authentication logic"
           - When tests were written after implementation, group implementation and tests together in a single commit
           - Every changed file from status must appear in **exactly one** commit OR in excluded_files — never in more than one commit
-          - **Only files present in `git status` output are eligible for commits.** Files that appear only in the MR diff (1) are already committed — do NOT include them in any commit's file list
+          - **Only files present in `git status` output are eligible for commits.** Files that appear only in the branch-vs-origin diff (2) are already committed — do NOT include them in any commit's file list
           - Extract complete file paths from status output by taking the full path after status flags (e.g., from "new file:   manifest.json", extract "manifest.json")
           - Never truncate or modify file paths - always use the complete filename including extensions
           - Prefer coherent commits over many tiny ones
