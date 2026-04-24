@@ -47,7 +47,7 @@ class CommitPlanClient
     },
     {
       type: :diff,
-      label: "(1) Uncommitted changes — SOURCE OF TRUTH for commit messages (git diff vs HEAD):",
+      label: "(1) Uncommitted changes — SOURCE OF TRUTH for commit messages (git diff vs HEAD, or empty tree with no commits yet):",
       key: :uncommitted_diff_output
     },
     {
@@ -193,7 +193,7 @@ class CommitPlanClient
 
       Input:
       - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
-      - (1) Uncommitted changes: unified diff of working tree and index vs HEAD (`git diff HEAD -w -W --no-prefix --diff-algorithm=histogram`; includes new paths after `git add -N`) — **sole source of truth** for what each commit `message` and `quality_assessment.explanation` describe; these hunks are the ONLY files eligible to be committed
+      - (1) Uncommitted changes: unified diff of working tree and index vs HEAD, or vs the empty tree if there is no commit yet (same as `git diff HEAD` after the first commit; `git add -N` is respected) — **sole source of truth** for what each commit `message` and `quality_assessment.explanation` describe; these hunks are the ONLY files eligible to be committed
       - (2) Already on branch: unified diff of **committed** changes vs origin/HEAD (`git diff origin/HEAD...`) — **context only** so you do not assign already-committed paths to new commits; **never** copy themes, bug titles, or technical topics from this diff into new commit messages unless the same topic appears in (1) for the files you are committing
       - optional user-provided hints or preferences from the command line
       - last 15 git commit one-line messages — **style only** (language, JIRA bracket format, conventional-commit shape); **never** reuse their subject-matter or problem description for new messages unless (1) clearly shows that same work continues

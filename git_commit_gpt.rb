@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require_relative "lib/loader"
+require "open3"
 require "shellwords"
 require "ruby-progressbar"
 require "colorize"
@@ -189,6 +190,9 @@ def check_for_changes(status_output)
 end
 
 DIFF_OPTS = "-w -W --no-prefix --histogram"
+DIFF_OPTS_MINIMAL = "-w -W --no-prefix"
+# Git’s canonical empty tree — valid diff base when there is no HEAD (initial / orphan import).
+GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 def show_git_diff_if_needed(show_diff, recent_commands)
   return unless show_diff
@@ -197,18 +201,68 @@ def show_git_diff_if_needed(show_diff, recent_commands)
   show_uncommitted_diff
 end
 
+# Returns true when a parent commit exists; otherwise unified diffs use GIT_EMPTY_TREE.
+def head_exists?
+  system("git rev-parse -q --verify HEAD >#{File::NULL} 2>&1")
+end
+
+# Same base the planner uses: HEAD if present, else the empty tree (initial commit / no commits yet).
+def worktree_uncommitted_ancestor
+  head_exists? ? "HEAD" : GIT_EMPTY_TREE
+end
+
+# origin/HEAD merge-base diff; empty string when not available (no remote, not fetched, etc.).
+def fetch_diff_vs_origin
+  return "" unless system("git rev-parse -q --verify origin/HEAD >#{File::NULL} 2>&1")
+
+  try_git_unified_against("origin/HEAD...").to_s
+end
+
+# Tries full diff options, then simpler ones, then without external diff drivers (e.g. broken difftool).
+# `against` is nil for index↔worktree; otherwise a single rev/pathspec suffix (e.g. HEAD, empty tree, --cached, origin/HEAD...).
+def try_git_unified_against(against = nil)
+  last_err = ""
+  suff = against ? [against] : []
+  [
+    (DIFF_OPTS.split + suff),
+    (DIFF_OPTS_MINIMAL.split + suff),
+    (["--no-ext-diff"] + DIFF_OPTS.split + suff),
+    (["--no-ext-diff"] + DIFF_OPTS_MINIMAL.split + suff)
+  ].each do |args|
+    out, err, st = Open3.capture3("git", "diff", *args)
+    last_err = err
+    return out if st.success?
+  end
+  @last_git_diff_stderr = last_err
+  nil
+end
+
+# Staged (index) + unstaged; last resort if diff vs HEAD/empty tree fails (e.g. odd driver, repo edge case).
+def try_combined_index_and_worktree
+  a = try_git_unified_against("--cached")
+  b = try_git_unified_against
+  return nil unless a && b
+
+  [a, b].map(&:to_s).reject { |s| s.strip.empty? }.join("\n\n")
+end
+
 def show_uncommitted_diff
+  ref = worktree_uncommitted_ancestor
   puts "Uncommitted changes:".cyan
-  puts "git diff #{DIFF_OPTS} HEAD".cyan
-  system("git diff #{DIFF_OPTS} HEAD")
+  puts "git diff #{DIFF_OPTS} #{ref}".cyan
+  shown = system("git", "diff", *DIFF_OPTS.split, ref)
+  shown ||= system("git", "diff", *DIFF_OPTS_MINIMAL.split, ref)
+  system("git", "diff", *(%w[--no-ext-diff] + DIFF_OPTS_MINIMAL.split + [ref])) unless shown
   puts
 end
 
 def fetch_diffs
-  mr = `git diff origin/HEAD... #{DIFF_OPTS} 2>/dev/null`
-  unc = `git diff #{DIFF_OPTS} HEAD 2>/dev/null`
-  unless $?.success?
+  mr = fetch_diff_vs_origin
+  unc = try_git_unified_against(worktree_uncommitted_ancestor) || try_combined_index_and_worktree
+  if unc.nil?
     warn "Failed to capture uncommitted diff for analysis".red
+    e = @last_git_diff_stderr.to_s.strip
+    warn e unless e.empty?
     exit 1
   end
   [mr, unc]
