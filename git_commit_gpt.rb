@@ -342,7 +342,21 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
 
   reinclude_excluded_code_files(result)
   result["status_output"] = status_output
+  result["status_snapshot"] = run_cmd("git status --porcelain --branch")
   result
+end
+
+# After the user accepts the plan, the tree must still match the snapshot taken at end of analysis
+# (post prepare_untracked_files) so the proposed file lists and commits stay valid.
+def abort_unless_status_snapshot_matches(snapshot)
+  return if snapshot.nil? || snapshot.empty?
+
+  current = run_cmd("git status --porcelain --branch")
+  return if current == snapshot
+
+  warn "Abort: git status changed after the plan was built (the index or worktree no longer matches analysis).".red
+  warn "Run git_commit_gpt again for a new plan, or commit, stash, or resolve your other changes first.".red
+  exit 1
 end
 
 def watch_loop(debug_mode, cli_hint, recent_commits, last_status)
@@ -352,7 +366,11 @@ def watch_loop(debug_mode, cli_hint, recent_commits, last_status)
     next if new_status == last_status
 
     plan_result = plan_commits(debug_mode, cli_hint, recent_commits, get_recent_commands, show_diff: false)
-    last_status = plan_result ? plan_result["status_output"] : new_status
+    last_status = if plan_result
+                    plan_result["status_snapshot"] || plan_result["status_output"]
+                  else
+                    new_status
+                  end
     next if plan_result.nil?
 
     CompletionNotifier.notify_completion(success: true, title: "✓ Commit Planning Done")
@@ -401,9 +419,11 @@ loop do
   if watch_mode
     GitCommitDisplay.display_commits_result(commits, warnings, quality_assessment, excluded_files)
     puts "Watching for file changes (every #{WATCH_INTERVAL}s). Ctrl+C to exit.".yellow
-    watch_loop(debug_mode, cli_hint, recent_commits, plan_result["status_output"])
+    watch_loop(debug_mode, cli_hint, recent_commits,
+      plan_result["status_snapshot"] || plan_result["status_output"])
   else
     GitCommitDisplay.display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
+    abort_unless_status_snapshot_matches(plan_result["status_snapshot"])
     execute_commits(commits)
   end
   break
