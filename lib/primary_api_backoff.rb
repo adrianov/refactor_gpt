@@ -3,14 +3,29 @@
 # Primary API retry steps; when OpenRouter is configured, the first retry-worthy error is re-raised for fallback.
 #
 # Including class must implement (private unless noted):
-#   fallback_configured?, is_network_resource_error?,
+#   fallback_configured?, is_network_resource_error? (client-specific phrases only),
 #   exhaust_retry(error, message), exhaust_httpx_network_retries(error, max_retries),
 #   handle_network_resource_retry, handle_retry_with_exponential_backoff,
 #   handle_rate_limit_retry, handle_server_error_retry
 module PrimaryApiBackoff
   def self.included(base)
+    base.prepend(NetworkErrors)
     base.include(Methods)
     base.send(:private, *Methods.instance_methods(false))
+  end
+
+  # Shared provider error phrases that should be handled as transient network failures.
+  module NetworkErrors
+    def is_network_resource_error?(error_message)
+      api_network_error?(error_message) || super
+    end
+    private :is_network_resource_error?
+
+    private
+
+    def api_network_error?(error_message)
+      error_message.to_s.match?(/network error,\s*error id:/i)
+    end
   end
 
   module Methods
