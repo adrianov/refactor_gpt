@@ -47,7 +47,8 @@ class CommitPlanClient
     },
     {
       type: :diff,
-      label: "(1) Uncommitted changes — SOURCE OF TRUTH for commit messages (git diff vs HEAD, or empty tree with no commits yet):",
+      label: "(1) Uncommitted changes — SOURCE OF TRUTH for commit messages " \
+             "(git diff HEAD, includes staged and unstaged):",
       key: :uncommitted_diff_output
     },
     {
@@ -114,7 +115,9 @@ class CommitPlanClient
   end
 
   def append_configured_section(parts, current_size_chars, max_size_chars, section, data)
-    return append_labeled_diff_section(parts, current_size_chars, max_size_chars, section, data) if section[:type] == :diff
+    if section[:type] == :diff
+      return append_labeled_diff_section(parts, current_size_chars, max_size_chars, section, data)
+    end
 
     append_static_section(
       parts,
@@ -193,7 +196,7 @@ class CommitPlanClient
 
       Input:
       - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
-      - (1) Uncommitted changes: unified diff of working tree and index vs HEAD, or vs the empty tree if there is no commit yet (same as `git diff HEAD` after the first commit; `git add -N` is respected) — **sole source of truth** for what each commit `message` and `quality_assessment.explanation` describe; these hunks are the ONLY files eligible to be committed
+      - (1) Uncommitted changes: unified diff of working tree and index vs HEAD (`git diff HEAD`; `git add -N` is respected) — **sole source of truth** for what each commit `message` and `quality_assessment.explanation` describe; these hunks are the ONLY files eligible to be committed; staged files are visible in `git status` with a non-space first column (e.g. `M `, `A `) and should be treated as intentionally pre-selected by the user
       - (2) Already on branch: unified diff of **committed** changes vs origin/HEAD (`git diff origin/HEAD...`) — **context only** so you do not assign already-committed paths to new commits; **never** copy themes, bug titles, or technical topics from this diff into new commit messages unless the same topic appears in (1) for the files you are committing
       - optional user-provided hints or preferences from the command line
       - last 15 git commit one-line messages — **style only** (language, JIRA bracket format, conventional-commit shape); **never** reuse their subject-matter or problem description for new messages unless (1) clearly shows that same work continues
@@ -212,7 +215,7 @@ class CommitPlanClient
   def build_task_section
     <<~HEREDOC
       Task:
-      - Analyze the status and **section (1) uncommitted diff** to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.).
+      - Analyze the status and **section (1) uncommitted diff** to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.). Files already staged (non-space first column in `git status`) are pre-selected by the user and should be grouped into an early commit.
       - **Commit message accuracy (critical)**: Every substantive word in each `message` and in `quality_assessment.explanation` MUST match a change visible in section (1) for the files in that commit. If section (1) does not show a topic (e.g. a library, subsystem, or bug class), that topic MUST NOT appear in new commit text — even if section (2) or recent commit titles discuss it.
       - **Code Assessment**: Thoroughly review all changes for potential issues:
         - Syntax errors or typos
