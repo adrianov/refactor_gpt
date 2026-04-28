@@ -1,0 +1,17 @@
+---
+description: Never tolerate pre-existing Metrics/AbcSize violations in modified files
+alwaysApply: true
+---
+
+# Metrics/AbcSize Must Be Fixed
+
+When you modify a file that has existing `Metrics/AbcSize` violations, fix them — do not leave them as "pre-existing".
+
+**Never say** "this violation was pre-existing" as justification to skip it. Every file you touch must exit with no `Metrics/AbcSize` offenses.
+
+## How to fix
+
+- Extract complex logic into smaller, focused private methods
+- Use guard clauses to reduce nesting
+- Split large conditionals into named predicate methods
+- Never use `# rubocop:disable Metrics/AbcSize` inline — refactor instead
