@@ -194,11 +194,8 @@ DIFF_OPTS_MINIMAL = "-w -W --no-prefix"
 # Git’s canonical empty tree — valid diff base when there is no HEAD (initial / orphan import).
 GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-def show_git_diff_if_needed(show_diff, recent_commands)
-  return unless show_diff
-  return if recent_commands.lines.last&.include?("git diff")
-
-  show_uncommitted_diff
+def show_git_diff_if_needed(show_diff)
+  show_uncommitted_diff if show_diff
 end
 
 # Returns true when a parent commit exists; otherwise unified diffs use GIT_EMPTY_TREE.
@@ -219,7 +216,7 @@ def fetch_diff_vs_origin
 end
 
 # Tries full diff options, then simpler ones, then without external diff drivers (e.g. broken difftool).
-# `against` is nil for index↔worktree; otherwise a single rev/pathspec suffix (e.g. HEAD, empty tree, --cached, origin/HEAD...).
+# `against` is nil for index↔worktree; otherwise a rev/pathspec suffix (HEAD, empty tree, --cached, origin/HEAD...).
 def try_git_unified_against(against = nil)
   last_err = ""
   suff = against ? [against] : []
@@ -301,10 +298,11 @@ def append_paths_to_last_commit(commits, paths)
   last["files"] = Array(last["files"]) + paths
 end
 
-def call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits, 
-recent_commands)
+def call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint,
+  recent_commits, recent_commands)
   client = CommitPlanClient.new(debug: debug_mode)
-  client.commit_plan(status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits, recent_commands)
+  client.commit_plan(status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits,
+    recent_commands)
 end
 
 def extract_plan_results(plan, status_output)
@@ -334,7 +332,7 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
 
   prepare_untracked_files
   mr_diff_output, uncommitted_diff_output = fetch_diffs
-  show_git_diff_if_needed(show_diff, recent_commands)
+  show_git_diff_if_needed(show_diff)
   plan = call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint,
     recent_commits, recent_commands)
   result = extract_plan_results(plan, status_output)
@@ -359,6 +357,17 @@ def abort_unless_status_snapshot_matches(snapshot)
   exit 1
 end
 
+def display_watch_plan(plan_result)
+  CompletionNotifier.notify_completion(success: true, title: "✓ Commit Planning Done")
+  GitCommitDisplay.display_commits_result(
+    plan_result["commits"],
+    plan_result["warnings"],
+    plan_result["quality_assessment"],
+    plan_result["excluded_files"]
+  )
+  puts "Watching for file changes (every #{WATCH_INTERVAL}s). Ctrl+C to exit.".yellow
+end
+
 def watch_loop(debug_mode, cli_hint, recent_commits, last_status)
   loop do
     sleep WATCH_INTERVAL
@@ -366,21 +375,10 @@ def watch_loop(debug_mode, cli_hint, recent_commits, last_status)
     next if new_status == last_status
 
     plan_result = plan_commits(debug_mode, cli_hint, recent_commits, get_recent_commands, show_diff: false)
-    last_status = if plan_result
-                    plan_result["status_snapshot"] || plan_result["status_output"]
-                  else
-                    new_status
-                  end
+    last_status = plan_result ? plan_result["status_snapshot"] || plan_result["status_output"] : new_status
     next if plan_result.nil?
 
-    CompletionNotifier.notify_completion(success: true, title: "✓ Commit Planning Done")
-    GitCommitDisplay.display_commits_result(
-      plan_result["commits"],
-      plan_result["warnings"],
-      plan_result["quality_assessment"],
-      plan_result["excluded_files"]
-    )
-    puts "Watching for file changes (every #{WATCH_INTERVAL}s). Ctrl+C to exit.".yellow
+    display_watch_plan(plan_result)
   end
 end
 
