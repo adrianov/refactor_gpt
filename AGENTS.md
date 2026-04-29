@@ -14,8 +14,8 @@ RefactorGPT Tools provides command-line utilities for:
 ## Build/Lint/Test Commands
 
 ```bash
-# Lint and auto-correct Ruby code style
-rubocop -a
+# Lint and auto-correct Ruby code style (use bundle exec when the project has RuboCop in the Gemfile)
+bundle exec rubocop -a
 
 # Validate syntax
 ruby -c path/to/file.rb
@@ -128,7 +128,7 @@ When refactoring code, systematically identify and remove unused and dead code w
 
 ### Linting and Code Quality
 - **Treat linter warnings seriously**: For any file or module you change, fix all Rubocop offenses reported in that file. Do not leave new or existing linter warnings in modified code.
-- Always run `rubocop -a` to auto-correct Ruby style issues before committing changes
+- Always run `bundle exec rubocop -a` when the Gemfile bundles RuboCop (otherwise plain `rubocop -a`) to auto-correct Ruby style issues before committing changes
 - Ensure syntax is valid with `ruby -c` after modifications
 - Follow Ruby style guides and existing code conventions
 - Remove duplicate code and unused variables systematically
