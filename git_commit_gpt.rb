@@ -326,15 +326,21 @@ def extract_plan_results(plan, status_output)
   }
 end
 
-def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: false)
+# Porcelain output after optional untrack prep and RuboCop autocorrect; nil when worktree is clean.
+def status_ready_for_plan
   status_output = run_cmd("git status --porcelain --branch")
   return nil unless check_for_changes(status_output)
 
   prepare_untracked_files
-  mr_diff_output, uncommitted_diff_output = fetch_diffs
-  show_git_diff_if_needed(show_diff)
-  plan = call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint,
-    recent_commits, recent_commands)
+  GitCommitRubocop.autocorrect_before_plan!(status_output)
+
+  status_output = run_cmd("git status --porcelain --branch")
+  return nil unless check_for_changes(status_output)
+
+  status_output
+end
+
+def finalize_commit_plan(plan, status_output)
   result = extract_plan_results(plan, status_output)
   return nil if result.nil?
 
@@ -342,6 +348,17 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
   result["status_output"] = status_output
   result["status_snapshot"] = run_cmd("git status --porcelain --branch")
   result
+end
+
+def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: false)
+  status_output = status_ready_for_plan
+  return nil if status_output.nil?
+
+  mr_diff_output, uncommitted_diff_output = fetch_diffs
+  show_git_diff_if_needed(show_diff)
+  plan = call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint,
+    recent_commits, recent_commands)
+  finalize_commit_plan(plan, status_output)
 end
 
 # After the user accepts the plan, the tree must still match the snapshot taken at end of analysis
@@ -396,22 +413,13 @@ puts "Model: #{current_model_display(debug_mode)}".cyan
 recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
-loop do
-  plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
-  break if plan_result.nil?
+plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
 
+if plan_result
   commits = plan_result["commits"]
   warnings = plan_result["warnings"]
   quality_assessment = plan_result["quality_assessment"]
   excluded_files = plan_result["excluded_files"]
-
-  warnings_fixed = GitCommitRubocop.handle_rubocop_warnings(status_output: plan_result["status_output"])
-
-  if warnings_fixed
-    puts "\nFiles have changed after fixing warnings. Re-planning commits...".cyan
-    recent_commands = get_recent_commands
-    next
-  end
 
   CompletionNotifier.notify_completion(success: true, title: "✓ Commit Planning Done")
   if watch_mode
@@ -424,7 +432,6 @@ loop do
     abort_unless_status_snapshot_matches(plan_result["status_snapshot"])
     execute_commits(commits)
   end
-  break
 end
 
 exit 0 if watch_mode
