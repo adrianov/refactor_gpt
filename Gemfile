@@ -11,3 +11,7 @@ gem 'tty-box'
 gem 'tty-cursor'
 gem 'tty-screen'
 gem 'zeitwerk'
+
+group :development do
+  gem 'rubocop'
+end

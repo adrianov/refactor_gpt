@@ -10,17 +10,25 @@ module GitCommitRubocop
   module_function
 
   RUBY_LINT_EXTENSIONS = %w[.rb .rake .gemspec].freeze
+  BUNDLED_RUBOCOP_ARGV = %w[bundle exec rubocop].freeze
+  PLAIN_RUBOCOP_ARGV = %w[rubocop].freeze
+  PROBE_CONTENT = "\n".freeze
 
-  # Runs `rubocop -a` on changed Ruby sources; exits non-zero when offenses remain.
+  # Runs RuboCop `-a` on changed Ruby sources; exits non-zero when offenses remain.
+  # Prefers `bundle exec rubocop` when that works; otherwise plain `rubocop` (Ruby version
+  # mismatch, broken bundle, or missing plugin gems only in the bundle).
   def autocorrect_before_plan!(status_output)
-    return unless project_rubocop_ready?
+    return unless project_rubocop_enabled?
 
     paths = rubocop_target_paths(status_output)
     return if paths.empty?
 
-    cmd = Shellwords.shelljoin(["rubocop", "-a", "--", *paths])
+    argv = rubocop_argv
+    return if argv.nil?
+
+    cmd = Shellwords.shelljoin([*argv, "-a", "--", *paths])
     puts "Running: #{cmd}".green
-    return if system("rubocop", "-a", "--", *paths)
+    return if run_rubocop(argv, "-a", "--", *paths)
 
     warn "RuboCop reported offenses that remain after autocorrect; fix or exclude them manually.".red
     exit 1
@@ -31,8 +39,7 @@ module GitCommitRubocop
   end
 
   def rubocop_available?
-    _out, st = Open3.capture2("rubocop", "-V")
-    st.success?
+    !rubocop_argv.nil?
   end
 
   def project_rubocop_ready?
@@ -55,4 +62,59 @@ module GitCommitRubocop
       RUBY_LINT_EXTENSIONS.include?(File.extname(path).downcase) && File.file?(path)
     end
   end
+
+  def rubocop_argv
+    cwd = Dir.pwd
+    @rubocop_argv_cache ||= {}
+    @rubocop_argv_cache.fetch(cwd) do
+      @rubocop_argv_cache[cwd] = resolve_rubocop_argv(cwd)
+    end
+  end
+
+  def resolve_rubocop_argv(root)
+    if File.file?(File.join(root, "Gemfile"))
+      return BUNDLED_RUBOCOP_ARGV if rubocop_runs_here?(BUNDLED_RUBOCOP_ARGV, root)
+    end
+
+    PLAIN_RUBOCOP_ARGV if rubocop_runs_here?(PLAIN_RUBOCOP_ARGV, root)
+  end
+
+  def rubocop_runs_here?(argv, root)
+    path = "#{root}/.rubocop_probe_#{$$}_#{rand(999_999_999)}.rb"
+    Dir.chdir(root) do
+      File.binwrite(path, PROBE_CONTENT)
+      _combined, status = rubocop_probe_capture(argv, path)
+      status.success?
+    end
+  ensure
+    File.unlink(path) if path && File.file?(path)
+  end
+
+  def rubocop_probe_capture(argv, probe_path)
+    full = argv + ["--fail-level", "F", "-f", "simple", "--", probe_path]
+    return Open3.capture2e(*full) unless plain_rubocop_argv?(argv)
+
+    without_bundler_env { Open3.capture2e(*full) }
+  end
+
+  def plain_rubocop_argv?(argv)
+    argv == PLAIN_RUBOCOP_ARGV
+  end
+
+  def without_bundler_env
+    return yield unless defined?(Bundler) && Bundler.respond_to?(:with_unbundled_env)
+
+    Bundler.with_unbundled_env { yield }
+  end
+
+  def run_rubocop(argv, *rest)
+    if plain_rubocop_argv?(argv)
+      without_bundler_env { system(*argv, *rest) }
+    else
+      system(*argv, *rest)
+    end
+  end
+
+  private_class_method :resolve_rubocop_argv, :rubocop_runs_here?, :rubocop_probe_capture, :plain_rubocop_argv?,
+                       :without_bundler_env, :run_rubocop
 end
