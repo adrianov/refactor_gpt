@@ -405,7 +405,7 @@ loop do
   quality_assessment = plan_result["quality_assessment"]
   excluded_files = plan_result["excluded_files"]
 
-  warnings_fixed = GitCommitRubocop.handle_rubocop_warnings
+  warnings_fixed = GitCommitRubocop.handle_rubocop_warnings(status_output: plan_result["status_output"])
 
   if warnings_fixed
     puts "\nFiles have changed after fixing warnings. Re-planning commits...".cyan

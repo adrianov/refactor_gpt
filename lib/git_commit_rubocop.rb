@@ -1,17 +1,26 @@
 # frozen_string_literal: true
 
 require "oj"
+require "open3"
 require "shellwords"
 require "colorize"
 
-# Runs rubocop, lets user select warnings to fix, and invokes agent to fix them.
+# Runs rubocop on changed Ruby files in RuboCop-enabled repos, lets the user fix
+# selected warnings via agent, then re-checks. Targets .rb / .rake / .gemspec from git status.
 module GitCommitRubocop
   module_function
 
-  def handle_rubocop_warnings
+  RUBY_LINT_EXTENSIONS = %w[.rb .rake .gemspec].freeze
+
+  def handle_rubocop_warnings(status_output: nil)
+    return false unless project_rubocop_ready?
+
+    paths = rubocop_target_paths(status_output)
+    return false if paths.empty?
+
     return false unless check_agent_installed
 
-    warnings = run_rubocop_warnings
+    warnings = run_rubocop_warnings(paths)
     return false if warnings.empty?
 
     display_rubocop_warnings(warnings)
@@ -25,7 +34,7 @@ module GitCommitRubocop
       fix_warnings_by_indices(warnings, selection)
     end
 
-    check_remaining_warnings
+    check_remaining_warnings(paths)
     true
   end
 
@@ -33,16 +42,51 @@ module GitCommitRubocop
     system("agent --version > #{File::NULL} 2>&1")
   end
 
-  def run_rubocop_warnings
-    output = `rubocop --format json 2>/dev/null`
-    return [] unless $?.success?
+  def project_rubocop_enabled?(root = Dir.pwd)
+    %w[.rubocop.yml .rubocop_todo.yml].any? { |name| File.file?(File.join(root, name)) }
+  end
 
-    result = Oj.load(output)
-    offenses = result["files"]&.flat_map { |file| file["offenses"] || [] } || []
-    offenses.map do |offense|
+  def rubocop_available?
+    _out, st = Open3.capture2("rubocop", "-V")
+    st.success?
+  end
+
+  def project_rubocop_ready?
+    project_rubocop_enabled? && rubocop_available?
+  end
+
+  def porcelain_file_paths(porcelain_output)
+    porcelain_output.split("\n").map do |line|
+      next nil if line.strip.empty? || line.start_with?("##")
+
+      status_and_path = line.sub(/^.{2}\s+/, "")
+      path = status_and_path.include?("->") ? status_and_path.split("->").last.strip : status_and_path
+      path.match(/\A"(.*)"\z/) ? Regexp.last_match(1) : path
+    end.compact
+  end
+
+  def rubocop_target_paths(status_output)
+    raw = status_output.nil? || status_output.strip.empty? ? `git status --porcelain --branch` : status_output
+    porcelain_file_paths(raw).select do |path|
+      RUBY_LINT_EXTENSIONS.include?(File.extname(path).downcase) && File.file?(path)
+    end
+  end
+
+  def run_rubocop_warnings(paths)
+    return [] if paths.nil? || paths.empty?
+
+    stdout, status = Open3.capture2("rubocop", "--format", "json", "--", *paths)
+    return [] unless rubocop_json_exit_ok?(status)
+
+    result = Oj.load(stdout)
+    offenses = result["files"]&.flat_map do |file|
+      path = file["path"].to_s
+      (file["offenses"] || []).map { |offense| [path, offense] }
+    end || []
+    offenses.map do |file_path, offense|
       {
-        "file" => offense["location"]["file_path"],
-        "line" => offense["location"]["start_line"],
+        "file" => file_path,
+        "line" => offense.dig("location", "start_line"),
         "cop" => offense["cop_name"],
         "message" => offense["message"],
         "severity" => offense["severity"]
@@ -182,14 +226,23 @@ module GitCommitRubocop
     fix_all_warnings_with_agent(selected_warnings)
   end
 
-  def check_remaining_warnings
+  def check_remaining_warnings(paths)
     puts "\nRe-checking rubocop warnings...".cyan
-    remaining_warnings = run_rubocop_warnings
+    remaining_warnings = run_rubocop_warnings(paths)
     if remaining_warnings.any?
       puts "Remaining warnings: #{remaining_warnings.size}".yellow
       display_rubocop_warnings(remaining_warnings)
     else
       puts "All selected warnings fixed!".green
     end
+  end
+
+  private
+
+  # Rubocop exits 1 when offenses are found but still prints valid JSON to stdout.
+  def rubocop_json_exit_ok?(status)
+    return false unless status
+
+    [0, 1].include?(status.exitstatus.to_i)
   end
 end
