@@ -128,7 +128,7 @@ When refactoring code, systematically identify and remove unused and dead code w
 
 ### Linting and Code Quality
 - **Treat linter warnings seriously**: For any file or module you change, fix all Rubocop offenses reported in that file. Do not leave new or existing linter warnings in modified code.
-- Always run `bundle exec rubocop -a` when the Gemfile bundles RuboCop (otherwise plain `rubocop -a`) to auto-correct Ruby style issues before committing changes
+- Git commit flow best-effort runs `bundle exec rubocop -a` then plain `rubocop -a` on changed Ruby paths; if both fail, planning continues (Bundler 4 ignores the old `BUNDLE_DISABLE_RUBY_VERSION_CHECK` escape)
 - Ensure syntax is valid with `ruby -c` after modifications
 - Follow Ruby style guides and existing code conventions
 - Remove duplicate code and unused variables systematically
