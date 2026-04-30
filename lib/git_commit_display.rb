@@ -212,12 +212,17 @@ module GitCommitDisplay
   end
 
   def display_single_warning(warning)
-    file = warning["file"].to_s
-    description = warning["description"].to_s
-    probability = warning["probability"]
-    probability_str = probability.nil? ? "n/a" : probability.to_s
-    location = format_warning_location(file, warning["start_line"], warning["end_line"])
-    puts "Warning in #{location}: #{description} (probability: #{probability_str})".yellow
+    location = format_warning_location(warning["file"].to_s, warning["start_line"], warning["end_line"])
+    label = warning_label(location, warning["category"].to_s)
+    puts "Warning in #{label}: #{warning["description"]} (#{warning_probability(warning["probability"])})".yellow
+  end
+
+  def warning_label(location, category)
+    category.empty? ? location : "#{location} [#{category}]"
+  end
+
+  def warning_probability(probability)
+    probability.nil? ? "n/a" : format("%.0f%%", probability.to_f * 100)
   end
 
   def display_single_excluded_file(file)
