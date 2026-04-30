@@ -326,14 +326,12 @@ def extract_plan_results(plan, status_output)
   }
 end
 
-# Porcelain output after optional untrack prep and RuboCop autocorrect; nil when worktree is clean.
-def status_ready_for_plan(launch_cwd)
+# Porcelain output after optional untrack prep; nil when worktree is clean.
+def status_ready_for_plan
   status_output = run_cmd("git status --porcelain --branch")
   return nil unless check_for_changes(status_output)
 
   prepare_untracked_files
-  GitCommitRubocop.autocorrect_before_plan!(status_output, launch_cwd: launch_cwd)
-
   status_output = run_cmd("git status --porcelain --branch")
   return nil unless check_for_changes(status_output)
 
@@ -350,12 +348,22 @@ def finalize_commit_plan(plan, status_output)
   result
 end
 
-def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, launch_cwd:, show_diff: false)
-  status_output = status_ready_for_plan(launch_cwd)
+def show_rubocop_suggestion(status_output)
+  cmd = GitCommitRubocop.suggestion(status_output)
+  return unless cmd
+
+  puts "Run RuboCop before committing:".yellow
+  puts cmd.cyan
+  puts
+end
+
+def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: false)
+  status_output = status_ready_for_plan
   return nil if status_output.nil?
 
   mr_diff_output, uncommitted_diff_output = fetch_diffs
   show_git_diff_if_needed(show_diff)
+  show_rubocop_suggestion(status_output) if show_diff
   plan = call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint,
     recent_commits, recent_commands)
   finalize_commit_plan(plan, status_output)
@@ -385,14 +393,13 @@ def display_watch_plan(plan_result)
   puts "Watching for file changes (every #{WATCH_INTERVAL}s). Ctrl+C to exit.".yellow
 end
 
-def watch_loop(debug_mode, cli_hint, recent_commits, last_status, launch_cwd:)
+def watch_loop(debug_mode, cli_hint, recent_commits, last_status)
   loop do
     sleep WATCH_INTERVAL
     new_status = run_cmd("git status --porcelain --branch")
     next if new_status == last_status
 
-    plan_result = plan_commits(debug_mode, cli_hint, recent_commits, get_recent_commands, launch_cwd: launch_cwd,
-      show_diff: false)
+    plan_result = plan_commits(debug_mode, cli_hint, recent_commits, get_recent_commands, show_diff: false)
     last_status = plan_result ? plan_result["status_snapshot"] || plan_result["status_output"] : new_status
     next if plan_result.nil?
 
@@ -405,9 +412,6 @@ CompletionNotifier.setup_exit_hook
 
 debug_mode, cli_hint, watch_mode = parse_arguments(ARGV)
 
-# Preserve directory where gcommit was started (RuboCop / Gem live in app subdirs of monorepos).
-launch_cwd = Dir.pwd
-
 # Change to git root directory to ensure consistent path handling
 git_root = get_git_root
 Dir.chdir(git_root)
@@ -417,8 +421,7 @@ puts "Model: #{current_model_display(debug_mode)}".cyan
 recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
-plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, launch_cwd: launch_cwd,
-  show_diff: true)
+plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
 
 if plan_result
   commits = plan_result["commits"]
@@ -431,7 +434,7 @@ if plan_result
     GitCommitDisplay.display_commits_result(commits, warnings, quality_assessment, excluded_files)
     puts "Watching for file changes (every #{WATCH_INTERVAL}s). Ctrl+C to exit.".yellow
     watch_loop(debug_mode, cli_hint, recent_commits,
-      plan_result["status_snapshot"] || plan_result["status_output"], launch_cwd: launch_cwd)
+      plan_result["status_snapshot"] || plan_result["status_output"])
   else
     GitCommitDisplay.display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
     abort_unless_status_snapshot_matches(plan_result["status_snapshot"])
