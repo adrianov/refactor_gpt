@@ -86,21 +86,27 @@ class CommitPlanClient
 
   def append_labeled_diff_section(parts, current_size_chars, max_size_chars, section, data)
     diff_output = data.fetch(section[:key], "").to_s
-    return current_size_chars if diff_output.to_s.strip.empty?
+    return current_size_chars if diff_output.strip.empty?
 
-    diff_text = "#{section[:label]}\n\n"
-    remaining = max_size_chars - current_size_chars - diff_text.length
-    if remaining <= 0
-      parts << "#{diff_text}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_CHARS} chars limit)\n"
-      return current_size_chars
-    end
-    truncated = truncate_diff_at_newline(diff_output, remaining)
-    diff_text += truncated
-    if truncated.length < diff_output.length
-      diff_text += "\n\n... (diff truncated at #{MAX_CONTENT_SIZE_CHARS} chars limit)\n"
-    end
+    header = "#{section[:label]}\n\n"
+    remaining = max_size_chars - current_size_chars - header.length
+    diff_text = build_diff_text(header, diff_output, remaining)
     parts << diff_text
     current_size_chars + diff_text.length
+  end
+
+  def build_diff_text(header, diff_output, remaining)
+    if remaining <= 0
+      return "#{header}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_CHARS} chars limit)\n"
+    end
+
+    truncated = truncate_diff_at_newline(diff_output, remaining)
+    suffix = truncated.length < diff_output.length ? truncation_notice : ""
+    "#{header}#{truncated}#{suffix}"
+  end
+
+  def truncation_notice
+    "\n\n... (diff truncated at #{MAX_CONTENT_SIZE_CHARS} chars limit)\n"
   end
 
   def truncate_diff_at_newline(diff_output, max_chars)
@@ -217,16 +223,24 @@ class CommitPlanClient
       Task:
       - Analyze the status and **section (1) uncommitted diff** to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.). Files already staged (non-space first column in `git status`) are pre-selected by the user and should be grouped into an early commit.
       - **Commit message accuracy (critical)**: Every substantive word in each `message` and in `quality_assessment.explanation` MUST match a change visible in section (1) for the files in that commit. If section (1) does not show a topic (e.g. a library, subsystem, or bug class), that topic MUST NOT appear in new commit text — even if section (2) or recent commit titles discuss it.
-      - **Code Assessment**: Thoroughly review all changes for potential issues:
-        - Syntax errors or typos
-        - Logic errors or incorrect implementations
-        - Unused methods, variables, or constants left after refactoring
-        - References to undefined methods, functions, or variables
-        - Calls to deleted or moved code elements
-        - Dead code that serves no purpose
-        - Potential runtime errors or exceptions
-        - Security vulnerabilities or unsafe practices
-        - Performance issues or anti-patterns
+      - **Code Assessment**: Review all changes for the following categories of issues:
+        - **Correctness**: syntax errors, typos, logic errors, off-by-one, incorrect implementations
+        - **Undefined references**: calls to deleted, moved, or undefined methods, functions, variables, or constants
+        - **Dead code**: unreachable branches, unused methods, variables, or constants left after refactoring
+        - **Runtime risks**: potential exceptions, nil dereferences, type mismatches, security vulnerabilities, unsafe practices
+        - **Performance**: anti-patterns, unnecessary allocations, inefficient loops
+        - **DRY violations**: duplicated logic or data that should be extracted into a shared abstraction
+        - **SOLID violations**:
+          - *Single Responsibility*: a class or module handles too many unrelated concerns and should be split
+          - *Open/Closed*: logic requires modifying existing code instead of extending it
+          - *Liskov Substitution*: a subclass breaks the contract of its parent
+          - *Interface Segregation*: a class is forced to implement methods it does not need
+          - *Dependency Inversion*: high-level code depends directly on low-level implementation details
+        - **Unnecessary complexity**:
+          - Variables assigned once and used only in the next expression — should be inlined
+          - Helper methods that are one line long and called only once — should be inlined into the caller
+          - Classes or modules so small they add indirection without value — consider merging into the caller
+        - **Responsibility overload**: a class or module accumulates too many responsibilities and should be divided into focused units
       - **Language Detection**: Analyze recent commit messages to determine the primary language. Use the same language for new commits to maintain consistency. Default to English if no recent commits exist.
       - Create commit messages consistent with the **format and language** of recent commit messages, not their **topics** (unless section (1) proves the same work).
       - Respect user-provided hints when choosing commit messages or grouping files, unless they conflict with actual diffs.
@@ -273,11 +287,11 @@ class CommitPlanClient
           - In `explanation`, **lead with the outcome**: what becomes safer, more correct, more reliable, or easier for the team or users, and what failure mode is eliminated. Treat technical edits (RSpec helpers, refactors, typing) as **evidence** in a second sentence, not as the headline.
           - Do **not** open with low-level mechanics (e.g. "Changing let_it_be to let…") unless the diff is purely internal with no user-facing story — then still state **what correctness or stability** is preserved or improved.
           - Keep to 2–3 sentences maximum; no bullet lists inside the string.
-        - For each detected issue, create a warning entry with:
+        - For each detected issue, produce a warning entry with:
           - The affected file path
-          - A clear description of the potential error
-          - A probability (0.0-1.0) indicating confidence this is a real issue
-          - Any flaws in intended functionality implementation
+          - A `category` from: correctness | undefined_reference | dead_code | runtime_risk | performance | dry | solid | complexity | responsibility
+          - A precise, actionable description: name the specific symbol, pattern, or construct involved; state what is wrong and what should be done instead
+          - A probability (0.0–1.0) reflecting confidence this is a real issue (omit near-zero confidence items)
     HEREDOC
   end
 
@@ -299,8 +313,9 @@ class CommitPlanClient
         "warnings": [
           {
             "file": "path/one.rb",
-            "description": "Possible off-by-one error in loop bounds",
-            "probability": 0.8,
+            "category": "correctness",
+            "description": "`index` starts at 1 instead of 0 — last element is never processed; change to `0..arr.length - 1`",
+            "probability": 0.85,
             "start_line": 42,
             "end_line": 45
           }
