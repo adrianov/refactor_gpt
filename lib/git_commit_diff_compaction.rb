@@ -2,40 +2,59 @@
 
 require 'open3'
 
-# Aggregates per-path git diffs under a byte budget by lowering verbosity per file:
-# full unified (-w -W --no-prefix --histogram), lighter unified (-w --no-prefix), then --numstat -w.
+# Prepends repo-wide git diff --numstat -w, then per-path unified diffs (full → light → omit chunk).
+# Fits limit_chars (Ruby String character count, same unit as CommitPlanClient) by lowering tiers / omitting chunks.
 class GitCommitDiffCompaction
   FULL_OPTS = %w[-w -W --no-prefix --histogram].freeze
   LIGHT_UNIFIED_OPTS = %w[-w --no-prefix].freeze
   PER_PATH_LIGHT_OPTS = LIGHT_UNIFIED_OPTS
-  NUMSTAT_OPTS = %w[--numstat -w].freeze
 
-  # Keeps two diff streams plus status/hints near CommitPlanClient::MAX_CONTENT_SIZE_CHARS.
-  DEFAULT_LIMIT_BYTES = 68 * 1024
+  DETAIL_SEPARATOR_CHARS = 2
 
   class << self
-    def build(ref_spec:, limit_bytes: DEFAULT_LIMIT_BYTES)
-      new(ref_spec: ref_spec, limit_bytes: limit_bytes).build
+    # limit_chars comes from CommitPlanClient.diff_body_budgets_chars (single payload ceiling).
+    def build(ref_spec:, limit_chars:)
+      new(ref_spec: ref_spec, limit_chars: limit_chars).build
     end
   end
 
-  def initialize(ref_spec:, limit_bytes:)
+  def initialize(ref_spec:, limit_chars:)
     @ref_spec = ref_spec.to_s
-    @limit_bytes = limit_bytes
-    @paths = changed_paths(@ref_spec)
-    @tiers = @paths.to_h { |p| [p, :full] }
+    @limit_chars = limit_chars
+    @tiers = {}
     @raw_by_path_tier = {}
+    @detail_budget = 0
   end
 
   def build
-    return '' if @paths.empty?
+    prefix = global_numstat_prefix
+    @paths = changed_paths(@ref_spec)
+    @detail_budget = [@limit_chars - prefix.length - DETAIL_SEPARATOR_CHARS, 0].max
 
-    demote_tier_pool(:full, :light)
-    demote_tier_pool(:light, :numstat)
-    truncate(assemble)
+    detailed = detailed_section_or_empty
+    join_prefix_and_detail(prefix, detailed)
   end
 
   private
+
+  def global_numstat_prefix
+    out, _, st = Open3.capture3('git', 'diff', '--numstat', '-w', @ref_spec)
+    return '' unless st.success?
+
+    stripped = out.strip
+    return '' if stripped.empty?
+
+    "(all paths: git diff --numstat -w #{@ref_spec})\n#{stripped}\n"
+  end
+
+  def detailed_section_or_empty
+    return '' if @paths.empty?
+
+    @tiers = @paths.to_h { |p| [p, :full] }
+    demote_tier_pool(:full, :light)
+    demote_tier_pool(:light, :omit)
+    assemble_detailed
+  end
 
   def changed_paths(ref_spec)
     out, _, st = Open3.capture3('git', 'diff', '--name-only', '-z', ref_spec)
@@ -46,23 +65,29 @@ class GitCommitDiffCompaction
 
   def demote_tier_pool(from_tier, to_tier)
     loop do
-      break if assemble.bytesize <= @limit_bytes
+      break if detailed_chars <= @detail_budget
 
       pool = @paths.select { |p| @tiers[p] == from_tier }
       break if pool.empty?
 
-      victim = pool.max_by { |p| diff_chunk_bytes(p, from_tier) }
+      victim = pool.max_by { |p| diff_chunk_chars(p, from_tier) }
       @tiers[victim] = to_tier
     end
   end
 
-  def diff_chunk_bytes(path, tier)
-    raw_diff_chunk(path, tier).bytesize
+  def detailed_chars
+    assemble_detailed.length
   end
 
-  def assemble
+  def diff_chunk_chars(path, tier)
+    raw_diff_chunk(path, tier).length
+  end
+
+  def assemble_detailed
     @paths.each_with_object(String.new) do |path, acc|
-      chunk = format_chunk(path, @tiers[path])
+      next if @tiers[path] == :omit
+
+      chunk = raw_diff_chunk(path, @tiers[path])
       next if chunk.strip.empty?
 
       acc << "\n\n" unless acc.empty?
@@ -70,11 +95,9 @@ class GitCommitDiffCompaction
     end
   end
 
-  def format_chunk(path, tier)
-    decorate_chunk(path, tier, raw_diff_chunk(path, tier))
-  end
-
   def raw_diff_chunk(path, tier)
+    return '' if tier == :omit
+
     key = [path, tier]
     return @raw_by_path_tier[key] if @raw_by_path_tier.key?(key)
 
@@ -93,26 +116,17 @@ class GitCommitDiffCompaction
     case tier
     when :full then FULL_OPTS
     when :light then PER_PATH_LIGHT_OPTS
-    when :numstat then NUMSTAT_OPTS
     else FULL_OPTS
     end
   end
 
-  def decorate_chunk(path, tier, raw)
-    return raw if tier != :numstat
+  def join_prefix_and_detail(prefix, detailed)
+    d = detailed.to_s.strip
+    pfx = prefix.to_s.strip
 
-    stripped = raw.strip
-    return '' if stripped.empty?
+    return prefix if d.empty?
+    return detailed if pfx.empty?
 
-    "# #{path} (git diff --numstat -w)\n#{stripped}\n"
-  end
-
-  def truncate(body)
-    return body if body.bytesize <= @limit_bytes
-
-    slice = body.byteslice(0, @limit_bytes)
-    cut_at = slice.rindex("\n")
-    trimmed = cut_at ? slice.byteslice(0, cut_at + 1) : slice
-    "#{trimmed}\n\n... (aggregated diff truncated at #{@limit_bytes} byte budget)\n"
+    "#{prefix}\n\n#{detailed}"
   end
 end

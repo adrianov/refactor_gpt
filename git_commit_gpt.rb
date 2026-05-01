@@ -4,7 +4,6 @@
 require_relative "lib/loader"
 require "open3"
 
-DIFF_PAYLOAD_LIMIT_BYTES = GitCommitDiffCompaction::DEFAULT_LIMIT_BYTES
 require "shellwords"
 require "ruby-progressbar"
 require "colorize"
@@ -210,14 +209,14 @@ def worktree_uncommitted_ancestor
   head_exists? ? "HEAD" : GIT_EMPTY_TREE
 end
 
-# origin/HEAD merge-base diff; empty string when not available (no remote, not fetched, etc.).
-def fetch_diff_vs_origin
+# Per-file insert/delete counts vs merge-base with origin/HEAD; empty when no remote or fetch.
+def fetch_mr_numstat
   return "" unless system("git rev-parse -q --verify origin/HEAD >#{File::NULL} 2>&1")
 
-  compact = GitCommitDiffCompaction.build(ref_spec: "origin/HEAD...", limit_bytes: DIFF_PAYLOAD_LIMIT_BYTES)
-  return compact unless compact.strip.empty?
+  out, _, st = Open3.capture3("git", "diff", "--numstat", "-w", "origin/HEAD...")
+  return "" unless st.success?
 
-  try_git_unified_against("origin/HEAD...").to_s
+  out.strip
 end
 
 # Tries full diff options, then simpler ones, then without external diff drivers (e.g. broken difftool).
@@ -249,18 +248,19 @@ def show_uncommitted_diff
   puts
 end
 
-def fetch_diffs
-  mr = fetch_diff_vs_origin
-  unc = GitCommitDiffCompaction.build(ref_spec: worktree_uncommitted_ancestor,
-    limit_bytes: DIFF_PAYLOAD_LIMIT_BYTES)
-  unc = try_git_unified_against(worktree_uncommitted_ancestor) || try_combined_index_and_worktree if unc.strip.empty?
-  if unc.nil?
-    warn "Failed to capture uncommitted diff for analysis".red
-    e = @last_git_diff_stderr.to_s.strip
-    warn e unless e.empty?
-    exit 1
-  end
-  [mr, unc]
+def compact_uncommitted_diff(limit_chars)
+  GitCommitDiffCompaction.build(ref_spec: worktree_uncommitted_ancestor, limit_chars: limit_chars)
+end
+
+def fallback_uncommitted_diff
+  try_git_unified_against(worktree_uncommitted_ancestor) || try_combined_index_and_worktree
+end
+
+def abort_without_uncommitted_diff
+  warn "Failed to capture uncommitted diff for analysis".red
+  e = @last_git_diff_stderr.to_s.strip
+  warn e unless e.empty?
+  exit 1
 end
 
 def code_file_excluded?(entry, code_exts)
@@ -296,10 +296,10 @@ def append_paths_to_last_commit(commits, paths)
   last["files"] = Array(last["files"]) + paths
 end
 
-def call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint,
+def call_openai_for_plan(debug_mode, status_output, mr_numstat_output, uncommitted_diff_output, cli_hint,
   recent_commits, recent_commands)
   client = CommitPlanClient.new(debug: debug_mode)
-  client.commit_plan(status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits,
+  client.commit_plan(status_output, mr_numstat_output, uncommitted_diff_output, cli_hint, recent_commits,
     recent_commands)
 end
 
@@ -359,10 +359,20 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
   status_output = status_ready_for_plan
   return nil if status_output.nil?
 
-  mr_diff_output, uncommitted_diff_output = fetch_diffs
+  mr_numstat_output = fetch_mr_numstat
+  budgets = CommitPlanClient.diff_body_budgets_chars(
+    cli_hint: cli_hint,
+    status_output: status_output,
+    recent_commits: recent_commits,
+    recent_commands: recent_commands,
+    mr_numstat: mr_numstat_output
+  )
+  uncommitted_diff_output = compact_uncommitted_diff(budgets[:uncommitted])
+  uncommitted_diff_output = fallback_uncommitted_diff if uncommitted_diff_output.strip.empty?
+  abort_without_uncommitted_diff if uncommitted_diff_output.nil?
   show_git_diff_if_needed(show_diff)
   show_rubocop_suggestion(status_output) if show_diff
-  plan = call_openai_for_plan(debug_mode, status_output, mr_diff_output, uncommitted_diff_output, cli_hint,
+  plan = call_openai_for_plan(debug_mode, status_output, mr_numstat_output, uncommitted_diff_output, cli_hint,
     recent_commits, recent_commands)
   finalize_commit_plan(plan, status_output)
 end

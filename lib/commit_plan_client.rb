@@ -7,31 +7,9 @@ require "colorize"
 class CommitPlanClient
   include AgentsFileHandler
 
-  def initialize(model: nil, debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug,
-      progress_title: "Planning commits".cyan)
-  end
+  # Single ceiling for commit-plan user message (static sections + one unified diff body); MR uses numstat only.
+  COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT = 200 * 1024
 
-  def ask(prompts, json: false)
-    @client.ask(prompts, json: json)
-  end
-
-  def commit_plan(status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits,
-    recent_commands)
-    messages = [
-      {role: "system", content: system_instruction},
-      {role: "user",
-       content: build_user_content(status_output, mr_diff_output, uncommitted_diff_output, cli_hint,
-         recent_commits, recent_commands)}
-    ]
-    payload_size_kb = calculate_payload_size(messages)
-    raw_response = ask(messages, json: true)
-    parse_commit_plan_response(raw_response, payload_size_kb)
-  end
-
-  private
-
-  MAX_CONTENT_SIZE_CHARS = 200 * 1024
   USER_CONTENT_SECTIONS = [
     {
       type: :static,
@@ -52,9 +30,12 @@ class CommitPlanClient
       key: :uncommitted_diff_output
     },
     {
-      type: :diff,
-      label: "(2) Already on branch vs origin/HEAD — context only, not for message wording (git diff origin/HEAD...):",
-      key: :mr_diff_output
+      type: :static,
+      key: :mr_numstat_output,
+      optional: true,
+      template: "(2) Already on branch vs origin/HEAD — context only (not for commit message wording). " \
+                "Per-file insert/delete counts from `git diff --numstat -w origin/HEAD...` " \
+                "(no unified patch for already-committed branch work):\n\n%s\n"
     },
     {
       type: :static,
@@ -70,6 +51,64 @@ class CommitPlanClient
         "(most recent last):\n\n%s\n"
     }
   ].freeze
+
+  # Single payload ceiling: uncommitted diff budget is what remains after all static sections (incl. MR numstat).
+  def self.diff_body_budgets_chars(cli_hint:, status_output:, recent_commits:, recent_commands:, mr_numstat: "")
+    data = {
+      cli_hint: cli_hint.to_s,
+      status_output: status_output.to_s,
+      recent_commits: recent_commits.to_s,
+      recent_commands: recent_commands.to_s,
+      mr_numstat_output: mr_numstat.to_s
+    }
+    static_chars = sum_static_section_lengths(data)
+    header_chars = sum_diff_header_lengths
+    join_slack = [USER_CONTENT_SECTIONS.size - 1, 0].max
+    remaining = COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT - static_chars - header_chars - join_slack
+    remaining = remaining.positive? ? remaining : 0
+    {uncommitted: remaining}
+  end
+
+  def self.sum_static_section_lengths(data)
+    USER_CONTENT_SECTIONS.sum do |sec|
+      next 0 unless sec[:type] == :static
+      next 0 if sec[:optional] && data.fetch(sec[:key]).strip.empty?
+
+      format(sec[:template], data.fetch(sec[:key])).length
+    end
+  end
+
+  def self.sum_diff_header_lengths
+    USER_CONTENT_SECTIONS.sum do |sec|
+      sec[:type] == :diff ? "#{sec[:label]}\n\n".length : 0
+    end
+  end
+
+  private_class_method :sum_static_section_lengths, :sum_diff_header_lengths
+
+  def initialize(model: nil, debug: false)
+    @client = OpenAiClient.new(model: model, debug: debug,
+      progress_title: "Planning commits".cyan)
+  end
+
+  def ask(prompts, json: false)
+    @client.ask(prompts, json: json)
+  end
+
+  def commit_plan(status_output, mr_numstat_output, uncommitted_diff_output, cli_hint, recent_commits,
+    recent_commands)
+    messages = [
+      {role: "system", content: system_instruction},
+      {role: "user",
+       content: build_user_content(status_output, mr_numstat_output, uncommitted_diff_output, cli_hint,
+         recent_commits, recent_commands)}
+    ]
+    payload_size_kb = calculate_payload_size(messages)
+    raw_response = ask(messages, json: true)
+    parse_commit_plan_response(raw_response, payload_size_kb)
+  end
+
+  private
 
   def append_section(parts, current_size_chars, max_size_chars, text)
     return current_size_chars if text.empty? || current_size_chars + text.length > max_size_chars
@@ -88,36 +127,8 @@ class CommitPlanClient
     diff_output = data.fetch(section[:key], "").to_s
     return current_size_chars if diff_output.strip.empty?
 
-    header = "#{section[:label]}\n\n"
-    remaining = max_size_chars - current_size_chars - header.length
-    diff_text = build_diff_text(header, diff_output, remaining)
-    parts << diff_text
-    current_size_chars + diff_text.length
-  end
-
-  def build_diff_text(header, diff_output, remaining)
-    if remaining <= 0
-      return "#{header}(Diff truncated: exceeds #{MAX_CONTENT_SIZE_CHARS} chars limit)\n"
-    end
-
-    truncated = truncate_diff_at_newline(diff_output, remaining)
-    suffix = truncated.length < diff_output.length ? truncation_notice : ""
-    "#{header}#{truncated}#{suffix}"
-  end
-
-  def truncation_notice
-    "\n\n... (diff truncated at #{MAX_CONTENT_SIZE_CHARS} chars limit)\n"
-  end
-
-  def truncate_diff_at_newline(diff_output, max_chars)
-    return "" if max_chars <= 0
-    return diff_output if diff_output.length <= max_chars
-
-    slice = diff_output[0, max_chars]
-    last_newline = slice.rindex("\n")
-    return diff_output[0, last_newline + 1] unless last_newline.nil?
-
-    slice
+    combined = "#{section[:label]}\n\n#{diff_output}"
+    append_section(parts, current_size_chars, max_size_chars, combined)
   end
 
   def append_configured_section(parts, current_size_chars, max_size_chars, section, data)
@@ -142,18 +153,18 @@ class CommitPlanClient
     current_size_chars
   end
 
-  def build_user_content(status_output, mr_diff_output, uncommitted_diff_output, cli_hint, recent_commits,
+  def build_user_content(status_output, mr_numstat_output, uncommitted_diff_output, cli_hint, recent_commits,
     recent_commands)
     data = {
       status_output: status_output,
-      mr_diff_output: mr_diff_output,
+      mr_numstat_output: mr_numstat_output,
       uncommitted_diff_output: uncommitted_diff_output,
       cli_hint: cli_hint,
       recent_commits: recent_commits,
       recent_commands: recent_commands
     }
     parts = []
-    append_user_content_sections(parts, MAX_CONTENT_SIZE_CHARS, data)
+    append_user_content_sections(parts, COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT, data)
     parts.join("\n")
   end
 
@@ -203,10 +214,12 @@ class CommitPlanClient
       Input:
       - `git status --porcelain --branch` output (compact format showing current branch name, added, modified, deleted, renamed, untracked files)
       - (1) Uncommitted changes: unified diff of working tree and index vs HEAD (`git diff HEAD`; `git add -N` is respected) — **sole source of truth** for what each commit `message` and `quality_assessment.explanation` describe; these hunks are the ONLY files eligible to be committed; staged files are visible in `git status` with a non-space first column (e.g. `M `, `A `) and should be treated as intentionally pre-selected by the user
-      - (2) Already on branch: unified diff of **committed** changes vs origin/HEAD (`git diff origin/HEAD...`) — **context only** so you do not assign already-committed paths to new commits; **never** copy themes, bug titles, or technical topics from this diff into new commit messages unless the same topic appears in (1) for the files you are committing
+      - (2) When `origin/HEAD` exists and this section is present: **numstat only** for work already committed on this branch vs merge-base with `origin/HEAD` (`git diff --numstat -w origin/HEAD...`). Each non-binary line is: `<added TAB deleted TAB path>` (counts are lines added/removed). **There is no unified diff here** — you cannot inspect patch text or exact edits for that already-committed work; use (2) only to see **which paths** already diverge from origin and **approximate size**. **When this section is absent**, assume no remote tracking ref was available — treat as “no branch-vs-origin snapshot.” **Context only**: paths that appear **only** in (2) are **not** eligible for new commits from (1); **never** base new commit messages on themes visible only in (2) unless the same topic appears in (1).
       - optional user-provided hints or preferences from the command line
       - last 15 git commit one-line messages — **style only** (language, JIRA bracket format, conventional-commit shape); **never** reuse their subject-matter or problem description for new messages unless (1) clearly shows that same work continues
       - last 5 shell commands from the user's terminal history to give you extra context
+
+      `git diff --numstat` (section 2): added/deleted are line counts (use `-` for binary files when Git prints that form). Do not infer code, syntax, or logic from counts alone.
 
       Porcelain v1 format guide:
       - `## branch...upstream` - branch info line
@@ -221,8 +234,8 @@ class CommitPlanClient
   def build_task_section
     <<~HEREDOC
       Task:
-      - Analyze the status and **section (1) uncommitted diff** to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.). Files already staged (non-space first column in `git status`) are pre-selected by the user and should be grouped into an early commit.
-      - **Commit message accuracy (critical)**: Every substantive word in each `message` and in `quality_assessment.explanation` MUST match a change visible in section (1) for the files in that commit. If section (1) does not show a topic (e.g. a library, subsystem, or bug class), that topic MUST NOT appear in new commit text — even if section (2) or recent commit titles discuss it.
+      - Analyze the status and **section (1) uncommitted diff** to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.). Files already staged (non-space first column in `git status`) are pre-selected by the user and should be grouped into an early commit. **Code-level assessment and line-specific warnings must be grounded in section (1)** — section (2) is counts only.
+      - **Commit message accuracy (critical)**: Every substantive word in each `message` and in `quality_assessment.explanation` MUST match a change visible in section (1) for the files in that commit. If section (1) does not show a topic (e.g. a library, subsystem, or bug class), that topic MUST NOT appear in new commit text — even if section (2) numstat, file names there, or recent commit titles suggest a story.
       - **Code Assessment**: Review all changes for the following categories of issues:
         - **Correctness**: syntax errors, typos, logic errors, off-by-one, incorrect implementations
         - **Undefined references**: calls to deleted, moved, or undefined methods, functions, variables, or constants
@@ -269,12 +282,12 @@ class CommitPlanClient
           - Example ordering: "add failing tests for user authentication" → "implement user authentication logic"
           - When tests were written after implementation, group implementation and tests together in a single commit
           - Every changed file from status must appear in **exactly one** commit OR in excluded_files — never in more than one commit
-          - **Only files present in `git status` output are eligible for commits.** Files that appear only in the branch-vs-origin diff (2) are already committed — do NOT include them in any commit's file list
+          - **Only files present in `git status` output are eligible for commits.** Paths that show up **only** in section (2) numstat (already on the branch vs origin) are already committed — do NOT include them in any new commit's file list.
           - Extract complete file paths from status output by taking the full path after status flags (e.g., from "new file:   manifest.json", extract "manifest.json")
           - Never truncate or modify file paths - always use the complete filename including extensions
           - Prefer coherent commits over many tiny ones
         - **File Exclusion Rules**:
-          - **Do not exclude source code for truncation**: Never put source code files (e.g. .c, .h, .mm, .rb, .py, .js, .swift) in excluded_files solely because the diff was truncated or incomplete. Include them in the appropriate commit(s) using the partial diff when present.
+          - **Do not exclude source code for omission**: Never put source code files (e.g. .c, .h, .mm, .rb, .py, .js, .swift) in excluded_files solely because the diff was omitted or incomplete under payload limits. Include them in the appropriate commit(s) using the partial diff when present.
           - **schema.rb**: Exclude from commits if there are no database migration files in the changeset. Migration files are typically in `db/migrate/` directory with timestamps.
           - **Temporary and debug files**: Exclude from commits if changes are clearly temporary or debug-only, such as:
             - Files in `tmp/` directory
