@@ -36,7 +36,7 @@ class GeminiClient
   include PrimaryApiBackoff
   include PrimaryApiErrorBody
   DEFAULT_MODEL = "gemini-3-flash"
-  REQUEST_TIMEOUT = 300
+  REQUEST_TIMEOUT = 600
   DEFAULT_PROGRESS_SPEED = 300
   PROGRESS_SPEED_FILE = File.join(Dir.home, ".gemini_gpt").freeze
 

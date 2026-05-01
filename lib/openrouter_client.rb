@@ -9,7 +9,7 @@ class OpenrouterClient
   DEFAULT_MODEL = "openrouter/auto".freeze
   RETRY_DELAYS = [5, 10, 30].freeze
 
-  def initialize(api_key:, api_base_url: nil, model: nil, proxy_url: nil, request_timeout: 300, debug: false)
+  def initialize(api_key:, api_base_url: nil, model: nil, proxy_url: nil, request_timeout: 600, debug: false)
     @api_key = api_key
     @api_base_url = api_base_url.to_s.strip.empty? ? DEFAULT_BASE_URL : api_base_url
     @model = model.to_s.strip.empty? ? DEFAULT_MODEL : model
