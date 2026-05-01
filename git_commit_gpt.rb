@@ -3,6 +3,8 @@
 
 require_relative "lib/loader"
 require "open3"
+
+DIFF_PAYLOAD_LIMIT_BYTES = GitCommitDiffCompaction::DEFAULT_LIMIT_BYTES
 require "shellwords"
 require "ruby-progressbar"
 require "colorize"
@@ -189,8 +191,8 @@ def check_for_changes(status_output)
   false
 end
 
-DIFF_OPTS = "-w -W --no-prefix --histogram"
-DIFF_OPTS_MINIMAL = "-w -W --no-prefix"
+DIFF_OPTS = GitUnifiedWholeRepoDiff::FULL_OPTS.join(' ')
+DIFF_OPTS_MINIMAL = GitUnifiedWholeRepoDiff::LIGHT_UNIFIED_OPTS.join(' ')
 # Git’s canonical empty tree — valid diff base when there is no HEAD (initial / orphan import).
 GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -212,25 +214,19 @@ end
 def fetch_diff_vs_origin
   return "" unless system("git rev-parse -q --verify origin/HEAD >#{File::NULL} 2>&1")
 
+  compact = GitCommitDiffCompaction.build(ref_spec: "origin/HEAD...", limit_bytes: DIFF_PAYLOAD_LIMIT_BYTES)
+  return compact unless compact.strip.empty?
+
   try_git_unified_against("origin/HEAD...").to_s
 end
 
 # Tries full diff options, then simpler ones, then without external diff drivers (e.g. broken difftool).
 # `against` is nil for index↔worktree; otherwise a rev/pathspec suffix (HEAD, empty tree, --cached, origin/HEAD...).
 def try_git_unified_against(against = nil)
-  last_err = ""
-  suff = against ? [against] : []
-  [
-    (DIFF_OPTS.split + suff),
-    (DIFF_OPTS_MINIMAL.split + suff),
-    (["--no-ext-diff"] + DIFF_OPTS.split + suff),
-    (["--no-ext-diff"] + DIFF_OPTS_MINIMAL.split + suff)
-  ].each do |args|
-    out, err, st = Open3.capture3("git", "diff", *args)
-    last_err = err
-    return out if st.success?
-  end
-  @last_git_diff_stderr = last_err
+  out, err = GitUnifiedWholeRepoDiff.capture_with_stderr(against)
+  return out if out
+
+  @last_git_diff_stderr = err.to_s
   nil
 end
 
@@ -255,7 +251,9 @@ end
 
 def fetch_diffs
   mr = fetch_diff_vs_origin
-  unc = try_git_unified_against(worktree_uncommitted_ancestor) || try_combined_index_and_worktree
+  unc = GitCommitDiffCompaction.build(ref_spec: worktree_uncommitted_ancestor,
+    limit_bytes: DIFF_PAYLOAD_LIMIT_BYTES)
+  unc = try_git_unified_against(worktree_uncommitted_ancestor) || try_combined_index_and_worktree if unc.strip.empty?
   if unc.nil?
     warn "Failed to capture uncommitted diff for analysis".red
     e = @last_git_diff_stderr.to_s.strip
