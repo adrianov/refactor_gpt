@@ -5,8 +5,9 @@ require 'open3'
 # Aggregates per-path git diffs under a byte budget by lowering verbosity per file:
 # full unified (-w -W --no-prefix --histogram), lighter unified (-w --no-prefix), then --numstat -w.
 class GitCommitDiffCompaction
-  FULL_OPTS = GitUnifiedWholeRepoDiff::FULL_OPTS
-  PER_PATH_LIGHT_OPTS = GitUnifiedWholeRepoDiff::LIGHT_UNIFIED_OPTS
+  FULL_OPTS = %w[-w -W --no-prefix --histogram].freeze
+  LIGHT_UNIFIED_OPTS = %w[-w --no-prefix].freeze
+  PER_PATH_LIGHT_OPTS = LIGHT_UNIFIED_OPTS
   NUMSTAT_OPTS = %w[--numstat -w].freeze
 
   # Keeps two diff streams plus status/hints near CommitPlanClient::MAX_CONTENT_SIZE_CHARS.
@@ -27,13 +28,11 @@ class GitCommitDiffCompaction
   end
 
   def build
-    return whole_repo_fallback if @paths.empty?
+    return '' if @paths.empty?
 
     demote_tier_pool(:full, :light)
     demote_tier_pool(:light, :numstat)
-    body = assemble
-    body = whole_repo_fallback if body.strip.empty?
-    truncate(body)
+    truncate(assemble)
   end
 
   private
@@ -43,10 +42,6 @@ class GitCommitDiffCompaction
     return [] unless st.success?
 
     out.split("\0").reject(&:empty?)
-  end
-
-  def whole_repo_fallback
-    GitUnifiedWholeRepoDiff.capture(@ref_spec) || ''
   end
 
   def demote_tier_pool(from_tier, to_tier)

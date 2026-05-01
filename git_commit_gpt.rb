@@ -191,8 +191,8 @@ def check_for_changes(status_output)
   false
 end
 
-DIFF_OPTS = GitUnifiedWholeRepoDiff::FULL_OPTS.join(' ')
-DIFF_OPTS_MINIMAL = GitUnifiedWholeRepoDiff::LIGHT_UNIFIED_OPTS.join(' ')
+DIFF_OPTS = GitCommitDiffCompaction::FULL_OPTS.join(' ')
+DIFF_OPTS_MINIMAL = GitCommitDiffCompaction::LIGHT_UNIFIED_OPTS.join(' ')
 # Git’s canonical empty tree — valid diff base when there is no HEAD (initial / orphan import).
 GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -223,7 +223,7 @@ end
 # Tries full diff options, then simpler ones, then without external diff drivers (e.g. broken difftool).
 # `against` is nil for index↔worktree; otherwise a rev/pathspec suffix (HEAD, empty tree, --cached, origin/HEAD...).
 def try_git_unified_against(against = nil)
-  out, err = GitUnifiedWholeRepoDiff.capture_with_stderr(against)
+  out, err = GitPerPathUnifiedDiff.capture_with_stderr(against)
   return out if out
 
   @last_git_diff_stderr = err.to_s
