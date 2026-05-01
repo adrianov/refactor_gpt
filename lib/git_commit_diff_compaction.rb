@@ -70,7 +70,7 @@ class GitCommitDiffCompaction
       pool = @paths.select { |p| @tiers[p] == from_tier }
       break if pool.empty?
 
-      victim = pool.max_by { |p| diff_chunk_chars(p, from_tier) }
+      victim = pool.max_by { |p| victim_priority(p, from_tier, to_tier) }
       @tiers[victim] = to_tier
     end
   end
@@ -81,6 +81,20 @@ class GitCommitDiffCompaction
 
   def diff_chunk_chars(path, tier)
     raw_diff_chunk(path, tier).length
+  end
+
+  # Prefer demoting paths where stepping to the next tier removes the most characters from
+  # the assembled detail (full→light: saved = full minus light). Tie-break on larger chunk at current tier.
+  def victim_priority(path, from_tier, to_tier)
+    shrink = chars_saved_demoting(path, from_tier, to_tier)
+    current = diff_chunk_chars(path, from_tier)
+    [shrink, current]
+  end
+
+  def chars_saved_demoting(path, from_tier, to_tier)
+    return diff_chunk_chars(path, from_tier) if to_tier == :omit
+
+    diff_chunk_chars(path, from_tier) - diff_chunk_chars(path, to_tier)
   end
 
   def assemble_detailed
