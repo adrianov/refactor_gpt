@@ -3,6 +3,7 @@
 require 'open3'
 
 # Prepends repo-wide git diff --numstat -w, then per-path unified diffs (full → light → omit chunk).
+# Paths reported as deleted-only (--diff-filter=D) skip unified diff text; numstat already states removal.
 # Fits limit_chars (Ruby String character count, same unit as CommitPlanClient) by lowering tiers / omitting chunks.
 class GitCommitDiffCompaction
   FULL_OPTS = %w[-w -W --no-prefix --histogram].freeze
@@ -50,7 +51,8 @@ class GitCommitDiffCompaction
   def detailed_section_or_empty
     return '' if @paths.empty?
 
-    @tiers = @paths.to_h { |p| [p, :full] }
+    deleted = paths_deleted_only(@ref_spec)
+    @tiers = @paths.to_h { |p| [p, deleted.include?(p) ? :omit : :full] }
     demote_tier_pool(:full, :light)
     demote_tier_pool(:light, :omit)
     assemble_detailed
@@ -61,6 +63,13 @@ class GitCommitDiffCompaction
     return [] unless st.success?
 
     out.split("\0").reject(&:empty?)
+  end
+
+  def paths_deleted_only(ref_spec)
+    out, _, st = Open3.capture3('git', 'diff', '--diff-filter=D', '--name-only', '-z', ref_spec)
+    return Set.new unless st.success?
+
+    out.split("\0").reject(&:empty?).to_set
   end
 
   def demote_tier_pool(from_tier, to_tier)
