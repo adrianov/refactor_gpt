@@ -5,12 +5,15 @@ require 'open3'
 # Prepends repo-wide git diff --numstat -w, then per-path unified diffs (full → light → omit chunk).
 # Paths reported as deleted-only (--diff-filter=D) skip unified diff text; numstat already states removal.
 # Fits limit_chars (Ruby String character count, same unit as CommitPlanClient) by lowering tiers / omitting chunks.
+# budget_omitted_paths: paths demoted to :omit to save space (not delete-only); no unified hunk in body.
 class GitCommitDiffCompaction
   FULL_OPTS = %w[-w -W --no-prefix --histogram].freeze
   LIGHT_UNIFIED_OPTS = %w[-w --no-prefix].freeze
   PER_PATH_LIGHT_OPTS = LIGHT_UNIFIED_OPTS
 
   DETAIL_SEPARATOR_CHARS = 2
+
+  Result = Data.define(:body, :budget_omitted_paths)
 
   class << self
     # limit_chars comes from CommitPlanClient.diff_body_budgets_chars (single payload ceiling).
@@ -25,6 +28,7 @@ class GitCommitDiffCompaction
     @tiers = {}
     @raw_by_path_tier = {}
     @detail_budget = 0
+    @budget_omitted_paths = []
   end
 
   def build
@@ -33,7 +37,8 @@ class GitCommitDiffCompaction
     @detail_budget = [@limit_chars - prefix.length - DETAIL_SEPARATOR_CHARS, 0].max
 
     detailed = detailed_section_or_empty
-    join_prefix_and_detail(prefix, detailed)
+    body = join_prefix_and_detail(prefix, detailed)
+    Result.new(body: body, budget_omitted_paths: @budget_omitted_paths)
   end
 
   private
@@ -49,12 +54,16 @@ class GitCommitDiffCompaction
   end
 
   def detailed_section_or_empty
-    return '' if @paths.empty?
+    if @paths.empty?
+      @budget_omitted_paths = []
+      return ''
+    end
 
     deleted = paths_deleted_only(@ref_spec)
     @tiers = @paths.to_h { |p| [p, deleted.include?(p) ? :omit : :full] }
     demote_tier_pool(:full, :light)
     demote_tier_pool(:light, :omit)
+    @budget_omitted_paths = @paths.select { |p| @tiers[p] == :omit && !deleted.include?(p) }
     assemble_detailed
   end
 

@@ -47,6 +47,8 @@ def extract_porcelain_filenames(porcelain_output)
 end
 
 WATCH_INTERVAL = 30
+# Reserved inside the uncommitted-diff section for the budget-omitted path list (keeps total within payload cap).
+DIFF_PAYLOAD_NOTE_RESERVE_CHARS = 2048
 
 def parse_arguments(args)
   debug_mode = args.include?("--debug")
@@ -248,8 +250,30 @@ def show_uncommitted_diff
   puts
 end
 
+def format_budget_omitted_paths_note(paths, max_chars)
+  return '' if paths.empty? || max_chars < 64
+
+  uniq_sorted = paths.uniq.sort
+  header = <<~NOTE.rstrip
+    ---
+    Unified diff omitted under size limits for these paths (insert/delete counts remain in the numstat block above).
+    Each path is still an uncommitted change: assign it to exactly one commit with related files, and include it in
+    quality_assessment and warnings using git status, filename, and numstat when patch text is absent.
+  NOTE
+  body = uniq_sorted.join("\n")
+  text = "#{header}\n#{body}"
+  return text if text.length <= max_chars
+
+  overhead = 48
+  cut = [max_chars - overhead, 0].max
+  "#{text[0, cut]}\n… (#{uniq_sorted.size} paths total)\n"
+end
+
 def compact_uncommitted_diff(limit_chars)
-  GitCommitDiffCompaction.build(ref_spec: worktree_uncommitted_ancestor, limit_chars: limit_chars)
+  compaction_cap = [limit_chars - DIFF_PAYLOAD_NOTE_RESERVE_CHARS, 0].max
+  result = GitCommitDiffCompaction.build(ref_spec: worktree_uncommitted_ancestor, limit_chars: compaction_cap)
+  note = format_budget_omitted_paths_note(result.budget_omitted_paths, DIFF_PAYLOAD_NOTE_RESERVE_CHARS)
+  note.empty? ? result.body : "#{result.body}\n\n#{note}"
 end
 
 def fallback_uncommitted_diff
