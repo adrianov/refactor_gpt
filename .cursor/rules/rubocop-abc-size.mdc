@@ -14,4 +14,4 @@ When you modify a file that has existing `Metrics/AbcSize` violations, fix them 
 - Extract complex logic into smaller, focused private methods
 - Use guard clauses to reduce nesting
 - Split large conditionals into named predicate methods
-- Never use `# rubocop:disable Metrics/AbcSize` inline — refactor instead
+- Do not use any `# rubocop:disable` (see project rule `rubocop-no-suppress.mdc`).

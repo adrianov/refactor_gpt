@@ -1,0 +1,12 @@
+---
+description: Fix RuboCop offenses; never inline disables or config exclusions to bypass cops
+alwaysApply: true
+---
+
+# RuboCop: fix violations, do not suppress
+
+- For files you **change or add**, run RuboCop on those paths (e.g. `bundle exec rubocop -a path/to/file.rb`) and **clear every offense** before finishing. Use auto-correct where safe; otherwise refactor code so the cop passes.
+- **Never** use `# rubocop:disable`, `# rubocop:todo`, file-level disables, or any comment-based RuboCop suppression.
+- **Never** edit `.rubocop.yml`, `.rubocop_todo.yml`, or other RuboCop config to **add or widen** `Exclude` lists, turn cops off, or relax limits **as a workaround** for failing code. Do not introduce `.rubocop_todo.yml` entries to silence new debt.
+
+If a cop conflicts with a deliberate design, **change the code** (extract methods, reduce complexity, split files) rather than muting the cop. Repo-wide config changes are only in scope when the user explicitly requests a standards change for the whole project.

@@ -21,6 +21,8 @@ bundle exec rubocop -a
 ruby -c path/to/file.rb
 ```
 
+**RuboCop policy**: Fix all offenses in touched files; do not use `# rubocop:disable` or expand `.rubocop.yml` / todo excludes to hide violations (see `.cursor/rules/rubocop-no-suppress.mdc`).
+
 **Note**: This project does not have automated tests. Manual testing involves running the individual scripts.
 
 ## Ruby Development Guidelines
