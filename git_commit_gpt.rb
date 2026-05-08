@@ -50,6 +50,20 @@ WATCH_INTERVAL = 30
 # Reserved inside the uncommitted-diff section for the budget-omitted path list (keeps total within payload cap).
 DIFF_PAYLOAD_NOTE_RESERVE_CHARS = 2048
 
+# Basename globs for build artifacts and scratch files: never `git add -N` for analyze nor `git add` on commit.
+EPHEMERAL_BASENAME_GLOBS = [
+  '*.log', '*.tmp', '*.temp', '*.bak', '*.swp', '*.swo',
+  '*.pyc', '*.pyo', '*.class', '*.jar', '*.war', '*.ear',
+  '*.zip', '*.tar.gz', '*.tgz', '*.rar', '*.exe', '*.dll',
+  '*.so', '*.dylib', '*.bin', '*.dat', '*.orig', '*.rej',
+  '.DS_Store', 'Thumbs.db'
+].freeze
+
+def ephemeral_path?(path)
+  base = File.basename(path.to_s)
+  EPHEMERAL_BASENAME_GLOBS.any? { |pattern| File.fnmatch(pattern, base) }
+end
+
 def parse_arguments(args)
   debug_mode = args.include?("--debug")
   watch_mode = args.include?("--watch")
@@ -109,7 +123,7 @@ def execute_commits(commits)
 end
 
 def execute_single_commit(commit)
-  files = extract_commit_files(commit)
+  files = extract_commit_files(commit).reject { |p| ephemeral_path?(p) }
   return if files.empty?
 
   run_git_add(files)
@@ -178,6 +192,7 @@ end
 
 def prepare_untracked_files
   all_untracked = `git ls-files --others --exclude-standard`.split("\n").reject(&:empty?)
+  all_untracked.reject! { |p| ephemeral_path?(p) }
   return if all_untracked.empty?
 
   add_cmd = ["git", "add", "-N", *all_untracked].map { |p| Shellwords.escape(p) }.join(" ")
