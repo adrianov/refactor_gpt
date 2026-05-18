@@ -300,6 +300,7 @@ class CommitPlanClient
           - In `explanation`, **lead with the outcome**: what becomes safer, more correct, more reliable, or easier for the team or users, and what failure mode is eliminated. Treat technical edits (RSpec helpers, refactors, typing) as **evidence** in a second sentence, not as the headline.
           - Do **not** open with low-level mechanics (e.g. "Changing let_it_be to let…") unless the diff is purely internal with no user-facing story — then still state **what correctness or stability** is preserved or improved.
           - Keep to 2–3 sentences maximum; no bullet lists inside the string.
+        - **Do not flag intentional configuration changes**: version bumps (language runtime versions like TargetRubyVersion, engine versions, dependency version constraints) in config files (.rubocop.yml, .node-version, Gemfile, pyproject.toml, etc.) are intentional developer decisions — never flag them as correctness or runtime issues. Only flag a version change if it contains an obvious typo (e.g. "3..4" instead of "3.4").
         - For each detected issue, produce a warning entry with:
           - The affected file path
           - A `category` from: correctness | undefined_reference | dead_code | runtime_risk | performance | dry | solid | complexity | responsibility
