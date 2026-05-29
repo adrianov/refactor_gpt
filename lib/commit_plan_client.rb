@@ -301,7 +301,7 @@ class CommitPlanClient
           - Do **not** open with low-level mechanics (e.g. "Changing let_it_be to let…") unless the diff is purely internal with no user-facing story — then still state **what correctness or stability** is preserved or improved.
           - Keep to 2–3 sentences maximum; no bullet lists inside the string.
         - **Do not flag intentional configuration changes**: version bumps (language runtime versions like TargetRubyVersion, engine versions, dependency version constraints) in config files (.rubocop.yml, .node-version, Gemfile, pyproject.toml, etc.) are intentional developer decisions — never flag them as correctness or runtime issues. Only flag a version change if it contains an obvious typo (e.g. "3..4" instead of "3.4").
-        - For each detected issue, produce a warning entry with:
+        - For each issue that **remains after applying the commits** (i.e. introduced or not addressed by this changeset — never a problem that the diff itself fixes), produce a warning entry with:
           - The affected file path
           - A `category` from: correctness | undefined_reference | dead_code | runtime_risk | performance | dry | solid | complexity | responsibility
           - A precise, actionable description: name the specific symbol, pattern, or construct involved; state what is wrong and what should be done instead
