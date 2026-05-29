@@ -1,0 +1,31 @@
+---
+description: Keep source files ≤300 lines; after edits, refactor only the longest touched file by ≥100 lines
+alwaysApply: true
+---
+
+# Source file length and post-change refactor
+
+## Limits
+
+- **Target**: No project source file exceeds **300 lines**. Applies to all `.rb` files in the repo root and `lib/`. **Skip** generated outputs and vendored trees.
+- If staying under 300 is impossible without harming the feature, note it briefly and prefer the smallest reasonable split.
+
+## After each edit
+
+When you finish a coherent change (one task or one PR-worth of edits):
+
+1. Among **files you modified**, pick the **single longest** by line count.
+2. If that file exceeds **300 lines**, extract code from it until the file is **≤300 lines** or has shrunk by **≥100 lines**.
+3. Do **not** refactor other long files in the same pass unless asked.
+
+**Pre-existing bloat is not an excuse.** If the file you touched was already over 300 lines before your change, you still refactor it under this rule. "It was already long" / "unrelated to my fix" does not exempt a file you modified — touching it makes it your responsibility to shrink it per step 2.
+
+## Extraction rules
+
+- Move only self-contained units: classes, modules, methods, or helpers — **no unrelated rewrites**.
+- Respect **SOLID**: each extracted module has one clear responsibility.
+- Apply **DRY**: merge duplicated logic into the extracted module rather than copying it.
+- **Preserve all existing behaviour** exactly — extraction must be a pure structural change.
+- Prefer **one** new module over scattering tiny files; use Zeitwerk autoloading via `lib/loader`.
+- Match project naming (`snake_case` files, `PascalCase` modules) and `require_relative` patterns used nearby.
+- Use Dependency Injection when the extracted module needs collaborators.
