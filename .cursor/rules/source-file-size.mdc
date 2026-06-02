@@ -1,31 +1,43 @@
 ---
-description: Keep source files ≤300 lines; after edits, refactor only the longest touched file by ≥100 lines
+description: After edits, shrink any touched source file ≥200 LOC by ≥100 lines via extraction, dedup, or dead-code removal
 alwaysApply: true
 ---
 
 # Source file length and post-change refactor
 
-## Limits
+## Scope
 
-- **Target**: No project source file exceeds **300 lines**. Applies to all `.rb` files in the repo root and `lib/`. **Skip** generated outputs and vendored trees.
-- If staying under 300 is impossible without harming the feature, note it briefly and prefer the smallest reasonable split.
+Applies to `.rb` files in the repo root and `lib/`. Skip generated outputs and vendored trees.
+
+## Line-count target
+
+Keep source files at **200 lines or fewer**. If a feature cannot fit without harm, split into the smallest reasonable modules and note why briefly.
 
 ## After each edit
 
 When you finish a coherent change (one task or one PR-worth of edits):
 
 1. Among **files you modified**, pick the **single longest** by line count.
-2. If that file exceeds **300 lines**, extract code from it until the file is **≤300 lines** or has shrunk by **≥100 lines**.
+2. If that file is **≥200 lines**, shrink it before you stop:
+   - **Prefer extraction**: move **≥100 lines** of self-contained logic into another module, **or**
+   - **Prefer cleanup when enough**: remove duplicate logic (DRY) and dead code until the file drops by **≥100 lines** or reaches **≤200 lines** — whichever comes first.
 3. Do **not** refactor other long files in the same pass unless asked.
 
-**Pre-existing bloat is not an excuse.** If the file you touched was already over 300 lines before your change, you still refactor it under this rule. "It was already long" / "unrelated to my fix" does not exempt a file you modified — touching it makes it your responsibility to shrink it per step 2.
+**Touching a long file obligates you to shrink it.** If the file was already ≥200 lines before your edit, you still apply step 2. "It was already long" or "unrelated to my fix" does not exempt a file you modified.
+
+## How to shrink (pick one or combine)
+
+| Approach | When to use |
+|----------|-------------|
+| **Extract to a module** | Cohesive unit (class, module, method group) that belongs elsewhere |
+| **DRY cleanup** | Duplicated logic can merge into shared helpers without changing behaviour |
+| **Dead-code removal** | Unused methods, params, constants, or branches confirmed unreferenced |
 
 ## Extraction rules
 
-- Move only self-contained units: classes, modules, methods, or helpers — **no unrelated rewrites**.
+- Move only self-contained units — **no unrelated rewrites**.
 - Respect **SOLID**: each extracted module has one clear responsibility.
-- Apply **DRY**: merge duplicated logic into the extracted module rather than copying it.
-- **Preserve all existing behaviour** exactly — extraction must be a pure structural change.
-- Prefer **one** new module over scattering tiny files; use Zeitwerk autoloading via `lib/loader`.
+- **Preserve all existing behaviour** exactly — structural change only.
+- Prefer **one** new module over many tiny files; use Zeitwerk autoloading via `lib/loader`.
 - Match project naming (`snake_case` files, `PascalCase` modules) and `require_relative` patterns used nearby.
-- Use Dependency Injection when the extracted module needs collaborators.
+- Use dependency injection when the extracted module needs collaborators.
