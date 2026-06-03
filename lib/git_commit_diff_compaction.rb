@@ -47,7 +47,7 @@ class GitCommitDiffCompaction
     out, _, st = Open3.capture3('git', 'diff', '--numstat', '-w', @ref_spec)
     return '' unless st.success?
 
-    stripped = out.strip
+    stripped = utf8_safe(out).strip
     return '' if stripped.empty?
 
     "(all paths: git diff --numstat -w #{@ref_spec})\n#{stripped}\n"
@@ -141,7 +141,12 @@ class GitCommitDiffCompaction
     out, _, st = Open3.capture3('git', 'diff', *opts, @ref_spec, '--', path)
     return '' unless st.success?
 
-    out
+    utf8_safe(out)
+  end
+
+  def utf8_safe(str)
+    s = str.to_s.dup.force_encoding(Encoding::UTF_8)
+    s.valid_encoding? ? s : s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
   end
 
   def tier_opts(tier)
