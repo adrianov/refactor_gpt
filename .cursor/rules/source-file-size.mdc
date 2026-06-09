@@ -1,5 +1,5 @@
 ---
-description: After edits, shrink any touched source file ≥200 LOC by ≥100 lines via extraction, dedup, or dead-code removal
+description: When a touched source file was or became ≥200 LOC, extract or DRY ≥100 lines before finishing
 alwaysApply: true
 ---
 
@@ -13,17 +13,26 @@ Applies to `.rb` files in the repo root and `lib/`. Skip generated outputs and v
 
 Keep source files at **200 lines or fewer**. If a feature cannot fit without harm, split into the smallest reasonable modules and note why briefly.
 
+## Trigger
+
+Applies to any **modified** file when **either**:
+
+- it **was** ≥200 lines before your edit, **or**
+- it **became** ≥200 lines after your edit.
+
+When triggered, you **must** extract or DRY **at least 100 lines** from that file before you stop (or until it is ≤200 lines if that requires fewer).
+
+"No time", "unrelated to my fix", and "it was already long" do **not** exempt a file you modified.
+
 ## After each edit
 
 When you finish a coherent change (one task or one PR-worth of edits):
 
-1. Among **files you modified**, pick the **single longest** by line count.
-2. If that file is **≥200 lines**, shrink it before you stop:
+1. Among **files you modified**, find every file that matches the **Trigger** above.
+2. For each triggered file, shrink it before you stop:
    - **Prefer extraction**: move **≥100 lines** of self-contained logic into another module, **or**
    - **Prefer cleanup when enough**: remove duplicate logic (DRY) and dead code until the file drops by **≥100 lines** or reaches **≤200 lines** — whichever comes first.
-3. Do **not** refactor other long files in the same pass unless asked.
-
-**Touching a long file obligates you to shrink it.** If the file was already ≥200 lines before your edit, you still apply step 2. "It was already long" or "unrelated to my fix" does not exempt a file you modified.
+3. If several files trigger, start with the **longest**; do **not** refactor other long files you did not touch unless asked.
 
 ## How to shrink (pick one or combine)
 
