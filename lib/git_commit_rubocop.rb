@@ -8,6 +8,7 @@ module GitCommitRubocop
   module_function
 
   RUBY_EXTENSIONS = %w[.rb .rake .gemspec].freeze
+  SKIP_PATHS = %w[db/schema.rb].freeze
 
   # Returns a shell command string the user can copy and run, or nil when no Ruby files changed.
   def suggestion(status_output)
@@ -30,6 +31,7 @@ module GitCommitRubocop
     raw = status_output.to_s.strip.empty? ? `git status --porcelain --branch` : status_output
     porcelain_paths(raw).filter_map do |rel|
       rel = rel.gsub("\\", "/")
+      next if SKIP_PATHS.include?(rel)
       next unless RUBY_EXTENSIONS.include?(File.extname(rel).downcase) && !rel.end_with?("/")
 
       File.file?(File.expand_path(rel, git_root)) ? rel : nil
