@@ -275,6 +275,7 @@ class CommitPlanClient
             - Prefer **why it matters** (correct data, fewer incidents, safer releases, clearer behavior) over **how it was coded**
             - Be specific; avoid vague terms like "optimization", "improvement", "fix issues" without naming the effect
             - Technical jargon is fine in the subject only when it *is* the change (e.g. dependency bump); otherwise lead with impact
+            - **Typography (strict)**: In `message`, `quality_assessment.explanation`, `warnings[].description`, and `excluded_files[].reason`, use plain ASCII punctuation only. Never use guillemets (Russian « » or French << >>), curly/smart quotes, em or en dashes, ellipsis character, or other decorative Unicode. Use straight double quotes (") only when quoting is required; otherwise omit quotes. Use hyphen-minus (-) for dashes and three periods (...) for ellipsis.
           - A list of file paths to include in that commit
         - **Commit Ordering**: Organize commits to follow Test-Driven Development principles:
           - When implementing a new feature or fixing a bug, place test commits before implementation commits
@@ -299,7 +300,7 @@ class CommitPlanClient
           - Set `direction` to increased / decreased / unchanged from the perspective of **overall code and product quality** (reliability, security, maintainability, correctness) — not from "more elegant code" alone. Bug fixes, crash prevention, and new safety checks **increase** quality. Regressions, removed safeguards, or introduced defects **decrease** quality.
           - In `explanation`, **lead with the outcome**: what becomes safer, more correct, more reliable, or easier for the team or users, and what failure mode is eliminated. Treat technical edits (RSpec helpers, refactors, typing) as **evidence** in a second sentence, not as the headline.
           - Do **not** open with low-level mechanics (e.g. "Changing let_it_be to let…") unless the diff is purely internal with no user-facing story — then still state **what correctness or stability** is preserved or improved.
-          - Keep to 2–3 sentences maximum; no bullet lists inside the string.
+          - Keep to 2-3 sentences maximum; no bullet lists inside the string.
         - **Do not flag intentional configuration changes**: version bumps (language runtime versions like TargetRubyVersion, engine versions, dependency version constraints) in config files (.rubocop.yml, .node-version, Gemfile, pyproject.toml, etc.) are intentional developer decisions — never flag them as correctness or runtime issues. Only flag a version change if it contains an obvious typo (e.g. "3..4" instead of "3.4").
         - For each issue that **remains after applying the commits** (i.e. introduced or not addressed by this changeset — never a problem that the diff itself fixes), produce a warning entry with:
           - The affected file path
@@ -328,7 +329,7 @@ class CommitPlanClient
           {
             "file": "path/one.rb",
             "category": "correctness",
-            "description": "`index` starts at 1 instead of 0 — last element is never processed; change to `0..arr.length - 1`",
+            "description": "`index` starts at 1 instead of 0 - last element is never processed; change to `0..arr.length - 1`",
             "probability": 0.85,
             "start_line": 42,
             "end_line": 45
