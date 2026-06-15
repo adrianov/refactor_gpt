@@ -254,6 +254,7 @@ class CommitPlanClient
           - Helper methods that are one line long and called only once — should be inlined into the caller
           - Classes or modules so small they add indirection without value — consider merging into the caller
         - **Responsibility overload**: a class or module accumulates too many responsibilities and should be divided into focused units
+        - **Spec description quality**: RSpec `it`, `describe`, and `context` strings must express business intent — what the user or system gains or avoids — not implementation details. Flag descriptions that name HTTP headers, internal method names, library classes, or low-level protocol specifics (e.g. "does not send x-amz-checksum-crc32 from Active Storage client") when a behavior-level wording is possible (e.g. "uploads attachment without checksum validation errors"). Good descriptions answer "what outcome is guaranteed?" not "what code runs?".
       - **Language Detection**: Analyze recent commit messages to determine the primary language. Use the same language for new commits to maintain consistency. Default to English if no recent commits exist.
       - Create commit messages consistent with the **format and language** of recent commit messages, not their **topics** (unless section (1) proves the same work).
       - Respect user-provided hints when choosing commit messages or grouping files, unless they conflict with actual diffs.
@@ -304,7 +305,7 @@ class CommitPlanClient
         - **Do not flag intentional configuration changes**: version bumps (language runtime versions like TargetRubyVersion, engine versions, dependency version constraints) in config files (.rubocop.yml, .node-version, Gemfile, pyproject.toml, etc.) are intentional developer decisions — never flag them as correctness or runtime issues. Only flag a version change if it contains an obvious typo (e.g. "3..4" instead of "3.4").
         - For each issue that **remains after applying the commits** (i.e. introduced or not addressed by this changeset — never a problem that the diff itself fixes), produce a warning entry with:
           - The affected file path
-          - A `category` from: correctness | undefined_reference | dead_code | runtime_risk | performance | dry | solid | complexity | responsibility
+          - A `category` from: correctness | undefined_reference | dead_code | runtime_risk | performance | dry | solid | complexity | responsibility | spec_quality
           - A precise, actionable description: name the specific symbol, pattern, or construct involved; state what is wrong and what should be done instead
           - A probability (0.0–1.0) reflecting confidence this is a real issue (omit near-zero confidence items)
     HEREDOC
