@@ -10,6 +10,9 @@ class GitCommitDiffCompaction
   FULL_OPTS = %w[-w -W --no-prefix --histogram].freeze
   LIGHT_UNIFIED_OPTS = %w[-w --no-prefix].freeze
   PER_PATH_LIGHT_OPTS = LIGHT_UNIFIED_OPTS
+  # Last resort when -w hides every hunk (whitespace-only edits); same shape without -w.
+  NO_WS_FULL_OPTS = %w[-W --no-prefix --histogram].freeze
+  NO_WS_LIGHT_OPTS = %w[--no-prefix].freeze
 
   DETAIL_SEPARATOR_CHARS = 2
 
@@ -38,33 +41,66 @@ class GitCommitDiffCompaction
 
     detailed = detailed_section_or_empty
     body = join_prefix_and_detail(prefix, detailed)
+    body = whitespace_only_fallback_body if body.strip.empty? && !@paths.empty?
     Result.new(body: body, budget_omitted_paths: @budget_omitted_paths)
   end
 
   private
 
+  def whitespace_only_fallback_body
+    prefix = raw_numstat_prefix
+    @detail_budget = [@limit_chars - prefix.length - DETAIL_SEPARATOR_CHARS, 0].max
+    join_prefix_and_detail(prefix, bounded_detailed(non_deleted_tier: :no_ws_full, demote_pairs: no_ws_demote_pairs))
+  end
+
+  def raw_numstat_prefix
+    numstat_prefix(
+      ignore_whitespace: false,
+      header_line: '(whitespace or formatting only: unified diff and numstat without -w)'
+    )
+  end
+
   def global_numstat_prefix
-    out, _, st = Open3.capture3('git', 'diff', '--numstat', '-w', @ref_spec)
+    numstat_prefix(ignore_whitespace: true)
+  end
+
+  def numstat_prefix(ignore_whitespace:, header_line: nil)
+    cmd = %w[git diff --numstat]
+    cmd << '-w' if ignore_whitespace
+    cmd << @ref_spec
+    out, _, st = Open3.capture3(*cmd)
     return '' unless st.success?
 
     stripped = utf8_safe(out).strip
     return '' if stripped.empty?
 
-    "(all paths: git diff --numstat -w #{@ref_spec})\n#{stripped}\n"
+    flag = ignore_whitespace ? ' -w' : ''
+    lines = []
+    lines << header_line if header_line
+    lines << "(all paths: git diff --numstat#{flag} #{@ref_spec})"
+    "#{lines.join("\n")}\n#{stripped}\n"
   end
 
   def detailed_section_or_empty
-    if @paths.empty?
-      @budget_omitted_paths = []
-      return ''
-    end
+    return '' if @paths.empty?
 
+    bounded_detailed(non_deleted_tier: :full, demote_pairs: standard_demote_pairs)
+  end
+
+  def bounded_detailed(non_deleted_tier:, demote_pairs:)
     deleted = paths_deleted_only(@ref_spec)
-    @tiers = @paths.to_h { |p| [p, deleted.include?(p) ? :omit : :full] }
-    demote_tier_pool(:full, :light)
-    demote_tier_pool(:light, :omit)
+    @tiers = @paths.to_h { |p| [p, deleted.include?(p) ? :omit : non_deleted_tier] }
+    demote_pairs.each { |from_tier, to_tier| demote_tier_pool(from_tier, to_tier) }
     @budget_omitted_paths = @paths.select { |p| @tiers[p] == :omit && !deleted.include?(p) }
     assemble_detailed
+  end
+
+  def standard_demote_pairs
+    [[:full, :light], [:light, :omit]]
+  end
+
+  def no_ws_demote_pairs
+    [[:no_ws_full, :no_ws_light], [:no_ws_light, :omit]]
   end
 
   def changed_paths(ref_spec)
@@ -153,6 +189,8 @@ class GitCommitDiffCompaction
     case tier
     when :full then FULL_OPTS
     when :light then PER_PATH_LIGHT_OPTS
+    when :no_ws_full then NO_WS_FULL_OPTS
+    when :no_ws_light then NO_WS_LIGHT_OPTS
     else FULL_OPTS
     end
   end

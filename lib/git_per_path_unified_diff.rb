@@ -24,11 +24,17 @@ class GitPerPathUnifiedDiff
     def opt_variants
       f = GitCommitDiffCompaction::FULL_OPTS
       l = GitCommitDiffCompaction::LIGHT_UNIFIED_OPTS
+      nw_f = GitCommitDiffCompaction::NO_WS_FULL_OPTS
+      nw_l = GitCommitDiffCompaction::NO_WS_LIGHT_OPTS
       [
         f,
         l,
         ['--no-ext-diff'] + f,
-        ['--no-ext-diff'] + l
+        ['--no-ext-diff'] + l,
+        nw_f,
+        nw_l,
+        ['--no-ext-diff'] + nw_f,
+        ['--no-ext-diff'] + nw_l
       ]
     end
 
