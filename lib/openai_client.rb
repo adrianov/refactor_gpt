@@ -37,7 +37,7 @@ class OpenAiClient
   include PrimaryApiBackoff
   include PrimaryApiErrorBody
   attr_reader :model
-DEFAULT_MODEL = "glm-5.1"
+DEFAULT_MODEL = "glm-5.2"
   REQUEST_TIMEOUT = 600
   DEFAULT_PROGRESS_SPEED = 300
   PROGRESS_SPEED_FILE = File.join(Dir.home, ".refactor_gpt").freeze
