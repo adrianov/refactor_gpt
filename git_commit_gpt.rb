@@ -501,8 +501,8 @@ if has_remote
 
   if push_answer == "y"
     puts "Running: git push".green
-    success = system("git push")
-    exit(success ? 0 : 1)
+    system("git push")
+    exit 0
   else
     puts "Changes committed but not pushed.".yellow
     exit 0
