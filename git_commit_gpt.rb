@@ -36,16 +36,6 @@ def get_git_root
   root
 end
 
-def extract_porcelain_filenames(porcelain_output)
-  porcelain_output.split("\n").map do |line|
-    next nil if line.strip.empty? || line.start_with?("##")
-
-    status_and_path = line.sub(/^.{2}\s+/, "")
-    path = status_and_path.include?("->") ? status_and_path.split("->").last.strip : status_and_path
-    path.match(/\A"(.*)"\z/) ? Regexp.last_match(1) : path
-  end.compact
-end
-
 WATCH_INTERVAL = 30
 # Reserved inside the uncommitted-diff section for the budget-omitted path list (keeps total within payload cap).
 DIFF_PAYLOAD_NOTE_RESERVE_CHARS = 2048
@@ -73,63 +63,23 @@ def parse_arguments(args)
 end
 
 def get_recent_commands
-  history_file = detect_history_file
-  return "" unless history_file && File.exist?(history_file)
-
-  lines = read_history_file(history_file)
-  return "" if lines.empty?
-
-  commands = extract_commands_from_history(lines, history_file)
-  commands.last(5).join("\n")
-end
-
-def read_history_file(history_file)
-  File.readlines(history_file, chomp: true, encoding: "UTF-8")
-rescue ArgumentError
-  # Fallback for encoding issues
-  File.readlines(history_file, chomp: true).select { |line| line.valid_encoding? }
-end
-
-def detect_history_file
-  # First try HISTFILE environment variable (set by zsh and modern bash)
-  return ENV["HISTFILE"] if ENV["HISTFILE"] && File.exist?(ENV["HISTFILE"])
-
-  # Try common zsh history locations
-  zsh_history = File.expand_path("~/.zsh_history")
-  return zsh_history if File.exist?(zsh_history)
-
-  # Fallback to bash history
-  bash_history = File.expand_path("~/.bash_history")
-  return bash_history if File.exist?(bash_history)
-
-  nil
-end
-
-def extract_commands_from_history(lines, history_file)
-  if history_file.include?("zsh_history")
-    # Zsh history format: : timestamp:duration;command
-    lines.map { |line|
-      next "" unless line.valid_encoding?
-      line.sub(/^: \d+:\d+;/, "")
-    }.reject(&:empty?)
-  else
-    # Bash history format: plain commands
-    lines.select { |line| line.valid_encoding? }
-  end
+  RecentShellCommands.last_few(5)
 end
 
 def execute_commits(commits)
-  commits.each { |commit| execute_single_commit(commit) }
+  committed = false
+  commits.each { |commit| committed = true if execute_single_commit(commit) }
+  committed
 end
 
 def execute_single_commit(commit)
   files = extract_commit_files(commit).reject { |p| ephemeral_path?(p) }
-  return if files.empty?
+  return false if files.empty?
 
   run_git_add(files)
 
   commit_msg = commit["message"].to_s.strip
-  return if commit_msg.empty?
+  return false if commit_msg.empty?
 
   run_git_commit(commit_msg)
 end
@@ -302,65 +252,11 @@ def abort_without_uncommitted_diff
   exit 1
 end
 
-def code_file_excluded?(entry, code_exts)
-  path = entry["path"].to_s
-  return false if path.empty?
-
-  code_exts.include?(File.extname(path).downcase)
-end
-
-def partition_truncation_excluded(excluded, code_exts)
-  to_reinclude, kept = excluded.partition { |e| code_file_excluded?(e, code_exts) }
-  paths = to_reinclude.map { |e| e["path"].to_s }.reject(&:empty?)
-  [kept, paths]
-end
-
-def reinclude_excluded_code_files(result)
-  excluded = result["excluded_files"] || []
-  commits = result["commits"] || []
-  return if excluded.empty? || commits.empty?
-
-  code_exts = DiffProcessor::CODE_EXTENSIONS
-  kept, paths = partition_truncation_excluded(excluded, code_exts)
-  return if paths.empty?
-
-  result["excluded_files"] = kept
-  append_paths_to_last_commit(commits, paths)
-end
-
-def append_paths_to_last_commit(commits, paths)
-  return if paths.empty?
-
-  last = commits.last
-  last["files"] = Array(last["files"]) + paths
-end
-
 def call_openai_for_plan(debug_mode, status_output, mr_numstat_output, uncommitted_diff_output, cli_hint,
   recent_commits, recent_commands)
   client = CommitPlanClient.new(debug: debug_mode)
   client.commit_plan(status_output, mr_numstat_output, uncommitted_diff_output, cli_hint, recent_commits,
     recent_commands)
-end
-
-def extract_plan_results(plan, status_output)
-  # Guard: API can return nil or non-Hash; assigning result["status_output"] on nil caused NoMethodError.
-  return nil unless plan.is_a?(Hash)
-
-  commits = plan["commits"] || []
-  return nil if commits.empty?
-
-  warnings = plan["warnings"] || []
-  quality_assessment = plan["quality_assessment"]
-  excluded_files = plan["excluded_files"] || []
-  status_filenames = extract_porcelain_filenames(status_output)
-  commits = CommitPathCorrections.apply_to_commits(commits, status_filenames)
-
-  {
-    "commits" => commits,
-    "warnings" => warnings,
-    "quality_assessment" => quality_assessment,
-    "excluded_files" => excluded_files
-  }
 end
 
 # Porcelain output after optional untrack prep; nil when worktree is clean.
@@ -376,10 +272,9 @@ def status_ready_for_plan
 end
 
 def finalize_commit_plan(plan, status_output)
-  result = extract_plan_results(plan, status_output)
+  result = CommitPlanFinalize.finalize(plan, status_output)
   return nil if result.nil?
 
-  reinclude_excluded_code_files(result)
   result["status_output"] = status_output
   result["status_snapshot"] = run_cmd("git status --porcelain --branch")
   result
@@ -469,6 +364,7 @@ recent_commits = `git log -10 --oneline 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
 plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
+committed_any = false
 
 if plan_result
   commits = plan_result["commits"]
@@ -485,11 +381,12 @@ if plan_result
   else
     GitCommitDisplay.display_commits_and_ask(commits, warnings, quality_assessment, excluded_files)
     abort_unless_status_snapshot_matches(plan_result["status_snapshot"])
-    execute_commits(commits)
+    committed_any = execute_commits(commits)
   end
 end
 
 exit 0 if watch_mode
+exit 0 unless committed_any
 
 # Check if there's a remote before asking to push
 remote_output = `git remote 2>/dev/null`.strip
