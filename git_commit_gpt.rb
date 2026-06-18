@@ -465,7 +465,7 @@ Dir.chdir(git_root)
 
 puts "Model: #{current_model_display(debug_mode)}".cyan
 
-recent_commits = `git log -15 --pretty=%s 2>/dev/null`.strip
+recent_commits = `git log -10 --oneline 2>/dev/null`.strip
 recent_commands = get_recent_commands
 
 plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
