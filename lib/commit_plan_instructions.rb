@@ -35,6 +35,11 @@ module CommitPlanInstructions
   def build_task_section
     <<~HEREDOC
       Task:
+      - **Status coverage (critical)**: Every path on a non-## line in `git status` MUST appear in exactly one commit `files` entry OR in `excluded_files` with a valid exclusion reason. Omission is never allowed. Before returning JSON, verify the union of all `commits[].files` and `excluded_files[].path` equals the full set of paths from status (for renames, use the destination path). Common causes of wrongful omission — you MUST NOT do these:
+        - Skipping a file because the hunk is small, trivial, whitespace-only, or a one-line simplification — if Git reports it in status, the user intends to commit it.
+        - Listing only files named in the commit message while dropping other status paths.
+        - Returning `commits: []` while status has changed files — when status is non-empty, return at least one commit covering every eligible path.
+        - Treating section (2) numstat as the commit scope — paths only in section (2) are already committed; paths in status are not yet committed and MUST be included.
       - Analyze the status and **section (1) uncommitted diff** to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.). Files already staged (non-space first column in `git status`) are pre-selected by the user and should be grouped into an early commit. **Code-level assessment and line-specific warnings must be grounded in section (1)** where unified diff hunks exist; for paths listed at the end of (1) as **diff-omitted under limits**, ground assessment in numstat counts, file path, and status — section (2) is counts only for branch-vs-origin context.
       - **Commit message accuracy (critical)**: Every substantive word in each `message` and in `quality_assessment.explanation` MUST match a change reflected in section (1) for the files in that commit (unified hunk, numstat line for that path, or explicit diff-omitted path list + status). If section (1) does not support a topic (e.g. no hunk, no numstat row, path not in status), that topic MUST NOT appear — even if section (2) or recent commit titles suggest a story.
       - **Branch commit style consistency (critical)**: Treat the branch commit messages listed in input as the canonical style for this batch. New messages must read as the next commits in the same series — same language, tense/grammatical form, prefix conventions (JIRA key, `feat:`/`fix:` type, etc.), capitalization, verbosity, and tone. When the branch already shows a stable pattern, follow it exactly; do not switch language, introduce a new prefix style, or change grammatical form. All commits in this batch must also match each other. Copy **how** prior commits are written, not **what** they were about — unless section (1) proves the same work continues. Default to English imperative only when no branch messages exist to infer style from.
@@ -149,6 +154,7 @@ module CommitPlanInstructions
       For warnings: include start_line and end_line only when the issue can be pinpointed to specific lines in the diff. Omit these fields if the issue is general or spans the entire file.
       If no files are excluded, return "excluded_files": [].
       If impact is neutral or unclear from the diff, use "unchanged" for direction and say so briefly in `explanation`.
+      Final check: every path from `git status` (non-## lines) must appear in exactly one `commits[].files` or `excluded_files[].path`. Fix the plan before returning if any path is missing.
 
       Do not include any text outside of the JSON.
     HEREDOC
