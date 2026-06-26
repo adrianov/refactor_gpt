@@ -5,6 +5,7 @@
 # live in lib; AskGptClient/AskGeminiClient are used by ask_gpt only.
 # openai_client.rb defines OpenAiClient (capital I); Zeitwerk infers OpenaiClient from the path.
 require 'zeitwerk'
+REFACTOR_GPT_ROOT = File.expand_path('..', __dir__).freeze
 loader = Zeitwerk::Loader.new
 loader.push_dir(File.expand_path(__dir__))
 loader.collapse(File.expand_path('superagent', __dir__))

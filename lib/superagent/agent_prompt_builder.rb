@@ -5,6 +5,7 @@ require 'rbconfig'
 # Builds the context and guidelines blocks appended to agent prompts.
 # Used by AgentExecutor so prompt logic stays under length/ABC limits.
 class AgentPromptBuilder
+  include AgentsFileHandler
   CONTEXT_MAX_LINES = 500
   MAX_PREVIOUS_REQUESTS = 5
 
@@ -104,7 +105,7 @@ class AgentPromptBuilder
 
   def guidelines_section(always_include: false, fix_stage: false)
     raw = fix_stage ? read_agents_files_with_dev.to_s.strip : read_agents_files.to_s.strip
-    default = default_refactor_instructions.to_s.strip
+    default = load_refactor_md.to_s.strip
     content = if raw.empty?
                 default.empty? ? '' : "Project guidelines:\n#{default}"
               else
@@ -197,14 +198,7 @@ class AgentPromptBuilder
   end
 
   def read_agents_files
-    root = Dir.pwd
-    parts = %w[AGENTS.md .cursorrules].filter_map do |name|
-      path = File.join(root, name)
-      next unless File.exist?(path)
-
-      File.read(path).strip
-    end
-    parts.empty? ? '' : parts.join("\n\n")
+    load_project_rules(Dir.pwd)
   end
 
   # Fix stage: DEV.md first, then AGENTS.md and .cursorrules.
@@ -212,11 +206,6 @@ class AgentPromptBuilder
     dev = read_dev_md
     rest = read_agents_files
     [dev, rest].reject(&:empty?).join("\n\n")
-  end
-
-  def default_refactor_instructions
-    path = File.expand_path('../../REFACTOR.md', __dir__)
-    File.exist?(path) ? File.read(path).strip : ''
   end
 
   def history_header(count, session_description)

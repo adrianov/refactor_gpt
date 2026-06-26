@@ -198,6 +198,8 @@ class CommitPlanClient
   end
 
   def system_instruction
-    CommitPlanInstructions.system_instruction
+    agents = load_project_rules(Dir.pwd)
+    project_context = agents.empty? ? '' : "Project guidelines:\n#{agents}\n\n"
+    "#{project_context}#{CommitPlanInstructions.system_instruction}"
   end
 end
