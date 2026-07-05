@@ -44,4 +44,32 @@ class TestCommitPlanFinalize < Minitest::Test
     assert_match(/Raw response:/, err[1])
     assert_match(/test warning/, err[1])
   end
+
+  def test_finalize_hoists_commits_nested_in_quality_assessment
+    status = " M json/CMakeLists.txt\n M json/jsonrpc-cpp/jsonrpc_httpserver.cpp\n M json/jsonrpc-cpp/netstring.cpp\n"
+    plan = {
+      "quality_assessment" => {
+        "direction" => "increased",
+        "explanation" => "Safer snprintf usage.",
+        "commits" => [
+          { "message" => "Replace sprintf with snprintf in rpc-cpp modules",
+            "files" => ["/rpc-cpp/rpc_httpserver.cpp", "/rpc-cpp/netstring.cpp"] },
+          { "message" => "Raise cmake minimum version to 3.10 for rpcpp",
+            "files" => ["/CMakeLists.txt"] }
+        ],
+        "warnings" => [],
+        "excluded_files" => []
+      }
+    }
+    result = CommitPlanFinalize.finalize(plan, status)
+    files = result["commits"].flat_map { |c| c["files"] }
+    expected = %w[
+      json/CMakeLists.txt
+      json/jsonrpc-cpp/jsonrpc_httpserver.cpp
+      json/jsonrpc-cpp/netstring.cpp
+    ]
+    assert_equal expected.sort, files.sort
+    assert_equal "increased", result["quality_assessment"]["direction"]
+    assert_nil result["quality_assessment"]["commits"]
+  end
 end

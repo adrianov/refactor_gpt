@@ -2,11 +2,16 @@
 
 require "colorize"
 
-# Post-processes LLM commit plans: path correction and reinclusion of wrongly excluded source files.
+# Post-processes LLM commit plans: schema normalization, path correction,
+# and reinclusion of wrongly excluded source files.
 module CommitPlanFinalize
+  NESTED_PLAN_KEYS = %w[commits warnings excluded_files].freeze
+  QA_FIELDS = %w[direction explanation].freeze
+
   module_function
 
   def finalize_or_reject(plan, status_output, raw_response: nil)
+    plan = normalize_plan(plan)
     result = finalize(plan, status_output)
     return result if result
 
@@ -17,6 +22,7 @@ module CommitPlanFinalize
   def finalize(plan, status_output)
     return nil unless plan.is_a?(Hash)
 
+    plan = normalize_plan(plan)
     commits = plan["commits"] || []
     return nil if commits.empty?
 
@@ -24,6 +30,29 @@ module CommitPlanFinalize
     result = build_result(plan, commits, status_filenames)
     reinclude_excluded_code_files(result)
     result
+  end
+
+  # Some models nest commits, warnings, or excluded_files inside quality_assessment.
+  def normalize_plan(plan)
+    return plan unless plan.is_a?(Hash)
+
+    qa = plan["quality_assessment"]
+    return plan unless qa.is_a?(Hash) && nested_fields_in_qa?(qa)
+
+    normalized = plan.dup
+    NESTED_PLAN_KEYS.each { |key| normalized[key] = pick_plan_array(plan[key], qa[key]) }
+    normalized["quality_assessment"] = qa.slice(*QA_FIELDS)
+    normalized
+  end
+
+  def pick_plan_array(top, nested)
+    top_arr = top.is_a?(Array) ? top : []
+    nested_arr = nested.is_a?(Array) ? nested : []
+    top_arr.any? ? top_arr : nested_arr
+  end
+
+  def nested_fields_in_qa?(qa)
+    NESTED_PLAN_KEYS.any? { |key| qa.key?(key) }
   end
 
   def warn_rejection(plan, status_output, raw_response: nil)
@@ -121,5 +150,5 @@ module CommitPlanFinalize
   end
   private_class_method :build_result, :reinclude_excluded_code_files, :partition_truncation_excluded,
     :code_file_excluded?, :append_paths_to_last_commit, :warn_rejection, :warn_empty_commits,
-    :print_raw_response, :display_plan_extras
+    :print_raw_response, :display_plan_extras, :pick_plan_array, :nested_fields_in_qa?
 end
