@@ -32,4 +32,16 @@ class TestCommitPlanFinalize < Minitest::Test
     plan = { "commits" => [], "warnings" => [], "excluded_files" => [] }
     assert_nil CommitPlanFinalize.finalize(plan, status)
   end
+
+  def test_finalize_or_reject_warns_when_commits_empty
+    status = " M only.rb\n"
+    plan = { "commits" => [], "warnings" => [{ "description" => "test warning" }], "excluded_files" => [] }
+    raw = '{"commits":[],"warnings":[{"description":"test warning"}]}'
+    err = capture_io do
+      assert_equal :plan_rejected, CommitPlanFinalize.finalize_or_reject(plan, status, raw_response: raw)
+    end
+    assert_match(/no commits/i, err[1])
+    assert_match(/Raw response:/, err[1])
+    assert_match(/test warning/, err[1])
+  end
 end

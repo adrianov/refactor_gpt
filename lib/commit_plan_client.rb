@@ -105,7 +105,8 @@ class CommitPlanClient
     ]
     payload_size_kb = calculate_payload_size(messages)
     raw_response = ask(messages, json: true)
-    parse_commit_plan_response(raw_response, payload_size_kb)
+    plan = parse_commit_plan_response(raw_response, payload_size_kb)
+    { plan: plan, raw_response: raw_response }
   end
 
   private

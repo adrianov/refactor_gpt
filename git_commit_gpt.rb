@@ -271,9 +271,11 @@ def status_ready_for_plan
   status_output
 end
 
-def finalize_commit_plan(plan, status_output)
-  result = CommitPlanFinalize.finalize(plan, status_output)
-  return nil if result.nil?
+def finalize_commit_plan(plan_result, status_output)
+  plan = plan_result[:plan]
+  raw_response = plan_result[:raw_response]
+  result = CommitPlanFinalize.finalize_or_reject(plan, status_output, raw_response: raw_response)
+  return :plan_rejected if result == :plan_rejected
 
   result["status_output"] = status_output
   result["status_snapshot"] = run_cmd("git status --porcelain --branch")
@@ -291,7 +293,7 @@ end
 
 def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: false)
   status_output = status_ready_for_plan
-  return nil if status_output.nil?
+  return :no_changes if status_output.nil?
 
   mr_numstat_output = fetch_mr_numstat
   budgets = CommitPlanClient.diff_body_budgets_chars(
@@ -306,9 +308,9 @@ def plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_dif
   abort_without_uncommitted_diff if uncommitted_diff_output.nil?
   show_git_diff_if_needed(show_diff)
   show_rubocop_suggestion(status_output) if show_diff
-  plan = call_openai_for_plan(debug_mode, status_output, mr_numstat_output, uncommitted_diff_output, cli_hint,
+  plan_result = call_openai_for_plan(debug_mode, status_output, mr_numstat_output, uncommitted_diff_output, cli_hint,
     recent_commits, recent_commands)
-  finalize_commit_plan(plan, status_output)
+  finalize_commit_plan(plan_result, status_output)
 end
 
 # After the user accepts the plan, the tree must still match the snapshot taken at end of analysis
@@ -342,8 +344,8 @@ def watch_loop(debug_mode, cli_hint, recent_commits, last_status)
     next if new_status == last_status
 
     plan_result = plan_commits(debug_mode, cli_hint, recent_commits, get_recent_commands, show_diff: false)
-    last_status = plan_result ? plan_result["status_snapshot"] || plan_result["status_output"] : new_status
-    next if plan_result.nil?
+    last_status = plan_result.is_a?(Hash) ? plan_result["status_snapshot"] || plan_result["status_output"] : new_status
+    next unless plan_result.is_a?(Hash)
 
     display_watch_plan(plan_result)
   end
@@ -366,7 +368,9 @@ recent_commands = get_recent_commands
 plan_result = plan_commits(debug_mode, cli_hint, recent_commits, recent_commands, show_diff: true)
 committed_any = false
 
-if plan_result
+if plan_result == :plan_rejected
+  exit 1
+elsif plan_result.is_a?(Hash)
   commits = plan_result["commits"]
   warnings = plan_result["warnings"]
   quality_assessment = plan_result["quality_assessment"]
