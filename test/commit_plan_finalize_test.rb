@@ -72,4 +72,30 @@ class TestCommitPlanFinalize < Minitest::Test
     assert_equal "increased", result["quality_assessment"]["direction"]
     assert_nil result["quality_assessment"]["commits"]
   end
+
+  def test_finalize_unwraps_array_wrapped_plan
+    status = " M app/models/exchanger.rb\n M app/interactors/ex_matching/match.rb\n"
+    plan = [
+      ["PT-8741"],
+      {
+        "quality_assessment" => {
+          "direction" => "increased",
+          "explanation" => "Dust leftover detection uses fix_price."
+        },
+        "commits" => [
+          { "message" => "[PT-8741] fix: evaluate limit dust by fix_price",
+            "files" => ["app/models/exchanger.rb"] },
+          { "message" => "[PT-8741] fix: finish counter-party dust makers",
+            "files" => ["app/interactors/ex_matching/match.rb"] }
+        ],
+        "warnings" => [],
+        "excluded_files" => []
+      }
+    ]
+    result = CommitPlanFinalize.finalize(plan, status)
+    assert_equal 2, result["commits"].size
+    assert_equal "increased", result["quality_assessment"]["direction"]
+    files = result["commits"].flat_map { |c| c["files"] }
+    assert_equal %w[app/interactors/ex_matching/match.rb app/models/exchanger.rb].sort, files.sort
+  end
 end
