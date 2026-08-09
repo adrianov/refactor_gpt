@@ -199,10 +199,12 @@ Features:
 An assistant for planning and creating structured git commits based on your current working tree.
 
 Usage:
-./git_commit_gpt.rb [--watch] [--debug]
+./git_commit_gpt.rb [--watch] [--debug] [--auto [0-100]] [--push] [hint...]
 
 Features:
 - `--watch`: monitor analyzed files for changes and re-run planning every 30s when changes are detected
+- `--auto [level]`: commit without confirmation when every warning is ≤ `level`% (default 50; also `--auto=75`). Quiet: warnings, then commit/push results only (no diff, RuboCop hint, progress bar, or impact). Without `--push`, skips push without asking.
+- `--push`: push after a successful commit without asking
 - Reads `git status --porcelain` and `git diff` for the current repository
 - Groups changed files into a small number of coherent commits (by feature, refactor, docs, tests, etc.)
 - Generates conventional-style one-line commit messages
