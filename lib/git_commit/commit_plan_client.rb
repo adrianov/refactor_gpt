@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "oj"
 require "colorize"
 
 # Calls the LLM to produce a commit plan (commits, warnings, quality_assessment impact summary, excluded_files).
@@ -86,9 +85,9 @@ class CommitPlanClient
 
   private_class_method :sum_static_section_lengths, :sum_diff_header_lengths
 
-  def initialize(model: nil, debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug,
-      progress_title: "Planning commits".cyan)
+  def initialize(model: nil, debug: false, progress: true)
+    title = progress ? "Planning".cyan : nil
+    @client = OpenAiClient.new(model: model, debug: debug, progress_title: title)
   end
 
   def ask(prompts, json: false)
@@ -103,9 +102,9 @@ class CommitPlanClient
        content: build_user_content(status_output, mr_numstat_output, uncommitted_diff_output, cli_hint,
          recent_commits, recent_commands)}
     ]
-    payload_size_kb = calculate_payload_size(messages)
+    payload_size_kb = CommitPlanResponse.payload_size_kb(@client.model, messages)
     raw_response = ask(messages, json: true)
-    plan = parse_commit_plan_response(raw_response, payload_size_kb)
+    plan = CommitPlanResponse.parse(raw_response, payload_size_kb)
     { plan: plan, raw_response: raw_response }
   end
 
@@ -167,35 +166,6 @@ class CommitPlanClient
     parts = []
     append_user_content_sections(parts, COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT, data)
     parts.join("\n")
-  end
-
-  def parse_commit_plan_response(raw_response, payload_size_kb)
-    [raw_response.strip, extract_json_object(raw_response)].each do |candidate|
-      next unless candidate
-
-      begin
-        return Oj.load(candidate)
-      rescue Oj::ParseError
-        next
-      end
-    end
-
-    puts "Failed to parse model response as JSON.".red
-    puts "Payload size: #{payload_size_kb} KB".yellow
-    puts "Raw response:\n#{raw_response}".red
-    exit 1
-  end
-
-  def extract_json_object(text)
-    start = text.index("{")
-    finish = text.rindex("}")
-    text[start..finish] if start && finish && finish > start
-  end
-
-  def calculate_payload_size(messages)
-    body = {model: @client.model, messages: messages, response_format: {type: "json_object"}}
-    json_payload = Oj.dump(body, mode: :compat)
-    (json_payload.bytesize / 1024.0).round(2)
   end
 
   def system_instruction
