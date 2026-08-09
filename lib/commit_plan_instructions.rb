@@ -5,7 +5,7 @@ module CommitPlanInstructions
   module_function
 
   def system_instruction
-    [build_input_section, build_task_section, build_output_format_section].join
+    [build_input_section, build_task_section, build_warning_rules, build_output_format_section].join
   end
 
   def build_input_section
@@ -48,7 +48,7 @@ module CommitPlanInstructions
         - **Undefined references**: broken links visible in section (1) — e.g. a call to a method deleted or renamed in the same diff without updating visible call sites; not missing definitions outside the diff
         - **Dead code**: unreachable branches, unused methods, variables, or constants left after refactoring
         - **Runtime risks**: potential exceptions, nil dereferences, type mismatches, security vulnerabilities, unsafe practices
-        - **Performance**: only flag costs that scale or repeat enough to matter — N+1 queries, work inside hot loops, large allocations, repeated I/O or network calls. Never flag micro-optimizations whose savings are negligible (a few nanoseconds), such as caching an `ENV.fetch`, a constant lookup, or a cheap comparison that runs only a handful of times per request
+        - **Performance**: only flag costs that scale or repeat enough to matter — N+1 queries, work inside hot loops or paint/render paths, large allocations, repeated I/O or network calls. Never flag micro-optimizations whose savings are negligible (a few nanoseconds), such as caching an `ENV.fetch`, a constant lookup, or a cheap comparison that runs only a handful of times per request
         - **DRY violations**: duplicated logic or data that should be extracted into a shared abstraction
         - **SOLID violations**:
           - *Single Responsibility*: a class or module handles too many unrelated concerns and should be split
@@ -110,11 +110,20 @@ module CommitPlanInstructions
         - **Do not flag negligible micro-optimizations**: never suggest memoizing, caching, or hoisting an operation unless it is expensive (DB/network/file I/O, heavy computation) or runs many times per request. A cheap call (`ENV.fetch`, constant lookup, string or version comparison) evaluated once or a few times per request costs nanoseconds — leave it as is regardless of category (`performance`, `dry`, `complexity`). Adding state to avoid it is noise, not improvement.
         - **Do not flag intentional configuration changes**: version bumps (language runtime versions like TargetRubyVersion, engine versions, dependency version constraints) in config files (.rubocop.yml, .node-version, Gemfile, pyproject.toml, etc.) are intentional developer decisions — never flag them as correctness or runtime issues. Only flag a version change if it contains an obvious typo (e.g. "3..4" instead of "3.4").
         - **Do not flag references outside the diff**: Assume the project has tests and a full codebase. Never warn that a called method, constant, or variable might be undefined because its definition is not in section (1). Do not speculate about NoMethodError, NameError, or mismatched semantics for symbols that appear only as call sites in this changeset. Omit `undefined_reference` warnings of the form "method definition is not in this diff" or "verify the method exists".
-        - For each issue that **remains after applying the commits** (i.e. introduced or not addressed by this changeset — never a problem that the diff itself fixes), produce a warning entry with:
+    HEREDOC
+  end
+
+  def build_warning_rules
+    <<~HEREDOC
+      - For each issue that **remains after applying the commits** (i.e. introduced or not addressed by this changeset — never a problem that the diff itself fixes), produce a warning entry with:
           - The affected file path
           - A `category` from: correctness | undefined_reference | dead_code | runtime_risk | performance | dry | solid | complexity | responsibility | spec_quality
-          - A precise, actionable description: name the specific symbol, pattern, or construct involved; state what is wrong and what should be done instead
+          - A `description` naming the symbols involved, what is wrong, and what to do instead
           - A probability (0.0–1.0) reflecting confidence this is a real issue (omit near-zero confidence items)
+          - **Structural categories** (`performance`, `dry`, `solid`, `responsibility`, `complexity`): make `description` architecturally deep (2-4 sentences). State the structural mismatch (wrong layer, pull-on-render vs push-on-change, missing aggregate, responsibility bleed) — not only the local symptom or big-O. Prescribe the single most fitting pattern for this stack and problem shape (e.g. materialized aggregate with event-driven invalidation; observer on membership/presence; incremental counters instead of full walks; paint/render path free of service lookups; strategy/policy; dependency inversion). State where state or responsibility lives and which events recompute or invalidate it. Reject bare "cache a boolean" / "memoize this" / "add a flag" tips unless framed with that ownership and invalidation. One structural remedy beats a list of micro-opts.
+            Good: "Qt::BackgroundRole must not walk children or call ClientManager::findUser. Keep a derived group-offline aggregate on the group SearchItem (online/offline child count or dirty+memo), updated incrementally from membership and user-presence notifications (observer/invalidation at emitGroupChanged and presence callbacks); data() only reads the materialized flag."
+            Bad: "Consider caching the all-offline boolean on SearchItem, recomputing it inside emitGroupChanged so data() only reads a flag."
+          - **Other categories**: keep `description` short and precise — the concrete fix only; no pattern lecture
     HEREDOC
   end
 
@@ -137,7 +146,7 @@ module CommitPlanInstructions
           {
             "file": "path/one.rb",
             "category": "correctness",
-            "description": "`index` starts at 1 instead of 0 - last element is never processed; change to `0..arr.length - 1`",
+            "description": "`index` starts at 1 instead of 0 - last element is never processed; change the range to `0..arr.length - 1` so the loop covers every element.",
             "probability": 0.85,
             "start_line": 42,
             "end_line": 45
