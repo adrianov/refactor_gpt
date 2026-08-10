@@ -57,8 +57,8 @@ A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring
    Default model is inferred from which token is set (Claude preferred, then Gemini, then OpenAI). The `--search` flag uses OpenAI's search model.
 
    **Proxy Configuration (Optional):**
-   - Set `PROXY_URL` if you need to use a proxy to access the API
-   - Supported protocols: `http`, `https`, `socks5`
+   - Set `PROXY_URL` and/or standard `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`
+   - SOCKS5 is preferred when several proxy vars are set (`socks://` is normalized to `socks5://`)
    - Example: `PROXY_URL=socks5://127.0.0.1:1080`
    - Omit or leave empty if no proxy is needed
 
