@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
-# OpenRouter fallback for primary API outages, plus once-per-request error-body warnings.
+# Alternate-provider fallback for primary API outages, plus once-per-request error-body warnings.
 # Host must set @openrouter_client, @max_completion_tokens, @model, @last_payload_bytes,
-# and primary_api_error_endpoint.
+# and primary_api_error_endpoint. Tries OpenRouter when distinct, else REFACTOR_* API.
 module PrimaryApiFallback
-  FALLBACK_ERRORS = [BalanceError, RateLimitError, ServerError, NetworkResourceError].freeze
+  FALLBACK_ERRORS = [AccessDeniedError, BalanceError, RateLimitError, ServerError, NetworkResourceError].freeze
 
   def self.included(base)
     base.class_eval do
@@ -27,7 +27,14 @@ module PrimaryApiFallback
   end
 
   def try_openrouter(messages, json: false)
-    return nil unless fallback_configured?
+    answer = ask_openrouter_fallback(messages, json: json)
+    return answer if answer
+
+    ask_refactor_fallback(messages, json: json)
+  end
+
+  def ask_openrouter_fallback(messages, json: false)
+    return nil unless openrouter_fallback_usable?
 
     warn "⚠️  Primary API unavailable, trying OpenRouter fallback... #{format_payload_size}"
     @openrouter_client.ask(messages, json: json, max_completion_tokens: @max_completion_tokens,
@@ -37,15 +44,55 @@ module PrimaryApiFallback
     nil
   end
 
+  def ask_refactor_fallback(messages, json: false)
+    client = refactor_fallback_client
+    return nil unless client
+
+    warn "⚠️  Primary API unavailable, trying REFACTOR API fallback... #{format_payload_size}"
+    client.ask(messages, json: json, max_completion_tokens: @max_completion_tokens, source_model: @model)
+  rescue StandardError => e
+    warn "⚠️  REFACTOR API fallback failed: #{e.message}"
+    nil
+  end
+
   def fallback_configured?
-    @openrouter_client&.configured?
+    openrouter_fallback_usable? || !refactor_fallback_client.nil?
+  end
+
+  def openrouter_fallback_usable?
+    return false unless @openrouter_client&.configured?
+
+    !OpenrouterHeaders.same_host?(@api_base_url, @openrouter_client.instance_variable_get(:@api_base_url))
+  end
+
+  def refactor_fallback_client
+    return @refactor_fallback_client if defined?(@refactor_fallback_client)
+
+    @refactor_fallback_client = build_refactor_fallback_client
   end
 
   def build_openrouter_client
     OpenrouterClient.new(
-      api_key: fetch_env("OPENROUTER_API_KEY", nil),
-      api_base_url: fetch_env("OPENROUTER_BASE_URL", OpenrouterClient::DEFAULT_BASE_URL),
-      model: fetch_env("OPENROUTER_MODEL", OpenrouterClient::DEFAULT_MODEL),
+      api_key: fetch_env('OPENROUTER_API_KEY', nil),
+      api_base_url: fetch_env('OPENROUTER_BASE_URL', OpenrouterClient::DEFAULT_BASE_URL),
+      model: fetch_env('OPENROUTER_MODEL', OpenrouterClient::DEFAULT_MODEL),
+      proxy_url: @proxy_url,
+      request_timeout: @request_timeout,
+      debug: @debug
+    )
+  end
+
+  def build_refactor_fallback_client
+    base = fetch_env('REFACTOR_BASE_URL', nil)
+    key = fetch_env('REFACTOR_ACCESS_TOKEN', nil)
+    return nil if base.to_s.strip.empty? || key.to_s.strip.empty?
+    return nil if OpenrouterHeaders.same_host?(@api_base_url, base)
+
+    model = fetch_env('REFACTOR_MODEL_1', nil)
+    OpenrouterClient.new(
+      api_key: key,
+      api_base_url: base,
+      model: model.to_s.strip.empty? ? @model : model,
       proxy_url: @proxy_url,
       request_timeout: @request_timeout,
       debug: @debug
@@ -76,16 +123,18 @@ module PrimaryApiFallback
 
   def retry_failure_message(error)
     case error
+    when AccessDeniedError
+      "❌ Primary API access denied after fallback: #{error.message}"
     when BalanceError
-      "❌ Primary API balance exhausted after OpenRouter fallback: #{error.message}"
+      "❌ Primary API balance exhausted after fallback: #{error.message}"
     when RateLimitError
-      "❌ Rate limit exceeded after OpenRouter fallback: #{error.message}"
+      "❌ Rate limit exceeded after fallback: #{error.message}"
     when ServerError
-      "❌ Server error (#{error.status}) persisted after OpenRouter fallback: #{error.message}"
+      "❌ Server error (#{error.status}) persisted after fallback: #{error.message}"
     when NetworkResourceError
-      "❌ Network/resource error persisted after OpenRouter fallback: #{error.message}"
+      "❌ Network/resource error persisted after fallback: #{error.message}"
     else
-      "❌ Request failed after OpenRouter fallback: #{error.message}"
+      "❌ Request failed after fallback: #{error.message}"
     end
   end
 
@@ -95,13 +144,13 @@ module PrimaryApiFallback
 
   def warn_primary_api_error_body_once(error)
     return if @primary_api_error_body_warned
-    return unless error.is_a?(BalanceError) || error.is_a?(RateLimitError) || error.is_a?(ServerError)
+    return unless error.respond_to?(:raw_body)
 
     body = error.raw_body.to_s.strip
     return if body.empty?
 
     warn_primary_api_endpoint_line
-    ErrorResponseBody.warn_if_present("Primary API error response body:", body)
+    ErrorResponseBody.warn_if_present('Primary API error response body:', body)
     @primary_api_error_body_warned = true
   end
 

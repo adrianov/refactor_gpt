@@ -26,9 +26,18 @@ module PrimaryApiHttpErrors
   def handle_non_success_status(response)
     raise_rate_limit_error(response) if response.status == 429
     raise_server_error(response) if response.status >= 500 && response.status < 600
+    raise_access_denied_for_fallback(response) if response.status == 403
     raise_if_response_network_error(response)
     pretty_print_error("API Error", response.status, ErrorResponseBody.format_body(response.body.to_s))
     exit 1
+  end
+
+  def raise_access_denied_for_fallback(response)
+    return unless fallback_configured?
+
+    raw = ErrorResponseBody.raw_body_from_http_response(response)
+    detail = extract_error_message_from_response(response) || 'Access denied by security policy.'
+    raise AccessDeniedError.new("Primary API access denied: #{detail}", status: response.status, raw_body: raw)
   end
 
   def handle_error_response_without_status(response)
