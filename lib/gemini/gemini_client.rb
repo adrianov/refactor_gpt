@@ -1,32 +1,33 @@
 # frozen_string_literal: true
 
-require "httpx"
-require "oj"
-require "ruby-progressbar"
+require 'httpx'
+require 'oj'
+require 'ruby-progressbar'
 
-# Gemini generateContent / streamGenerateContent client with OpenRouter fallback.
+# Gemini chat client: progress UI, retries, and OpenRouter/REFACTOR failover around GeminiApiTransport.
 class GeminiClient
   include AgentsFileHandler
   include PrimaryApiClient
-  DEFAULT_MODEL = "gemini-3-flash"
+
+  DEFAULT_MODEL = 'gemini-3-flash'
   REQUEST_TIMEOUT = 600
   DEFAULT_PROGRESS_SPEED = 300
-  PROGRESS_SPEED_FILE = File.join(Dir.home, ".gemini_gpt").freeze
+  PROGRESS_SPEED_FILE = File.join(Dir.home, '.gemini_gpt').freeze
 
   def initialize(model: nil, debug: false, max_completion_tokens: nil,
     progress_title: nil, api_base_url: nil, api_key: nil)
-    @api_base_url = api_base_url || fetch_env("GEMINI_BASE_URL", "https://opencode.ai/zen/v1")
-    @api_key = api_key || fetch_env("GEMINI_ACCESS_TOKEN")
-    @proxy_url = fetch_env("PROXY_URL", nil)
-    @model = model || fetch_env("GEMINI_MODEL", DEFAULT_MODEL)
+    @api_base_url = api_base_url || fetch_env('GEMINI_BASE_URL', 'https://opencode.ai/zen/v1')
+    @api_key = api_key || fetch_env('GEMINI_ACCESS_TOKEN')
+    @proxy_url = resolve_proxy_url
+    @model = model || fetch_env('GEMINI_MODEL', DEFAULT_MODEL)
     @debug = debug
     @max_completion_tokens = max_completion_tokens
     @progress_title = progress_title
     @env_vars = nil
-    @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
+    @request_timeout = Integer(fetch_env('REQUEST_TIMEOUT', REQUEST_TIMEOUT))
     @progress_mutex = Mutex.new
     @progress_stop = false
-    @content_stream = GeminiContentStream.new(max_completion_tokens: max_completion_tokens)
+    @transport = build_transport(max_completion_tokens)
     @openrouter_client = build_openrouter_client
   end
 
@@ -54,14 +55,25 @@ class GeminiClient
 
   private
 
+  def build_transport(max_completion_tokens)
+    GeminiApiTransport.new(
+      api_base_url: @api_base_url,
+      api_key: @api_key,
+      model: @model,
+      proxy_url: @proxy_url,
+      request_timeout: @request_timeout,
+      debug: @debug,
+      content_stream: GeminiContentStream.new(max_completion_tokens: max_completion_tokens)
+    )
+  end
+
   def stream_primary_answer(messages, json: false)
     execute_with_network_retry do
       retry_with_backoff do
-        body = build_request_body(messages, json: json)
-        debug_request(body) if @debug
-        response = raw_api_request(body, stream: true)
+        response = @transport.submit(messages, json: json, stream: true)
         handle_response_errors(response)
-        @content_stream.each_text_chunk(response) { |text| yield text }
+        @last_payload_bytes = @transport.last_payload_bytes
+        @transport.each_text_chunk(response) { |text| yield text }
       end
     end
   end
@@ -95,54 +107,26 @@ class GeminiClient
   end
 
   def raise_or_handle_httpx(error)
-    if is_network_resource_error?(error.message.to_s)
-      raise NetworkResourceError, "Network/resource error: #{error.message}"
-    end
+    raise NetworkResourceError, 
+"Network/resource error: #{error.message}" if is_network_resource_error?(error.message.to_s)
 
     handle_http_error(error)
   end
 
   def is_network_resource_error?(error_message)
-    msg = error_message.to_s
-    msg.include?("resource_exhausted") || msg.match?(/connection\s+stalled/i) ||
-      msg.include?("CANCEL") || msg.include?("canceled") ||
-      msg.include?("stream closed") || msg.include?("0x8")
-  end
-
-  def build_request_body(messages, json: false)
-    body = @content_stream.build_body(messages, json: json)
-    @last_payload_bytes = @content_stream.last_payload_bytes
-    body
-  end
-
-  def debug_request(body)
-    warn "--- Gemini request payload ---\n#{Oj.dump(body, mode: :compat, indent: 2)}\n--- end payload ---"
-  end
-
-  def debug_response(answer)
-    body = answer.is_a?(String) ? answer : (answer ? Oj.dump(answer, mode: :compat, indent: 2) : "(empty response)")
-    warn "\n--- Gemini response ---\n#{body}\n--- end response ---\n"
+    GeminiApiTransport.transient_failure?(error_message)
   end
 
   def primary_api_error_endpoint
-    "#{@api_base_url}/models/#{@model}:streamGenerateContent?alt=sse"
+    @transport.endpoint
   end
 
-  def raw_api_request(body, stream: false)
-    http = HTTPX.plugin(:proxy)
-    http = http.plugin(:stream) if stream
-    http = http.with(
-      timeout: {read_timeout: @request_timeout, write_timeout: @request_timeout},
-      ssl: PrimaryApiSsl.httpx_options,
-      fallback_protocol: "http/1.1"
-    )
-    http = http.with_proxy(uri: @proxy_url) if @proxy_url && !@proxy_url.empty?
-    params = {
-      headers: {"Content-Type" => "application/json", "x-goog-api-key" => @api_key},
-      body: Oj.dump(body, mode: :compat)
-    }
-    params[:stream] = true if stream
-    http.post(primary_api_error_endpoint, **params)
+  def resolve_proxy_url
+    PrimaryApiProxy.resolve(fetch_env('PROXY_URL', nil), proxy_env)
+  end
+
+  def proxy_env
+    (@env_vars || load_env_vars).merge(ENV.to_h)
   end
 
   def handle_response_errors(response)
@@ -157,9 +141,9 @@ class GeminiClient
     @env_vars ||= load_env_vars
     value = @env_vars.fetch(key, ENV[key] || default)
     return value unless value.nil?
-    return default unless key == "GEMINI_ACCESS_TOKEN"
+    return default unless key == 'GEMINI_ACCESS_TOKEN'
 
-    warn("Missing required environment variable: #{key}. Add it to #{File.join(script_directory, ".env")}.")
+    warn("Missing required environment variable: #{key}. Add it to #{File.join(script_directory, '.env')}.")
     exit 1
   end
 
@@ -169,12 +153,11 @@ class GeminiClient
 
   def request_answer(messages, json: false)
     response = nil
-    body = build_request_body(messages, json: json)
-    debug_request(body) if @debug
-    response = raw_api_request(body)
+    response = @transport.submit(messages, json: json)
+    @last_payload_bytes = @transport.last_payload_bytes
     handle_response_errors(response)
-    answer = @content_stream.extract_answer(@content_stream.assemble(response))
-    debug_response(answer) if @debug
+    answer = @transport.parse_answer(response)
+    @transport.log_response(answer)
     answer
   rescue HTTPX::Error => e
     handle_http_error(e)
@@ -184,14 +167,14 @@ class GeminiClient
 
   def error_suggestions(error_type)
     case error_type
-    when "Connection Failed"
-      ["• Check your internet connection", "• Try again later", "• Verify API endpoint"]
-    when "Request Timeout"
-      ["• Request too large", "• Try shorter prompt", "• Check REQUEST_TIMEOUT"]
-    when "DNS Resolution Failed"
-      ["• Check DNS settings", "• Verify GEMINI_BASE_URL", "• Try different network"]
-    when "API Error"
-      ["• Check GEMINI_ACCESS_TOKEN", "• Verify API quota", "• Check model availability"]
+    when 'Connection Failed'
+      ['• Check your internet connection', '• Try again later', '• Verify the API endpoint']
+    when 'Request Timeout'
+      ['• Payload may be too large', '• Shorten the prompt', '• Raise REQUEST_TIMEOUT']
+    when 'DNS Resolution Failed'
+      ['• Check DNS settings', '• Verify GEMINI_BASE_URL', '• Try another network']
+    when 'API Error'
+      ['• Check GEMINI_ACCESS_TOKEN', '• Verify API quota and billing', '• Confirm the model name']
     else
       super
     end
