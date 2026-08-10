@@ -3,7 +3,7 @@
 require "rbconfig"
 require "shellwords"
 
-# Utility module for notifying task completion via sound and terminal title
+# Completion cue: optional sound plus terminal title. Call mute! for non-interactive runs.
 module CompletionNotifier
   SUCCESS_BASE = "success"
   ERROR_BASE = "error"
@@ -12,6 +12,11 @@ module CompletionNotifier
   @exception_occurred = false
   @script_dir = nil
   @already_notified = false
+  @muted = false
+
+  def self.mute!
+    @muted = true
+  end
 
   def self.notify_completion(success: true, title: nil)
     return if @already_notified
@@ -23,6 +28,8 @@ module CompletionNotifier
   end
 
   def self.play_sound(success)
+    return if @muted
+
     play_cmd = sound_play_command
     return unless play_cmd
 

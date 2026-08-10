@@ -5,4 +5,6 @@ require_relative "lib/loader"
 require "colorize"
 
 CompletionNotifier.setup_exit_hook
-GitCommitSession.new(GitCommitOptions.parse(ARGV)).run
+options = GitCommitOptions.parse(ARGV)
+CompletionNotifier.mute! if options.auto
+GitCommitSession.new(options).run

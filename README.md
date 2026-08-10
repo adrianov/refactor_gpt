@@ -203,7 +203,7 @@ Usage:
 
 Features:
 - `--watch`: monitor analyzed files for changes and re-run planning every 30s when changes are detected
-- `--auto [level]`: commit without confirmation when every warning is ≤ `level`% (default 50; also `--auto=75`). Quiet: warnings, then commit/push results only (no diff, RuboCop hint, progress bar, or impact). Without `--push`, skips push without asking.
+- `--auto [level]`: commit without prompting when every warning is ≤ `level`% (default 50; also `--auto=75`). For scripts/background use: prints warnings and the commit/push outcome only — skips diff, RuboCop hint, progress bar, impact, and sounds. Without `--push`, skips push without asking.
 - `--push`: push after a successful commit without asking
 - Reads `git status --porcelain` and `git diff` for the current repository
 - Groups changed files into a small number of coherent commits (by feature, refactor, docs, tests, etc.)

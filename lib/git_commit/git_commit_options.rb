@@ -2,7 +2,7 @@
 
 require "colorize"
 
-# CLI flags for git_commit_gpt: --debug, --watch, --auto [0-100] (quiet), --push, plus free-text hint.
+# CLI flags for git_commit_gpt: --debug, --watch, --auto [0-100] (quiet, muted), --push, plus free-text hint.
 class GitCommitOptions
   DEFAULT_WARNING_LEVEL = 50
 
