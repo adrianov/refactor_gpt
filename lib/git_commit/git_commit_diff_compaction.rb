@@ -181,8 +181,7 @@ class GitCommitDiffCompaction
   end
 
   def utf8_safe(str)
-    s = str.to_s.dup.force_encoding(Encoding::UTF_8)
-    s.valid_encoding? ? s : s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
+    Utility.utf8_safe(str)
   end
 
   def tier_opts(tier)

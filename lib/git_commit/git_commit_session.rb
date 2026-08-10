@@ -120,7 +120,8 @@ class GitCommitSession
   end
 
   def finish_with_push
-    if `git remote 2>/dev/null`.strip.empty?
+    remote = Utility.utf8_safe(`git remote 2>/dev/null`).strip
+    if remote.empty?
       puts "Committed. No remote configured.".yellow
       exit 0
     end

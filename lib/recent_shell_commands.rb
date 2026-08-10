@@ -11,7 +11,7 @@ module RecentShellCommands
     lines = read_history_file(history_file)
     return "" if lines.empty?
 
-    extract_commands_from_history(lines, history_file).last(count).join("\n")
+    Utility.utf8_join("\n", extract_commands_from_history(lines, history_file).last(count))
   end
 
   def read_history_file(history_file)
