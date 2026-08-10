@@ -53,19 +53,23 @@ class CommitPlanClient
 
   # Single payload ceiling: uncommitted diff budget is what remains after all static sections (incl. MR numstat).
   def self.diff_body_budgets_chars(cli_hint:, status_output:, recent_commits:, recent_commands:, mr_numstat: "")
-    data = {
-      cli_hint: cli_hint.to_s,
-      status_output: status_output.to_s,
-      recent_commits: recent_commits.to_s,
-      recent_commands: recent_commands.to_s,
-      mr_numstat_output: mr_numstat.to_s
-    }
+    data = utf8_plan_data(
+      cli_hint: cli_hint,
+      status_output: status_output,
+      recent_commits: recent_commits,
+      recent_commands: recent_commands,
+      mr_numstat_output: mr_numstat
+    )
     static_chars = sum_static_section_lengths(data)
     header_chars = sum_diff_header_lengths
     join_slack = [USER_CONTENT_SECTIONS.size - 1, 0].max
     remaining = COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT - static_chars - header_chars - join_slack
     remaining = remaining.positive? ? remaining : 0
     {uncommitted: remaining}
+  end
+
+  def self.utf8_plan_data(**fields)
+    fields.transform_values { |value| Utility.utf8_safe(value) }
   end
 
   def self.sum_static_section_lengths(data)
@@ -111,23 +115,25 @@ class CommitPlanClient
   private
 
   def append_section(parts, current_size_chars, max_size_chars, text)
-    return current_size_chars if text.empty? || current_size_chars + text.length > max_size_chars
+    chunk = Utility.utf8_safe(text)
+    return current_size_chars if chunk.empty? || current_size_chars + chunk.length > max_size_chars
 
-    parts << text
-    current_size_chars + text.length
+    parts << chunk
+    current_size_chars + chunk.length
   end
 
   def append_static_section(parts, current_size_chars, max_size_chars, value, config)
+    value = Utility.utf8_safe(value)
     return current_size_chars if config[:optional] && value.empty?
 
     append_section(parts, current_size_chars, max_size_chars, format(config[:template], value))
   end
 
   def append_labeled_diff_section(parts, current_size_chars, max_size_chars, section, data)
-    diff_output = data.fetch(section[:key], "").to_s
+    diff_output = Utility.utf8_safe(data.fetch(section[:key], ""))
     return current_size_chars if diff_output.strip.empty?
 
-    combined = "#{section[:label]}\n\n#{diff_output}"
+    combined = Utility.utf8_join("\n\n", section[:label], diff_output)
     append_section(parts, current_size_chars, max_size_chars, combined)
   end
 
@@ -140,7 +146,7 @@ class CommitPlanClient
       parts,
       current_size_chars,
       max_size_chars,
-      data.fetch(section[:key], "").to_s,
+      data.fetch(section[:key], ""),
       section
     )
   end
@@ -155,22 +161,22 @@ class CommitPlanClient
 
   def build_user_content(status_output, mr_numstat_output, uncommitted_diff_output, cli_hint, recent_commits,
     recent_commands)
-    data = {
+    data = self.class.utf8_plan_data(
       status_output: status_output,
       mr_numstat_output: mr_numstat_output,
       uncommitted_diff_output: uncommitted_diff_output,
       cli_hint: cli_hint,
       recent_commits: recent_commits,
       recent_commands: recent_commands
-    }
+    )
     parts = []
     append_user_content_sections(parts, COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT, data)
-    parts.join("\n")
+    Utility.utf8_join("\n", parts)
   end
 
   def system_instruction
-    agents = load_project_rules(Dir.pwd)
-    project_context = agents.empty? ? '' : "Project guidelines:\n#{agents}\n\n"
-    "#{project_context}#{CommitPlanInstructions.system_instruction}"
+    agents = Utility.utf8_safe(load_project_rules(Dir.pwd))
+    project_context = agents.empty? ? "" : Utility.utf8_join("\n", "Project guidelines:", agents, "")
+    Utility.utf8_join("", project_context, CommitPlanInstructions.system_instruction)
   end
 end

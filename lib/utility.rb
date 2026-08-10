@@ -132,14 +132,20 @@ module Utility
     FLAG_MAPPING.values.map { |k| [k, false] }.to_h
   end
 
-  def self.trim(str)
-    utf8_safe(str).strip
-  end
-
-  # Shell/`git` bytes often arrive tagged US-ASCII; force UTF-8 before strip/regex.
+  # Shell/`git` bytes often arrive tagged US-ASCII; force UTF-8 before strip/regex/concat.
   def self.utf8_safe(str)
     s = str.to_s.dup.force_encoding(Encoding::UTF_8)
     s.valid_encoding? ? s : s.scrub('')
+  end
+
+  # Normalize every part to UTF-8 first, then join — avoids CompatibilityError on concat.
+  def self.utf8_join(separator, *parts)
+    sep = utf8_safe(separator)
+    parts.flatten.map { |part| utf8_safe(part) }.join(sep)
+  end
+
+  def self.trim(str)
+    utf8_safe(str).strip
   end
 
   def self.blank?(str)
