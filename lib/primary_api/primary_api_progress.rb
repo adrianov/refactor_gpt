@@ -24,16 +24,17 @@ module PrimaryApiProgress
   def load_progress_speed
     return @progress_speed if defined?(@progress_speed)
 
-    @progress_speed =
-      File.exist?(PROGRESS_SPEED_FILE) ? File.read(PROGRESS_SPEED_FILE).to_f : DEFAULT_PROGRESS_SPEED
-    @progress_speed = DEFAULT_PROGRESS_SPEED if @progress_speed <= 0
+    default = self.class::DEFAULT_PROGRESS_SPEED
+    path = self.class::PROGRESS_SPEED_FILE
+    @progress_speed = File.exist?(path) ? File.read(path).to_f : default
+    @progress_speed = default if @progress_speed <= 0
     @progress_speed
   rescue SystemCallError, ArgumentError
-    @progress_speed = DEFAULT_PROGRESS_SPEED
+    @progress_speed = self.class::DEFAULT_PROGRESS_SPEED
   end
 
   def save_progress_speed(speed)
-    File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s)
+    File.write(self.class::PROGRESS_SPEED_FILE, speed.round(2).to_s)
   rescue SystemCallError
     # ignore persistence errors
   end
