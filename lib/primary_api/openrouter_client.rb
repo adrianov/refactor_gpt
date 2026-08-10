@@ -32,11 +32,11 @@ class OpenrouterClient
     return warn_failure(response) unless response.status == 200
 
     answer = extract_answer(response)
-    answer = handle_json_response(answer, json, messages, max_completion_tokens) if json && answer
-    
+    answer = handle_json_response(answer, messages, max_completion_tokens) if json && answer
+
     debug_response(answer) if @debug
     answer
-  rescue HTTPX::Error, Oj::ParseError => e
+  rescue StandardError => e
     warn "⚠️  OpenRouter fallback failed: #{e.message}"
     nil
   end
@@ -102,11 +102,23 @@ class OpenrouterClient
   end
 
   def extract_answer(response)
-    parsed_response = Oj.load(response.body)
-    answer = parsed_response.dig("choices", 0, "message", "content")
+    answer = message_content_from(response)
     return answer unless answer.nil? || answer.empty?
 
     warn_failure(response)
+  end
+
+  def message_content_from(response)
+    return nil unless response&.body
+
+    parsed = Oj.load(response.body)
+    return nil unless parsed.is_a?(Hash)
+
+    message = parsed.dig("choices", 0, "message")
+    return nil unless message.is_a?(Hash)
+
+    content = message["content"]
+    content.nil? || content.empty? ? message["reasoning_content"] : content
   end
 
   def warn_failure(response)
@@ -118,7 +130,7 @@ class OpenrouterClient
   end
 
   def debug_request(body, source_model)
-    warn "--- OpenRouter fallback request (source=#{source_model || 'unknown'}) ---"
+    warn "--- OpenRouter fallback request (source=#{source_model || "unknown"}) ---"
     warn Oj.dump(body, mode: :compat, indent: 2)
     warn "--- end OpenRouter request ---"
   end
@@ -129,26 +141,15 @@ class OpenrouterClient
     warn "--- end OpenRouter response ---\n"
   end
 
-  def valid_json?(text)
-    return false if text.nil? || text.to_s.strip.empty?
-    
-    Oj.load(text.to_s)
-    true
-  rescue Oj::ParseError
-    false
-  end
+  def handle_json_response(answer, messages, max_completion_tokens)
+    return answer if OpenrouterJson.valid?(answer)
 
-  def handle_json_response(answer, _json_requested, messages, max_completion_tokens)
-    return answer if valid_json?(answer)
-
-    # Try to extract JSON from the text first
-    extracted = extract_json_from_text(answer)
+    extracted = OpenrouterJson.extract_from_text(answer)
     if extracted
       warn "⚠️  OpenRouter returned non-JSON for JSON request, extracted JSON from text" if @debug
       return extracted
     end
 
-    # Retry without JSON constraint
     retry_without_json_constraint(messages, max_completion_tokens)
   end
 
@@ -157,73 +158,8 @@ class OpenrouterClient
     body_no_json = build_request_body(messages, json: false, max_completion_tokens: max_completion_tokens)
     response = post_with_retry(body_no_json)
     return warn_failure(response) unless response.status == 200
-    
+
     answer = extract_answer(response)
-    extract_json_from_text(answer) || answer if answer
-  end
-
-  def extract_json_from_text(text)
-    return nil if text.nil? || text.to_s.strip.empty?
-    
-    content = text.to_s
-    
-    # Try markdown code blocks first
-    extracted = try_extract_from_markdown(content)
-    return extracted if extracted
-    
-    # Try to find balanced JSON braces
-    try_extract_balanced_json(content)
-  end
-
-  def try_extract_from_markdown(content)
-    # Match markdown code blocks and extract everything between the braces
-    json_match = content.match(/```(?:json)?\s*(\{.*\})\s*```/m)
-    return nil unless json_match
-    
-    # Extract the full content and find balanced JSON within it
-    code_block_content = json_match[1].strip
-    extract_balanced_json_from_content(code_block_content)
-  end
-
-  def try_extract_balanced_json(content)
-    brace_start = content.index('{')
-    return nil unless brace_start
-    
-    brace_end = find_matching_brace(content, brace_start)
-    return nil unless brace_end
-    
-    candidate = content[brace_start..brace_end]
-    candidate if valid_json?(candidate)
-  end
-
-  def extract_balanced_json_from_content(content)
-    # If the content starts with {, try to find the matching closing brace
-    return content if content.start_with?('{') && content.end_with?('}') && valid_json?(content)
-    
-    # Otherwise, find the first { and its matching }
-    brace_start = content.index('{')
-    return nil unless brace_start
-    
-    brace_end = find_matching_brace(content, brace_start)
-    return nil unless brace_end
-    
-    candidate = content[brace_start..brace_end]
-    candidate if valid_json?(candidate)
-  end
-
-  def find_matching_brace(content, start_pos)
-    brace_count = 0
-    
-    content[start_pos..-1].each_char.with_index(start_pos) do |char, idx|
-      case char
-      when '{'
-        brace_count += 1
-      when '}'
-        brace_count -= 1
-        return idx if brace_count == 0
-      end
-    end
-    
-    nil
+    OpenrouterJson.extract_from_text(answer) || answer if answer
   end
 end

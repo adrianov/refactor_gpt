@@ -32,6 +32,9 @@ module PrimaryApiFallback
     warn "⚠️  Primary API unavailable, trying OpenRouter fallback... #{format_payload_size}"
     @openrouter_client.ask(messages, json: json, max_completion_tokens: @max_completion_tokens,
       source_model: @model)
+  rescue StandardError => e
+    warn "⚠️  OpenRouter fallback failed: #{e.message}"
+    nil
   end
 
   def fallback_configured?
