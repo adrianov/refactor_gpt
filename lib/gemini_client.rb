@@ -35,6 +35,9 @@ class GeminiClient
   include AgentsFileHandler
   include PrimaryApiBackoff
   include PrimaryApiErrorBody
+  include PrimaryApiHttpErrors
+  include ApiErrorDisplay
+  include PrimaryApiProgress
   DEFAULT_MODEL = "gemini-3-flash"
   REQUEST_TIMEOUT = 600
   DEFAULT_PROGRESS_SPEED = 300
@@ -67,6 +70,16 @@ class GeminiClient
 
   def stream_answer(messages, json: false)
     reset_primary_error_body_warned!
+    stream_primary_answer(messages, json: json) { |text| yield text }
+  rescue RateLimitError, ServerError, NetworkResourceError => e
+    stream_with_openrouter_fallback(messages, json: json, error: e) { |text| yield text }
+  rescue HTTPX::Error => e
+    stream_httpx_with_fallback(messages, json: json, error: e) { |text| yield text }
+  end
+
+  private
+
+  def stream_primary_answer(messages, json: false)
     execute_with_network_retry do
       retry_with_backoff do
         body = build_request_body(messages, json: json)
@@ -77,16 +90,17 @@ class GeminiClient
         process_stream_body(response) { |text| yield text }
       end
     end
-  rescue RateLimitError, ServerError, NetworkResourceError => e
-    stream_with_openrouter_fallback(messages, json: json, error: e) { |text| yield text }
-  rescue HTTPX::Error => e
-    handle_http_error(e) unless is_network_resource_error?(e.message.to_s)
-
-    stream_with_openrouter_fallback(messages, json: json,
-      error: NetworkResourceError.new("Network/resource error: #{e.message}")) { |text| yield text }
   end
 
-  private
+  def stream_httpx_with_fallback(messages, json: false, error:)
+    handle_http_error(error) unless is_network_resource_error?(error.message.to_s)
+
+    stream_with_openrouter_fallback(
+      messages,
+      json: json,
+      error: NetworkResourceError.new("Network/resource error: #{error.message}")
+    ) { |text| yield text }
+  end
 
   def stream_with_openrouter_fallback(messages, json: false, error:)
     warn_primary_api_error_body_once(error)
@@ -425,81 +439,6 @@ class GeminiClient
     handle_error_response_without_status(response)
   end
 
-  def handle_non_success_status(response)
-    raise_rate_limit_error(response) if response.status == 429
-    raise_server_error(response) if response.status >= 500 && response.status < 600
-
-    error_message = extract_error_message_from_response(response)
-    if error_message && is_network_resource_error?(error_message)
-      raise NetworkResourceError.new("Network/resource error: #{error_message}")
-    end
-
-    if response&.body && is_network_resource_error?(response.body.to_s)
-      raise NetworkResourceError.new("Network/resource error: #{response.body}")
-    end
-
-    pretty_print_error("API Error", response.status, ErrorResponseBody.format_body(response.body.to_s))
-    exit 1
-  end
-
-  def raise_rate_limit_error(response)
-    retry_after = extract_retry_after(response)
-    raw = ErrorResponseBody.raw_body_from_http_response(response)
-    error_message = extract_error_message_from_response(response)
-    message = error_message ? "Rate limited by API: #{error_message}" : "Rate limited by API"
-
-    if error_message&.include?("Insufficient balance") || error_message&.include?("no resource package")
-      detail = [message, ErrorResponseBody.format_body(raw)].reject { |s| s.to_s.strip.empty? }.join("\n\n")
-      pretty_print_error("API Error", response.status, detail)
-      exit 1
-    end
-
-    raise RateLimitError.new(message, retry_after: retry_after, raw_body: raw)
-  end
-
-  def raise_server_error(response)
-    raw = ErrorResponseBody.raw_body_from_http_response(response)
-    raise ServerError.new("Server error", status: response.status, raw_body: raw)
-  end
-
-  def handle_error_response_without_status(response)
-    error_status = extract_error_response_status(response)
-
-    if error_status == 429
-      error_message = extract_error_message_from_response_object(response)
-      raw = ErrorResponseBody.raw_body_from_http_response(response)
-      if error_message&.include?("Insufficient balance") || error_message&.include?("no resource package")
-        error_details = format_error_response(response)
-        pretty_print_error("API Error", error_status, error_details)
-        exit 1
-      end
-      msg = error_message ? "Rate limited by API: #{error_message}" : "Rate limited by API"
-      ra = extract_retry_after_from_error_response(response)
-      raise RateLimitError.new(msg, retry_after: ra, raw_body: raw)
-    end
-
-    if error_status && error_status >= 500
-      raw = ErrorResponseBody.raw_body_from_http_response(response)
-      raise ServerError.new("Server error", status: error_status, raw_body: raw)
-    end
-
-    error_message = extract_error_message_from_response_object(response)
-    if error_message && is_network_resource_error?(error_message)
-      raise NetworkResourceError.new("Network/resource error: #{error_message}")
-    end
-
-    if response.respond_to?(:response) && response.response.respond_to?(:body) && response.response.body
-      response_body = response.response.body.to_s
-      if is_network_resource_error?(response_body)
-        raise NetworkResourceError.new("Network/resource error: #{response_body}")
-      end
-    end
-
-    error_details = format_error_response(response)
-    pretty_print_error("API Error", "Unknown", error_details)
-    exit 1
-  end
-
   def extract_retry_after_from_error_response(response)
     if response.respond_to?(:headers)
       ra = extract_retry_after(response)
@@ -594,23 +533,6 @@ class GeminiClient
     handle_parse_error(e, response)
   end
 
-  def setup_progress_tracking(messages, json: false, title: nil)
-    total_size = [messages.to_s.bytesize, 6000].max
-    progress_speed = load_progress_speed
-
-    progressbar = create_progress_bar(total_size, title)
-    start_time = Time.now
-
-    set_progress_stop(false)
-    progress_thread = start_progress_thread(progressbar, start_time, progress_speed, total_size)
-
-    begin
-      make_request_with_debug(messages, json: json)
-    ensure
-      finish_progress(progress_thread, progressbar, start_time, total_size)
-    end
-  end
-
   def make_request_with_debug(messages, json: false)
     retry_with_backoff do
       body = build_request_body(messages, json: json)
@@ -625,155 +547,6 @@ class GeminiClient
     end
   end
 
-  def load_progress_speed
-    return @progress_speed if defined?(@progress_speed)
-
-    @progress_speed =
-      File.exist?(PROGRESS_SPEED_FILE) ? File.read(PROGRESS_SPEED_FILE).to_f : DEFAULT_PROGRESS_SPEED
-    @progress_speed = DEFAULT_PROGRESS_SPEED if @progress_speed <= 0
-    @progress_speed
-  rescue SystemCallError, ArgumentError
-    @progress_speed = DEFAULT_PROGRESS_SPEED
-  end
-
-  def save_progress_speed(speed)
-    File.write(PROGRESS_SPEED_FILE, speed.round(2).to_s)
-  rescue SystemCallError
-    # ignore persistence errors
-  end
-
-  def handle_http_error(error)
-    error_message = error.message.to_s
-
-    if is_network_resource_error?(error_message)
-      raise NetworkResourceError.new("Network/resource error: #{error.message}")
-    end
-
-    error_type = case error
-    when HTTPX::Connection::HTTP2::GoawayError
-      "Connection Closed (HTTP/2)"
-    when HTTPX::TimeoutError
-      "Request Timeout"
-    when HTTPX::ResolveError
-      "DNS Resolution Failed"
-    when HTTPX::ConnectionError
-      "Connection Failed"
-    else
-      error.class.name.split("::").last
-    end
-
-    pretty_print_error(error_type, "Network Error", error.message)
-    exit 1
-  end
-
-  def handle_parse_error(error, response)
-    warn "Failed to parse JSON response: #{error.message}"
-    warn response.body if defined?(response) && response&.body
-    exit 1
-  end
-
-  def create_progress_bar(total_size, title)
-    ProgressBar.create(
-      title: title || @progress_title,
-      total: total_size,
-      format: "%t: |%B| %p%% %e",
-      length: 100
-    )
-  end
-
-  def start_progress_thread(progressbar, start_time, progress_speed, total_size)
-    Thread.new do
-      run_progress_loop(progressbar, start_time, progress_speed, total_size)
-    end
-  end
-
-  def run_progress_loop(progressbar, start_time, progress_speed, total_size)
-    loop do
-      break if progress_stopped?
-      break unless update_progress_safely(progressbar, start_time, progress_speed, total_size)
-
-      sleep 0.1
-    end
-  end
-
-  def set_progress_stop(value)
-    @progress_mutex.synchronize { @progress_stop = value }
-  end
-
-  def progress_stopped?
-    @progress_mutex.synchronize { @progress_stop }
-  end
-
-  def update_progress_safely(progressbar, start_time, progress_speed, total_size)
-    return false if progressbar.finished?
-
-    elapsed_time = Time.now - start_time
-    progress = (elapsed_time * progress_speed).round
-
-    adjust_progressbar_total(progressbar, progress, total_size)
-    progressbar.progress = progress
-    true
-  rescue ProgressBar::InvalidProgressError
-    warn "Progress update stopped due to progressbar state" if @debug
-    false
-  end
-
-  def adjust_progressbar_total(progressbar, progress, total_size)
-    return unless progress >= progressbar.total
-
-    progressbar.total += total_size
-    progressbar.total = progress + 1 if progressbar.total <= progress
-  end
-
-  def finish_progress(progress_thread, progressbar, start_time, total_size)
-    return unless progress_thread && progressbar
-
-    set_progress_stop(true)
-    progress_thread.join(0.5)
-    progress_thread.kill if progress_thread.alive?
-
-    finish_progressbar_safely(progressbar)
-    save_progress_speed_from_elapsed(start_time, total_size)
-  end
-
-  def finish_progressbar_safely(progressbar)
-    return if progressbar.finished?
-
-    progressbar.progress = progressbar.total
-    progressbar.finish
-  rescue ProgressBar::InvalidProgressError
-    # Progressbar already finished or in invalid state
-  end
-
-  def save_progress_speed_from_elapsed(start_time, total_size)
-    elapsed_time = Time.now - start_time
-    return unless elapsed_time.positive?
-
-    actual_speed = total_size / elapsed_time
-    save_progress_speed((load_progress_speed * 0.7) + (actual_speed * 0.3))
-  end
-
-  def pretty_print_error(error_type, status, details)
-    puts "\n❌ #{error_type}"
-    puts "┌─ #{"─" * 50}"
-    puts "│ Status: #{status}"
-    puts "│ Time: #{Time.now.strftime("%Y-%m-%d %H:%M:%S")}"
-    puts "├─ #{"─" * 50}"
-    puts "│ Details:"
-    details.split("\n").each { |line| puts "│ #{line}" }
-    puts "└─ #{"─" * 50}\n"
-    print_error_suggestions(error_type)
-  end
-
-  def print_error_suggestions(error_type)
-    suggestions = error_suggestions(error_type)
-    return unless suggestions
-
-    puts "💡 Suggestions:"
-    suggestions.each { |suggestion| puts "   #{suggestion}" }
-    puts
-  end
-
   def error_suggestions(error_type)
     case error_type
     when "Connection Failed"
@@ -784,16 +557,8 @@ class GeminiClient
       ["• Check DNS settings", "• Verify GEMINI_BASE_URL", "• Try different network"]
     when "API Error"
       ["• Check GEMINI_ACCESS_TOKEN", "• Verify API quota", "• Check model availability"]
+    else
+      super
     end
   end
-
-  def format_error_response(response)
-    [
-      "Class: #{response.class}",
-      "Error: #{response.error if response.respond_to?(:error)}",
-      "Response Status: #{response.response.status if response.respond_to?(:response)}",
-      "Full Inspect:\n#{response.inspect}"
-    ].join("\n")
-  end
-
 end
