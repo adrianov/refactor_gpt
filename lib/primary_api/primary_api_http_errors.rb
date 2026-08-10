@@ -78,10 +78,7 @@ module PrimaryApiHttpErrors
   def extract_error_message_from_response(response)
     return nil unless response&.body
 
-    parsed = Oj.load(response.body)
-    return nil unless parsed.is_a?(Hash)
-
-    parsed.dig("error", "message")
+    message_from_error_json(Oj.load(response.body))
   rescue Oj::ParseError
     nil
   end
@@ -89,11 +86,18 @@ module PrimaryApiHttpErrors
   def extract_error_message_from_response_object(response)
     return nil unless response.respond_to?(:response) && response.response.respond_to?(:body)
 
-    parsed = Oj.load(response.response.body)
+    message_from_error_json(Oj.load(response.response.body))
+  rescue Oj::ParseError
+    nil
+  end
+
+  def message_from_error_json(parsed)
     return nil unless parsed.is_a?(Hash)
 
-    parsed.dig("error", "message")
-  rescue Oj::ParseError
+    error = parsed['error']
+    return error if error.is_a?(String)
+    return error['message'] if error.is_a?(Hash)
+
     nil
   end
 

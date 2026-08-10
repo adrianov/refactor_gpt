@@ -154,8 +154,8 @@ module Utility
     env_file_path = File.join(PROJECT_ROOT, ".env")
     return {} unless File.exist?(env_file_path)
 
-    File.foreach(env_file_path).with_object({}) do |line, h|
-      key, value = line.split("=", 2)
+    File.foreach(env_file_path, encoding: 'UTF-8').with_object({}) do |line, h|
+      key, value = line.split('=', 2)
       h[trim(key)] = trim(value) if present?(key) && value
     end
   end

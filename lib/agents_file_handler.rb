@@ -29,8 +29,8 @@ module AgentsFileHandler
 
     return {} unless File.exist?(env_file_path)
 
-    File.foreach(env_file_path).with_object({}) do |line, h|
-      key, value = line.split("=", 2)
+    File.foreach(env_file_path, encoding: 'UTF-8').with_object({}) do |line, h|
+      key, value = line.split('=', 2)
       h[key.strip] = value.strip if key && value
     end
   end
