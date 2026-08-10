@@ -7,9 +7,10 @@ require "shellwords"
 require "oj"
 require "tempfile"
 
-# Class to interact with OpenAI API
+# Multi-stage OpenAI-compatible refactor client with assessment and warning fixes.
 class OpenAi
   include AgentsFileHandler
+  include RefactorAssessment
 
   def initialize(model: nil, debug: false)
     @debug = debug
@@ -18,166 +19,42 @@ class OpenAi
     setup_clients
   end
 
-  # Method to send prompts to OpenAI and get a response
   def ask(prompts, json: false)
-    # This ask method is used by the first client in the chain for generic requests
     @clients.first.ask(prompts, json: json)
   end
 
-  # Method to refactor code based on user instructions
   def refactor(file_codes, user_instruction = nil)
     current_file_codes = file_codes.dup
-    any_stage_successful = false
-    assessment = {"satisfied" => false, "warnings" => []}
-
-    @clients.each_with_index do |client, index|
-      refactored_files = process_stage(client, index, current_file_codes, user_instruction)
-
-      if refactored_files.any?
-        any_stage_successful = true
-        refactored_files.each { |path, new_code| current_file_codes[path] = new_code }
-      end
-
-      # Skip assessment if no files changed and not the last stage
-      next if refactored_files.empty? && !last_stage?(index)
-
-      assessment = perform_assessment(file_codes, current_file_codes, user_instruction, client: client)
-
-      if assessment["warnings"]&.any? && refactored_files.any?
-        current_file_codes = fix_warnings_if_needed(client, file_codes, current_file_codes, assessment, 
-user_instruction)
-        assessment = perform_assessment(file_codes, current_file_codes, user_instruction, client: client)
-      end
-
-      break if satisfied?(assessment)
-      break if last_stage?(index)
-
-      puts "Proceeding to higher agent as task is not fully solved or critical warnings exist.".yellow
-    end
-
-    warn "Warning: All stages failed to produce output. Returning original files." unless any_stage_successful
+    any_stage_successful = apply_client_stages(file_codes, current_file_codes, user_instruction)
+    warn 'Warning: All stages failed to produce output. Returning original files.' unless any_stage_successful
     build_final_response(current_file_codes)
   end
 
   private
 
-  def fix_warnings_if_needed(client, _original_file_codes, current_file_codes, assessment, user_instruction)
-    fixed_files = attempt_to_fix_warnings(client, current_file_codes, assessment["warnings"], user_instruction)
-    return current_file_codes if fixed_files.empty?
+  def apply_client_stages(original_codes, current_file_codes, user_instruction)
+    any_success = false
+    @clients.each_with_index do |client, index|
+      changed = process_stage(client, index, current_file_codes, user_instruction)
+      any_success ||= changed.any?
+      changed.each { |path, code| current_file_codes[path] = code }
 
-    fixed_files.each { |path, code| current_file_codes[path] = code }
-    current_file_codes
-  end
+      assessment = assess_stage(client, index, original_codes, current_file_codes, user_instruction, changed)
+      break if satisfied?(assessment) || last_stage?(index)
 
-  def satisfied?(assessment)
-    assessment["satisfied"] && !critical_warnings?(assessment["warnings"])
-  end
-
-  def critical_warnings?(warnings)
-    return false if warnings.nil? || warnings.empty?
-
-    warnings.any? { |w| w["critical"] == true || (w["probability"] || 0) > 0.8 }
-  end
-
-  def attempt_to_fix_warnings(client, current_file_codes, warnings, user_instruction)
-    model_name = client.instance_variable_get(:@model)
-    puts "Attempting to fix warnings with #{model_name}...".blue
-
-    warning_text = warnings.map do |w|
-      critical = w["critical"] ? " [CRITICAL]" : ""
-      "- #{w["message"]} (probability: #{w["probability"]})#{critical}"
-    end.join("\n")
-    fix_instruction = "Fix these issues from the previous refactoring step:\n#{warning_text}"
-    fix_instruction += "\n\nOriginal instruction: #{user_instruction}" if user_instruction
-
-    raw_response = client.ask(refactor_messages(current_file_codes, fix_instruction), title: "Fixing warnings".cyan)
-    ResponseParser.parse_files_from_response(raw_response, current_file_codes.keys, exit_on_error: false)
-  end
-
-  def last_stage?(index)
-    index == @clients.size - 1
-  end
-
-  def perform_assessment(original_file_codes, current_file_codes, user_instruction, client: nil)
-    client ||= @clients.first
-    model_name = client.instance_variable_get(:@model)
-    puts "--- Assessing if instruction is fulfilled (#{model_name}) ---".blue
-
-    prompt = build_assessment_prompt(original_file_codes, current_file_codes, user_instruction)
-    messages = assessment_messages(prompt)
-
-    response = client.ask(messages, json: true, title: "Assessing refactoring".cyan)
-    result = ResponseParser.extract_json(response)
-
-    display_assessment_result(result)
-    result
-  rescue => e
-    warn "Warning: Self-assessment failed: #{e.message}"
-    {"satisfied" => false, "reason" => "Assessment failed: #{e.message}", "warnings" => []}
-  end
-
-  def assessment_messages(prompt)
-    [
-      {role: "system", content: "You are an expert code reviewer. Assess if the user's refactoring instruction " \
-                               "has been fully fulfilled. Respond ONLY with a JSON object: " \
-                               "{\"satisfied\": true/false, \"reason\": \"brief explanation\", \"warnings\": " \
-                               "[{\"message\": \"...\", \"probability\": 0..1, \"critical\": true/false}]}"},
-      {role: "user", content: prompt}
-    ]
-  end
-
-  def display_assessment_result(result)
-    status_color = result["satisfied"] ? :green : :yellow
-    puts "Assessment: #{result["reason"]}".colorize(status_color)
-
-    return unless result["warnings"]&.any?
-
-    puts "Warnings:".yellow
-    result["warnings"].each do |warning|
-      prob = warning["probability"] || 0
-      critical = warning["critical"] ? " [CRITICAL]".red : ""
-      puts "  - #{warning["message"]} (probability: #{prob})#{critical}".yellow
+      puts 'Proceeding to higher agent as task is not fully solved or critical warnings exist.'.yellow
     end
+    any_success
   end
 
-  def build_assessment_prompt(original_file_codes, current_file_codes, user_instruction)
-    instruction = user_instruction || load_refactor_md
-    prompt = "User Instruction: #{instruction}\n\n"
-    prompt += "Review the following changes (in unified diff format) and determine if they fulfill the instruction:\n\n"
+  def assess_stage(client, index, original_codes, current_file_codes, user_instruction, changed)
+    return {'satisfied' => false, 'warnings' => []} if changed.empty? && !last_stage?(index)
 
-    current_file_codes.each do |path, current_code|
-      original_code = original_file_codes[path]
-      next if original_code == current_code
+    assessment = perform_assessment(original_codes, current_file_codes, user_instruction, client: client)
+    return assessment unless assessment['warnings']&.any? && changed.any?
 
-      prompt += "#{generate_diff(path, original_code, current_code)}\n"
-    end
-    prompt
-  end
-
-  def generate_diff(path, original, current)
-    Tempfile.create(["original", File.extname(path)]) do |f1|
-      f1_setup(f1, original)
-      Tempfile.create(["current", File.extname(path)]) do |f2|
-        f2_setup(f2, current)
-        diff = `diff -u #{Shellwords.shellescape(f1.path)} #{Shellwords.shellescape(f2.path)}`
-        diff.sub(/^--- .*\n\+\+\+ .*\n/, "--- a/#{path}\n+++ b/#{path}\n")
-      end
-    end
-  rescue => e
-    warn "Warning: Diff generation failed for #{path}: #{e.message}"
-    "--- a/#{path}\n+++ b/#{path}\n@@ -0,0 +0,0 @@\n(Diff failed, original and refactored versions differ)\n"
-  end
-
-  def f1_setup(f1, original)
-    f1.binmode
-    f1.write(original)
-    f1.close
-  end
-
-  def f2_setup(f2, current)
-    f2.binmode
-    f2.write(current)
-    f2.close
+    fix_warnings_if_needed(client, original_codes, current_file_codes, assessment, user_instruction)
+    perform_assessment(original_codes, current_file_codes, user_instruction, client: client)
   end
 
   def process_stage(client, index, current_file_codes, user_instruction)
