@@ -151,10 +151,11 @@ module Utility
   end
 
   def self.load_env_vars
-    env_file_path = File.join(PROJECT_ROOT, ".env")
+    env_file_path = File.join(PROJECT_ROOT, '.env')
     return {} unless File.exist?(env_file_path)
 
-    File.foreach(env_file_path, encoding: 'UTF-8').with_object({}) do |line, h|
+    # Binary read + scrub avoids US-ASCII locale crashes on non-ASCII .env bytes.
+    File.binread(env_file_path).force_encoding(Encoding::UTF_8).scrub('').each_line.with_object({}) do |line, h|
       key, value = line.split('=', 2)
       h[trim(key)] = trim(value) if present?(key) && value
     end

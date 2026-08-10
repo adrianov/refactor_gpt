@@ -25,11 +25,11 @@ module AgentsFileHandler
 
   def load_env_vars(project_root = nil)
     project_root ||= script_directory
-    env_file_path = File.join(project_root, ".env")
-
+    env_file_path = File.join(project_root, '.env')
     return {} unless File.exist?(env_file_path)
 
-    File.foreach(env_file_path, encoding: 'UTF-8').with_object({}) do |line, h|
+    # Binary read + scrub avoids US-ASCII locale crashes on non-ASCII .env bytes.
+    File.binread(env_file_path).force_encoding(Encoding::UTF_8).scrub('').each_line.with_object({}) do |line, h|
       key, value = line.split('=', 2)
       h[key.strip] = value.strip if key && value
     end

@@ -59,6 +59,25 @@ class AgentsFileHandlerTest < Minitest::Test
     assert_includes combined, 'refactor defaults'
   end
 
+  def test_load_env_vars_tolerates_non_ascii_under_us_ascii_locale
+    File.binwrite(
+      File.join(@tmpdir, '.env'),
+      "FOO=bar\n# comment \xD0\xBF\xD1\x80\nBAZ=1\nBAD=caf\xE9\n"
+    )
+
+    old_external = Encoding.default_external
+    old_internal = Encoding.default_internal
+    Encoding.default_external = Encoding::US_ASCII
+    Encoding.default_internal = nil
+    env = @host.load_env_vars(@tmpdir)
+    assert_equal 'bar', env['FOO']
+    assert_equal '1', env['BAZ']
+    assert_equal 'caf', env['BAD']
+  ensure
+    Encoding.default_external = old_external
+    Encoding.default_internal = old_internal
+  end
+
   private
 
   def write_file(name, content)
