@@ -4,7 +4,7 @@ require "httpx"
 require "oj"
 require "ruby-progressbar"
 
-# Unified OpenAI-compatible client with proxy support and OpenRouter fallback.
+# OpenAI-compatible chat client with outbound proxy support and OpenRouter/REFACTOR failover.
 class OpenAiClient
   include AgentsFileHandler
   include PrimaryApiClient
@@ -19,7 +19,7 @@ class OpenAiClient
     progress_title: nil, api_base_url: nil, api_key: nil, raise_on_server_error: false)
     @api_base_url = api_base_url || fetch_env("OPENAI_BASE_URL", "https://api.openai.com/v1")
     @api_key = api_key || fetch_env("OPENAI_ACCESS_TOKEN")
-    @proxy_url = fetch_env("PROXY_URL", nil)
+    @proxy_url = resolve_proxy_url
     @model = model || fetch_env("DEFAULT_MODEL", DEFAULT_MODEL)
     @debug = debug
     @max_completion_tokens = max_completion_tokens
@@ -103,15 +103,19 @@ class OpenAiClient
   end
 
   def make_api_request(body)
-    http = HTTPX.plugin(:proxy).with(
-      timeout: {read_timeout: @request_timeout, write_timeout: @request_timeout},
-      ssl: PrimaryApiSsl.httpx_options,
-      fallback_protocol: "http/1.1"
-    )
-    http = http.with_proxy(uri: @proxy_url) if @proxy_url && !@proxy_url.empty?
-    http.post(primary_api_error_endpoint,
+    PrimaryApiHttp.build(timeout: @request_timeout, proxy_url: @proxy_url).post(
+      primary_api_error_endpoint,
       headers: request_headers,
-      body: Oj.dump(body, mode: :compat))
+      body: Oj.dump(body, mode: :compat)
+    )
+  end
+
+  def resolve_proxy_url
+    PrimaryApiProxy.resolve(fetch_env('PROXY_URL', nil), proxy_env)
+  end
+
+  def proxy_env
+    (@env_vars || load_env_vars).merge(ENV.to_h)
   end
 
   def request_headers

@@ -3,7 +3,7 @@
 require "httpx"
 require "oj"
 
-# OpenRouter fallback client for primary provider outages and rate limits.
+# OpenAI-compatible client aimed at OpenRouter (also reused for REFACTOR API failover).
 class OpenrouterClient
   DEFAULT_BASE_URL = "https://openrouter.ai/api/v1".freeze
   DEFAULT_MODEL = "openrouter/auto".freeze
@@ -80,16 +80,11 @@ class OpenrouterClient
   end
 
   def make_api_request(body)
-    http = HTTPX.plugin(:proxy).with(
-      timeout: {read_timeout: @request_timeout, write_timeout: @request_timeout},
-      ssl: PrimaryApiSsl.httpx_options,
-      fallback_protocol: "http/1.1"
-    )
-    http = http.with_proxy(uri: @proxy_url) if @proxy_url && !@proxy_url.empty?
-
-    http.post(endpoint,
+    PrimaryApiHttp.build(timeout: @request_timeout, proxy_url: @proxy_url).post(
+      endpoint,
       headers: request_headers,
-      body: Oj.dump(body, mode: :compat))
+      body: Oj.dump(body, mode: :compat)
+    )
   end
 
   def request_headers
