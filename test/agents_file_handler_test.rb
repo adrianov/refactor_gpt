@@ -65,20 +65,37 @@ class AgentsFileHandlerTest < Minitest::Test
       "FOO=bar\n# comment \xD0\xBF\xD1\x80\nBAZ=1\nBAD=caf\xE9\n"
     )
 
+    with_us_ascii_locale do
+      env = @host.load_env_vars(@tmpdir)
+      assert_equal 'bar', env['FOO']
+      assert_equal '1', env['BAZ']
+      assert_equal 'caf', env['BAD']
+    end
+  end
+
+  def test_load_project_rules_tolerates_non_ascii_under_us_ascii_locale
+    File.binwrite(File.join(@tmpdir, 'AGENTS.md'), "agents \xD0\xBF\xD1\x80\n")
+    File.binwrite(File.join(@tmpdir, '.cursorrules'), "rules caf\xE9\n")
+
+    with_us_ascii_locale do
+      rules = @host.load_project_rules(@tmpdir)
+      assert_includes rules, 'agents'
+      assert_includes rules, 'rules caf'
+    end
+  end
+
+  private
+
+  def with_us_ascii_locale
     old_external = Encoding.default_external
     old_internal = Encoding.default_internal
     Encoding.default_external = Encoding::US_ASCII
     Encoding.default_internal = nil
-    env = @host.load_env_vars(@tmpdir)
-    assert_equal 'bar', env['FOO']
-    assert_equal '1', env['BAZ']
-    assert_equal 'caf', env['BAD']
+    yield
   ensure
     Encoding.default_external = old_external
     Encoding.default_internal = old_internal
   end
-
-  private
 
   def write_file(name, content)
     File.write(File.join(@tmpdir, name), content)
