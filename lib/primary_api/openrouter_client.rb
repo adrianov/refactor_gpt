@@ -88,11 +88,15 @@ class OpenrouterClient
     http = http.with_proxy(uri: @proxy_url) if @proxy_url && !@proxy_url.empty?
 
     http.post(endpoint,
-      headers: {
-        "Content-Type" => "application/json",
-        "Authorization" => "Bearer #{@api_key}"
-      },
+      headers: request_headers,
       body: Oj.dump(body, mode: :compat))
+  end
+
+  def request_headers
+    {
+      'Content-Type' => 'application/json',
+      'Authorization' => "Bearer #{@api_key}"
+    }.merge(OpenrouterHeaders.for_base_url(@api_base_url))
   end
 
   def endpoint

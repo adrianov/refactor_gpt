@@ -47,4 +47,17 @@ class TestOpenrouterClient < Minitest::Test
     text = "Sure:\n```json\n{\"a\":1}\n```\n"
     assert_equal '{"a":1}', OpenrouterJson.extract_from_text(text)
   end
+
+  def test_request_headers_include_app_attribution
+    headers = client.send(:request_headers)
+    assert_equal 'https://github.com/adrianov/refactor_gpt', headers['HTTP-Referer']
+    assert_equal 'RefactorGPT', headers['X-OpenRouter-Title']
+    assert_equal 'cli-agent', headers['X-OpenRouter-Categories']
+  end
+
+  def test_openrouter_headers_only_for_openrouter_hosts
+    assert OpenrouterHeaders.openrouter_host?('https://openrouter.ai/api/v1')
+    refute OpenrouterHeaders.openrouter_host?('https://api.openai.com/v1')
+    assert_empty OpenrouterHeaders.for_base_url('https://api.openai.com/v1')
+  end
 end
