@@ -133,7 +133,13 @@ module Utility
   end
 
   def self.trim(str)
-    str.to_s.strip
+    utf8_safe(str).strip
+  end
+
+  # Shell/`git` bytes often arrive tagged US-ASCII; force UTF-8 before strip/regex.
+  def self.utf8_safe(str)
+    s = str.to_s.dup.force_encoding(Encoding::UTF_8)
+    s.valid_encoding? ? s : s.scrub('')
   end
 
   def self.blank?(str)

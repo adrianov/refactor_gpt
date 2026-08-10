@@ -25,7 +25,7 @@ class GitCommitPlanner
   private
 
   def run_cmd(cmd)
-    output = `#{cmd}`
+    output = Utility.utf8_safe(`#{cmd}`)
     return output if $?.success?
 
     warn "Command failed: #{cmd}".red
@@ -51,7 +51,7 @@ class GitCommitPlanner
   end
 
   def intend_untracked
-    paths = `git ls-files --others --exclude-standard`.split("\n").reject(&:empty?)
+    paths = Utility.utf8_safe(`git ls-files --others --exclude-standard`).split("\n").reject(&:empty?)
     paths.reject! { |p| GitCommitExecutor.ephemeral_path?(p) }
     return if paths.empty?
 
@@ -62,7 +62,7 @@ class GitCommitPlanner
 
   def plan_context(status)
     mr_numstat = GitCommitDiffCapture.fetch_mr_numstat
-    recent_commits = `git log -10 --oneline 2>/dev/null`.strip
+    recent_commits = Utility.utf8_safe(`git log -10 --oneline 2>/dev/null`).strip
     recent_commands = RecentShellCommands.last_few(5)
     budgets = CommitPlanClient.diff_body_budgets_chars(
       cli_hint: @hint,
@@ -75,8 +75,8 @@ class GitCommitPlanner
   end
 
   def uncommitted_diff(budgets)
-    diff = GitCommitDiffCapture.compact_uncommitted_diff(budgets[:uncommitted])
-    diff = GitCommitDiffCapture.fallback_uncommitted_diff if diff.strip.empty?
+    diff = Utility.utf8_safe(GitCommitDiffCapture.compact_uncommitted_diff(budgets[:uncommitted]))
+    diff = Utility.utf8_safe(GitCommitDiffCapture.fallback_uncommitted_diff) if diff.strip.empty?
     GitCommitDiffCapture.abort_without_uncommitted_diff if diff.nil?
     diff
   end

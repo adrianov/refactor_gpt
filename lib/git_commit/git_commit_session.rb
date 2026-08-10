@@ -26,7 +26,7 @@ class GitCommitSession
   private
 
   def git_root
-    root = `git rev-parse --show-toplevel 2>/dev/null`.strip
+    root = Utility.utf8_safe(`git rev-parse --show-toplevel 2>/dev/null`).strip
     return root if $?.success?
 
     puts "Not in a git repository".red
@@ -38,7 +38,7 @@ class GitCommitSession
   end
 
   def run_cmd(cmd)
-    output = `#{cmd}`
+    output = Utility.utf8_safe(`#{cmd}`)
     return output if $?.success?
 
     warn "Command failed: #{cmd}".red
