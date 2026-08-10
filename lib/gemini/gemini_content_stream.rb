@@ -25,20 +25,9 @@ class GeminiContentStream
   end
 
   def each_text_chunk(response)
-    if response.respond_to?(:each_line) && !response.body.is_a?(String)
-      response.each_line { |line| emit_text_from_line(line) { |text| yield text } }
-      return
-    end
+    return yield_sse_lines(response) { |text| yield text } if response.respond_to?(:each_line)
 
-    buffer = +""
-    each_body_piece(response) do |piece|
-      buffer << piece
-      while (line_end = buffer.index("\n"))
-        line = buffer.slice!(0, line_end + 1)
-        emit_text_from_line(line) { |text| yield text }
-      end
-    end
-    emit_text_from_line(buffer) { |text| yield text } unless buffer.strip.empty?
+    yield_buffered_sse(response) { |text| yield text }
   end
 
   def assemble(response)
@@ -96,6 +85,25 @@ class GeminiContentStream
     (role == "assistant") ? "model" : "user"
   end
 
+  def yield_sse_lines(response)
+    response.each_line { |line| emit_text_from_line(line) { |text| yield text } }
+  end
+
+  def yield_buffered_sse(response)
+    buffer = +""
+    each_body_piece(response) do |piece|
+      buffer << piece
+      flush_sse_lines(buffer) { |text| yield text }
+    end
+    emit_text_from_line(buffer) { |text| yield text } unless buffer.strip.empty?
+  end
+
+  def flush_sse_lines(buffer)
+    while (line_end = buffer.index("\n"))
+      emit_text_from_line(buffer.slice!(0, line_end + 1)) { |text| yield text }
+    end
+  end
+
   def each_body_piece(response)
     body = response.respond_to?(:body) ? response.body : response
     if body.respond_to?(:each) && !body.is_a?(String)
@@ -138,6 +146,8 @@ class GeminiContentStream
   end
 
   def chunk_text(chunk)
+    return nil unless chunk.is_a?(Hash)
+
     chunk.dig("candidates", 0, "content", "parts", 0, "text")&.to_s
   end
 
