@@ -77,9 +77,9 @@ module ApiErrorDisplay
     exit 1
   end
 
-  def handle_parse_error(error, response)
+  def handle_parse_error(error, response = nil)
     warn "Failed to parse JSON response: #{error.message}"
-    warn response.body if defined?(response) && response&.body
+    warn response.body if response.respond_to?(:body) && response.body
     exit 1
   end
 

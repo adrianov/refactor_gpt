@@ -1,22 +1,19 @@
 # frozen_string_literal: true
 
-# Shared HTTP 429 / 5xx raising for primary API clients.
-# Balance exhaustion (Z.AI 1113) falls through to OpenRouter when configured; otherwise exits.
+# Parse and raise primary API HTTP failures; BalanceError (Z.AI 1113) skips retry → OpenRouter.
 #
-# Host must implement: extract_retry_after, extract_error_message_from_response,
-# extract_error_message_from_response_object, extract_error_response_status,
-# extract_retry_after_from_error_response, pretty_print_error (via ApiErrorDisplay),
-# format_error_response, and fallback_configured?
+# Host must implement: pretty_print_error / format_error_response (ApiErrorDisplay),
+# fallback_configured?, and is_network_resource_error?
 module PrimaryApiHttpErrors
   def raise_rate_limit_error(response)
     retry_after = extract_retry_after(response)
     raw = ErrorResponseBody.raw_body_from_http_response(response)
     error_message = extract_error_message_from_response(response)
-    message = error_message ? "Rate limited by API: #{error_message}" : "Rate limited by API"
+    message = rate_limit_message(error_message)
 
-    if balance_exhausted?(error_message, raw)
-      raise_or_exit_balance_error(response.status, message, raw)
-    end
+    return raise_or_exit_balance_error(response.status, balance_message(error_message), raw) if balance_exhausted?(
+      error_message, raw
+    )
 
     raise RateLimitError.new(message, retry_after: retry_after, raw_body: raw)
   end
@@ -44,10 +41,7 @@ module PrimaryApiHttpErrors
   end
 
   def raise_or_exit_balance_error(status, message, raw)
-    if fallback_configured?
-      warn "⚠️  Primary API balance exhausted; trying OpenRouter fallback..."
-      raise RateLimitError.new(message, retry_after: nil, raw_body: raw)
-    end
+    raise BalanceError.new(message, status: status, raw_body: raw) if fallback_configured?
 
     detail = [message, ErrorResponseBody.format_body(raw)].reject { |s| s.to_s.strip.empty? }.join("\n\n")
     pretty_print_error("API Error", status, detail)
@@ -55,20 +49,70 @@ module PrimaryApiHttpErrors
   end
 
   def balance_exhausted?(error_message, raw = nil)
-    balance_exhausted_message?(error_message) || balance_exhausted_body?(raw)
+    msg = error_message.to_s
+    (!msg.empty? && (msg.include?("Insufficient balance") || msg.include?("no resource package"))) ||
+      raw.to_s.match?(/"code"\s*:\s*"?1113"?/)
   end
 
-  def balance_exhausted_message?(msg)
-    return false if msg.to_s.empty?
-
-    msg.include?("Insufficient balance") || msg.include?("no resource package")
+  def extract_retry_after_from_error_response(response)
+    if response.respond_to?(:headers)
+      ra = extract_retry_after(response)
+      return ra if ra
+    end
+    nested = response.response if response.respond_to?(:response)
+    extract_retry_after(nested) if nested.respond_to?(:headers)
   end
 
-  def balance_exhausted_body?(raw)
-    raw.to_s.match?(/"code"\s*:\s*"?1113"?/)
+  def extract_retry_after(response)
+    return nil if response.nil? || !response.respond_to?(:headers)
+
+    raw = response.headers["retry-after"]
+    retry_header = raw.is_a?(Array) ? raw.first : raw
+    return nil if retry_header.nil? || retry_header.to_s.strip.empty?
+
+    Integer(retry_header)
+  rescue ArgumentError, TypeError
+    nil
+  end
+
+  def extract_error_message_from_response(response)
+    return nil unless response&.body
+
+    parsed = Oj.load(response.body)
+    return nil unless parsed.is_a?(Hash)
+
+    parsed.dig("error", "message")
+  rescue Oj::ParseError
+    nil
+  end
+
+  def extract_error_message_from_response_object(response)
+    return nil unless response.respond_to?(:response) && response.response.respond_to?(:body)
+
+    parsed = Oj.load(response.response.body)
+    return nil unless parsed.is_a?(Hash)
+
+    parsed.dig("error", "message")
+  rescue Oj::ParseError
+    nil
+  end
+
+  def extract_error_response_status(response)
+    return nil unless response.respond_to?(:response) && response.response
+    return nil unless response.response.respond_to?(:status)
+
+    response.response.status
   end
 
   private
+
+  def rate_limit_message(error_message)
+    error_message ? "Rate limited by API: #{error_message}" : "Rate limited by API"
+  end
+
+  def balance_message(error_message)
+    error_message ? "Primary API balance exhausted: #{error_message}" : "Primary API balance exhausted"
+  end
 
   def raise_statusless_http_error(response, error_status)
     return raise_statusless_rate_limit(response, error_status) if error_status == 429
@@ -81,10 +125,11 @@ module PrimaryApiHttpErrors
   def raise_statusless_rate_limit(response, error_status)
     error_message = extract_error_message_from_response_object(response)
     raw = ErrorResponseBody.raw_body_from_http_response(response)
-    message = error_message ? "Rate limited by API: #{error_message}" : "Rate limited by API"
-    raise_or_exit_balance_error(error_status, message, raw) if balance_exhausted?(error_message, raw)
+    if balance_exhausted?(error_message, raw)
+      raise_or_exit_balance_error(error_status, balance_message(error_message), raw)
+    end
     ra = extract_retry_after_from_error_response(response)
-    raise RateLimitError.new(message, retry_after: ra, raw_body: raw)
+    raise RateLimitError.new(rate_limit_message(error_message), retry_after: ra, raw_body: raw)
   end
 
   def raise_if_response_network_error(response)

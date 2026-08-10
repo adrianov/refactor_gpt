@@ -1,13 +1,13 @@
 # frozen_string_literal: true
 
-# Primary API retry steps; when OpenRouter is configured, the first retry-worthy error is re-raised for fallback.
+# Primary API retry steps. When OpenRouter is configured, the first retry-worthy error is
+# re-raised for fallback. BalanceError is unrecoverable and propagates without retry.
 #
-# Including class must implement (private unless noted):
-#   fallback_configured?, is_network_resource_error? (client-specific phrases only),
-#   exhaust_retry(error, message), exhaust_httpx_network_retries(error, max_retries),
-#   handle_network_resource_retry, handle_retry_with_exponential_backoff,
-#   handle_rate_limit_retry, handle_server_error_retry
+# Host must implement: fallback_configured?, is_network_resource_error?,
+# exhaust_retry, exhaust_httpx_network_retries, and warn_*_body_on_first_retry (via PrimaryApiFallback).
 module PrimaryApiBackoff
+  RETRYABLE_FALLBACK_ERRORS = [NetworkResourceError, RateLimitError, ServerError].freeze
+
   def self.included(base)
     base.prepend(NetworkErrors)
     base.include(Methods)
@@ -31,10 +31,7 @@ module PrimaryApiBackoff
   module Methods
     def rethrow_for_openrouter_fallback(error)
       return unless fallback_configured?
-
-      if error.is_a?(NetworkResourceError) || error.is_a?(RateLimitError) || error.is_a?(ServerError)
-        raise error
-      end
+      raise error if RETRYABLE_FALLBACK_ERRORS.any? { |klass| error.is_a?(klass) }
 
       raise NetworkResourceError, "Network/resource error: #{error.message}"
     end
@@ -114,6 +111,54 @@ module PrimaryApiBackoff
         retries = primary_backoff_server(e, retries, max_retries, base_delay)
         retry
       end
+    end
+
+    def execute_with_network_retry(max_retries: 3, base_delay: 1)
+      retries = 0
+      begin
+        yield
+      rescue NetworkResourceError => e
+        rethrow_for_openrouter_fallback(e)
+
+        retries += 1
+        if retries <= max_retries
+          handle_network_resource_retry(e, retries, max_retries, base_delay)
+          retry
+        else
+          exhaust_retry(e, "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}")
+        end
+      end
+    end
+
+    def handle_retry_with_exponential_backoff(error, retries, max_retries, base_delay)
+      delay = base_delay * (2**(retries - 1))
+      error_name = error.class.name.split("::").last
+      warn "⚠️  Connection issue (#{error_name}), retrying in #{delay}s... (#{retries}/#{max_retries})"
+      sleep(delay)
+    end
+
+    def handle_network_resource_retry(_error, retries, max_retries, base_delay)
+      delay = base_delay * (2**(retries - 1))
+      warn "⚠️  Network/resource error, retrying in #{delay}s... (#{retries}/#{max_retries})"
+      sleep(delay)
+    end
+
+    def handle_rate_limit_retry(error, retries, max_retries, _base_delay)
+      warn_rate_limit_body_on_first_retry(error, retries)
+      delays = [5, 10, 30]
+      delay = error.retry_after || delays[retries - 1] || delays.last
+      error_msg = error.message.include?("Rate limited by API:") ? error.message.split(": ", 2).last : nil
+      base_msg = "⚠️  Rate limited (429)"
+      msg = error_msg ? "#{base_msg}: #{error_msg}" : base_msg
+      warn "#{msg}, retrying in #{delay}s... (#{retries}/#{max_retries})"
+      sleep(delay)
+    end
+
+    def handle_server_error_retry(error, retries, max_retries, base_delay)
+      warn_server_body_on_first_retry(error, retries)
+      delay = base_delay * (2**(retries - 1))
+      warn "⚠️  Server error (#{error.status}), retrying in #{delay}s... (#{retries}/#{max_retries})"
+      sleep(delay)
     end
   end
 end

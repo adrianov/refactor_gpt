@@ -10,6 +10,8 @@ loader = Zeitwerk::Loader.new
 loader.push_dir(File.expand_path(__dir__))
 loader.collapse(File.expand_path('superagent', __dir__))
 loader.collapse(File.expand_path('git_commit', __dir__))
+loader.collapse(File.expand_path('gemini', __dir__))
+loader.collapse(File.expand_path('primary_api', __dir__))
 loader.inflector.inflect("openai_client" => "OpenAiClient")
 loader.inflector.inflect("openrouter_client" => "OpenrouterClient")
 loader.setup

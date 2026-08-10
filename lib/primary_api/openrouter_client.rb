@@ -82,7 +82,7 @@ class OpenrouterClient
   def make_api_request(body)
     http = HTTPX.plugin(:proxy).with(
       timeout: {read_timeout: @request_timeout, write_timeout: @request_timeout},
-      ssl: {verify_mode: OpenSSL::SSL::VERIFY_NONE},
+      ssl: PrimaryApiSsl.httpx_options,
       fallback_protocol: "http/1.1"
     )
     http = http.with_proxy(uri: @proxy_url) if @proxy_url && !@proxy_url.empty?
