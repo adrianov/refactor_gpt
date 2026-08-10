@@ -20,7 +20,7 @@ module AgentsFileHandler
 
   def load_refactor_md
     path = File.join(script_directory, 'REFACTOR.md')
-    File.exist?(path) ? File.read(path).strip : ''
+    File.exist?(path) ? read_utf8_file(path).strip : ''
   end
 
   def load_env_vars(project_root = nil)
@@ -28,8 +28,7 @@ module AgentsFileHandler
     env_file_path = File.join(project_root, '.env')
     return {} unless File.exist?(env_file_path)
 
-    # Binary read + scrub avoids US-ASCII locale crashes on non-ASCII .env bytes.
-    File.binread(env_file_path).force_encoding(Encoding::UTF_8).scrub('').each_line.with_object({}) do |line, h|
+    read_utf8_file(env_file_path).each_line.with_object({}) do |line, h|
       key, value = line.split('=', 2)
       h[key.strip] = value.strip if key && value
     end
@@ -70,8 +69,13 @@ module AgentsFileHandler
   def read_rule_file(path)
     return nil unless File.file?(path)
 
-    body = File.read(path).strip
+    body = read_utf8_file(path).strip
     body.empty? ? nil : body
+  end
+
+  # Binary read + scrub avoids US-ASCII locale crashes on non-ASCII file bytes.
+  def read_utf8_file(path)
+    File.binread(path).force_encoding(Encoding::UTF_8).scrub('')
   end
 
   def strip_mdc_frontmatter(text)
@@ -83,7 +87,7 @@ module AgentsFileHandler
 
   def append_program_refactor_md(parts)
     refactor_path = File.join(script_directory, 'REFACTOR.md')
-    parts << File.read(refactor_path).strip if File.exist?(refactor_path)
+    parts << read_utf8_file(refactor_path).strip if File.exist?(refactor_path)
   end
 
   def join_rule_parts(parts)
