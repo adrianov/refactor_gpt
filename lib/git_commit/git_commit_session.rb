@@ -143,7 +143,7 @@ class GitCommitSession
 
   def git_push
     puts "Running: git push".green
-    system("git push")
+    system("git push") || exit(1)
     exit 0
   end
 end
