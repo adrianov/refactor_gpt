@@ -8,6 +8,9 @@ module GitCommitDiffCapture
   DIFF_PAYLOAD_NOTE_RESERVE_CHARS = 2048
   DIFF_OPTS = GitCommitDiffCompaction::FULL_OPTS.join(' ')
   DIFF_OPTS_MINIMAL = GitCommitDiffCompaction::LIGHT_UNIFIED_OPTS.join(' ')
+  # User review: drop only -W when a path's function-context diff is this long or longer.
+  REVIEW_DIFF_MAX_LINES = 500
+  REVIEW_DIFF_SHORT_OPTS = (GitCommitDiffCompaction::FULL_OPTS - %w[-W]).freeze
   # Git’s canonical empty tree — valid diff base when there is no HEAD (initial / orphan import).
   GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -78,10 +81,30 @@ module GitCommitDiffCapture
     ref = worktree_uncommitted_ancestor
     puts "Uncommitted changes:".cyan
     puts "git diff #{DIFF_OPTS} #{ref}".cyan
+    return puts if print_per_path_review_diffs(ref)
+
     shown = system("git", "diff", *DIFF_OPTS.split, ref)
     shown ||= system("git", "diff", *DIFF_OPTS_MINIMAL.split, ref)
     system("git", "diff", *(%w[--no-ext-diff] + DIFF_OPTS_MINIMAL.split + [ref])) unless shown
     puts
+  end
+
+  # Per path: prefer -w -W; if that output is REVIEW_DIFF_MAX_LINES+, omit -W only.
+  def print_per_path_review_diffs(ref)
+    out, _, st = Open3.capture3("git", "diff", "--name-only", "-z", ref)
+    return false unless st.success?
+
+    paths = out.split("\0").reject(&:empty?)
+    return false if paths.empty?
+
+    env = { "GIT_PAGER" => "cat" }
+    full = GitCommitDiffCompaction::FULL_OPTS
+    paths.each do |path|
+      measured, _, ok = Open3.capture3("git", "diff", *full, ref, "--", path)
+      opts = ok && measured.lines.size >= REVIEW_DIFF_MAX_LINES ? REVIEW_DIFF_SHORT_OPTS : full
+      system(env, "git", "diff", *opts, ref, "--", path)
+    end
+    true
   end
 
   def format_budget_omitted_paths_note(paths, max_chars)
