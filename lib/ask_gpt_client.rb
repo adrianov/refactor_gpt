@@ -17,10 +17,6 @@ class AskGptClient
       progress_title: "Thinking", api_base_url: api_base_url, api_key: api_key)
   end
 
-  def build_system_message(style, brevity)
-    {role: "system", content: build_system_instruction(style, brevity)}
-  end
-
   def change_model(new_model)
     return if @model == new_model
 
@@ -44,14 +40,5 @@ class AskGptClient
 
   def disable_search_mode
     change_model(nil)
-  end
-
-  def chat(question, style: nil, brevity: nil)
-    ask([{role: "system", content: build_system_instruction(style, brevity)},
-      {role: "user", content: question}])
-  end
-
-  def ask(messages, json: false, title: nil)
-    @client.ask(messages, json: json, title: title)
   end
 end

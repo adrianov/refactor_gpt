@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 # Gemini API client wrapper for ask_gpt and superagent (streaming, session context).
+# Uses shared AskClientInstructions (system role); GeminiContentStream maps system → systemInstruction.
 class AskGeminiClient
   include AskClientInstructions
 
@@ -18,20 +19,7 @@ class AskGeminiClient
       progress_title: progress_title, api_base_url: api_base_url, api_key: api_key)
   end
 
-  def build_system_message(style, brevity)
-    {role: "user", content: build_system_instruction(style, brevity)}
-  end
-
-  def ask(messages, json: false, title: nil)
-    @client.ask(messages, json: json, title: title)
-  end
-
   def stream_answer(messages, &block)
-    @client.stream_answer(messages, &block)
-  end
-
-  def chat(question, style: nil, brevity: nil)
-    ask([{role: "user", content: build_system_instruction(style, brevity)},
-      {role: "user", content: question}])
+    @client.stream_answer(prepare_ask_messages(messages), &block)
   end
 end

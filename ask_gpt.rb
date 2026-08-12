@@ -71,14 +71,8 @@ end
 
 def initialize_conversation(client, args)
   Utility.display_model_info(client.backend, client.model)
-
-  if client.backend == :gemini
-    [{role: "user", content: client.build_system_instruction(args[:eldritch_mode] ? :eldritch : nil,
-      args[:short_mode] ? :short : nil)}]
-  else
-    [client.build_system_message(args[:eldritch_mode] ? :eldritch : nil,
-      args[:short_mode] ? :short : nil)]
-  end
+  [client.build_system_message(args[:eldritch_mode] ? :eldritch : nil,
+    args[:short_mode] ? :short : nil)]
 end
 
 def use_streaming?(client)
@@ -250,11 +244,7 @@ def correct_grammar(client, question)
     If the input is already grammatically correct, return it unchanged with "Reason: No changes needed".
   HEREDOC
 
-  grammar_messages = if client.is_a?(AskGeminiClient)
-    [{role: "user", content: "#{grammar_instruction}\n\n#{question}"}]
-  else
-    [{role: "system", content: grammar_instruction}, {role: "user", content: question}]
-  end
+  grammar_messages = [{role: "system", content: grammar_instruction}, {role: "user", content: question}]
 
   response = client.ask(grammar_messages, title: "Reviewing grammar")
   parse_correction_response(response, question)

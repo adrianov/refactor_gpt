@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 # Shared system-instruction text for AskGptClient and AskGeminiClient.
+# System text stays byte-stable for prompt caching; clock goes on the last user turn.
 module AskClientInstructions
   def build_style_instruction(style)
     return "Answer in a Lovecraftian, eldritch horror tone" if style == :eldritch
@@ -61,13 +62,60 @@ module AskClientInstructions
     style_instr = build_style_instruction(style)
     style_instr += build_brevity_instruction if brevity == :short
 
-    system_instr = base_instruction(style_instr)
+    result = base_instruction(style_instr).to_s.strip
     system_info = SystemInfo.to_s
-    date_info = SystemInfo.date_info
-
-    result = system_instr.to_s.strip
     result += "\n\nUser environment:\n#{system_info}" unless system_info.empty?
-    result += "\nCurrent date/time: #{date_info}" unless date_info.empty?
     result
   end
+
+  def build_system_message(style, brevity)
+    {role: 'system', content: build_system_instruction(style, brevity)}
+  end
+
+  def chat(question, style: nil, brevity: nil)
+    ask([build_system_message(style, brevity), {role: 'user', content: question}])
+  end
+
+  def ask(messages, json: false, title: nil)
+    @client.ask(prepare_ask_messages(messages), json: json, title: title)
+  end
+
+  def prepare_ask_messages(messages)
+    with_dated_last_user(promote_system_prefix(messages))
+  end
+
+  def with_dated_last_user(messages)
+    date_info = SystemInfo.date_info
+    return messages if date_info.empty?
+
+    idx = messages.rindex { |message| role_of(message) == 'user' }
+    return messages unless idx
+
+    dated_user_at(messages, idx, date_info)
+  end
+
+  def promote_system_prefix(messages)
+    return messages if messages.any? { |message| role_of(message) == 'system' }
+
+    first = messages[0]
+    return messages unless messages.size >= 2 && first && role_of(first) == 'user'
+
+    [{role: 'system', content: first[:content] || first['content']}] + messages[1..]
+  end
+
+  def dated_user_at(messages, idx, date_info)
+    msg = messages[idx]
+    content = msg[:content] || msg['content']
+    return messages if content.to_s.include?('Current date/time:')
+
+    copy = messages.dup
+    copy[idx] = msg.merge(content: "#{content}\n\nCurrent date/time: #{date_info}")
+    copy
+  end
+
+  def role_of(message)
+    (message[:role] || message['role']).to_s
+  end
+
+  private :dated_user_at, :role_of, :promote_system_prefix, :with_dated_last_user
 end
