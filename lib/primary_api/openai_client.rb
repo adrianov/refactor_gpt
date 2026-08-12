@@ -4,7 +4,7 @@ require "httpx"
 require "oj"
 require "ruby-progressbar"
 
-# OpenAI-compatible chat client with outbound proxy support and OpenRouter/REFACTOR failover.
+# OpenAI-compatible chat client with outbound proxy support, prompt cache markers, and OpenRouter/REFACTOR failover.
 class OpenAiClient
   include AgentsFileHandler
   include PrimaryApiClient
@@ -75,6 +75,7 @@ class OpenAiClient
     body = {model: @model, messages: messages}
     body[:response_format] = {type: "json_object"} if json
     body[:max_completion_tokens] = @max_completion_tokens if @max_completion_tokens
+    PromptCache.apply!(body, model: @model, base_url: @api_base_url)
     @last_payload_bytes = Oj.dump(body, mode: :compat).bytesize
     body
   end

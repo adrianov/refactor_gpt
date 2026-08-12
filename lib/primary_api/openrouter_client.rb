@@ -3,7 +3,7 @@
 require "httpx"
 require "oj"
 
-# OpenAI-compatible client aimed at OpenRouter (also reused for REFACTOR API failover).
+# OpenAI-compatible client aimed at OpenRouter (also reused for REFACTOR API failover), with prompt cache markers.
 class OpenrouterClient
   DEFAULT_BASE_URL = "https://openrouter.ai/api/v1".freeze
   DEFAULT_MODEL = "openrouter/auto".freeze
@@ -50,6 +50,7 @@ class OpenrouterClient
     }
     body[:response_format] = {type: "json_object"} if json
     body[:max_tokens] = max_completion_tokens if max_completion_tokens
+    PromptCache.apply!(body, model: @model, base_url: @api_base_url)
     body
   end
 
