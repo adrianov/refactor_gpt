@@ -32,6 +32,22 @@ class TestGeminiContentStream < Minitest::Test
     assert_equal [{role: 'user', parts: [{text: 'Hi'}]}], body[:contents]
   end
 
+  def test_ask_gemini_prepared_messages_map_system_role
+    prepared = AskGeminiClient.allocate.prepare_ask_messages([
+      {role: 'system', content: 'Be brief.'},
+      {role: 'user', content: 'Hi'}
+    ])
+    body = GeminiContentStream.new.build_body(prepared)
+    assert_gemini_system_mapped(body, 'Be brief.', 'Hi')
+  end
+
+  def assert_gemini_system_mapped(body, system_text, user_snippet)
+    assert_equal system_text, body.dig(:systemInstruction, :parts, 0, :text)
+    assert_equal 'user', body[:contents].first[:role]
+    assert_includes body[:contents].first[:parts].first[:text], user_snippet
+    refute(body[:contents].any? { |c| c[:role] == 'system' })
+  end
+
   def test_each_text_chunk_retains_partial_sse_frames
     stream = GeminiContentStream.new
     pieces = ['data: {"candidates":[{"content":{"parts":[{"text":"hel', "lo\"}]}}]}\n"]
