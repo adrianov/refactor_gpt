@@ -60,16 +60,34 @@ class GitCommitSession
   end
 
   def prepare_commits(plan)
-    if @options.auto
-      GitCommitDisplay.display_warnings(Array(plan["warnings"]))
-      return if @options.allows_warnings?(plan["warnings"])
+    warnings = Array(plan["warnings"])
+    return prepare_quiet_commits(warnings) if @options.auto
 
+    present_plan(plan)
+    prepare_interactive_commits(warnings)
+  end
+
+  def prepare_quiet_commits(warnings)
+    GitCommitDisplay.display_warnings(warnings)
+    return if @options.proceed_without_prompt?(warnings, quiet: true)
+
+    skip_commit
+  end
+
+  def prepare_interactive_commits(warnings)
+    return if @options.proceed_without_prompt?(warnings, quiet: false)
+
+    @options.commit == "no" ? skip_commit : GitCommitDisplay.get_user_confirmation
+  end
+
+  def skip_commit
+    if @options.auto && @options.commit != "no"
       puts "Auto-commit skipped: a warning is above #{@options.warning_level}%.".yellow
       exit 1
     end
 
-    present_plan(plan)
-    GitCommitDisplay.get_user_confirmation
+    puts "Commands not executed.".yellow
+    exit 0
   end
 
   def present_plan(plan)
