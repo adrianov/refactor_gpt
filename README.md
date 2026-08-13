@@ -200,17 +200,18 @@ Features:
 Plans and creates structured git commits from the current working tree.
 
 Usage:
-./git_commit_gpt.rb [--watch] [--debug] [--auto [0-100]] [--push] [hint...]
+./git_commit_gpt.rb [--watch] [--debug] [--auto [0-100]] [--commit auto|yes|no] [--push] [hint...]
 
 Features:
 - `--watch`: re-plan every 30s when analyzed files change
-- `--auto [level]`: commit without prompting when every warning is ≤ `level`% (default 50; also `--auto=75`). For scripts/background use: prints warnings and the commit/push outcome only — skips diff, RuboCop hint, progress bar, impact, and sounds. Without `--push`, skips push without asking.
-- `--push`: push after a successful commit without asking
+- `--commit auto|yes|no`: default `auto` (flag may be omitted). `auto` — commit if there are no warnings, else ask. `yes` — commit. `no` — skip commit and push.
+- `--auto [level]`: quiet mode; commits when every warning is ≤ `level`% (default 50; also `--auto=75`). Prints warnings and the commit/push result only — omits diff, RuboCop hint, progress bar, impact, and sounds. Without `--push`, does not ask to push. `--commit yes|no` overrides whether to commit.
+- `--push`: after a successful commit, push without asking. Ignored if nothing was committed.
 - Reads `git status --porcelain` and `git diff` for the current repository
 - Groups changed files into a small number of coherent commits (by feature, refactor, docs, tests, etc.)
 - Writes conventional-style one-line commit messages
 - Puts every changed file in exactly one suggested commit
-- Prints a commit plan and asks before any `git add`/`git commit`
+- Prints a commit plan before any `git add`/`git commit`
 - Reviews diffs for likely issues and prints warnings with a probability score
 - Falls back to OpenRouter when the primary API is rate-limited or briefly unavailable
 
