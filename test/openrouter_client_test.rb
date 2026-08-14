@@ -21,6 +21,11 @@ class TestOpenrouterClient < Minitest::Test
     assert_equal 'hello', client.send(:extract_answer, resp)
   end
 
+  def test_extract_answer_uses_reasoning_when_content_null
+    body = '{"choices":[{"message":{"content":null,"reasoning":"from thinking"}}]}'
+    assert_equal 'from thinking', client.send(:extract_answer, response_with(body))
+  end
+
   def test_extract_answer_warns_on_null_body
     resp = response_with('null')
     out, err = capture_io { assert_nil client.send(:extract_answer, resp) }
@@ -45,6 +50,11 @@ class TestOpenrouterClient < Minitest::Test
 
   def test_openrouter_json_extracts_fenced_object
     text = "Sure:\n```json\n{\"a\":1}\n```\n"
+    assert_equal '{"a":1}', OpenrouterJson.extract_from_text(text)
+  end
+
+  def test_openrouter_json_extracts_json_prefixed_fence
+    text = "json```json\n{\"a\":1}\n```"
     assert_equal '{"a":1}', OpenrouterJson.extract_from_text(text)
   end
 
