@@ -1,13 +1,12 @@
 # frozen_string_literal: true
 
 require "open3"
+require "shellwords"
 require "colorize"
 
 # Captures uncommitted unified diffs and MR numstat for git_commit_gpt planning.
 module GitCommitDiffCapture
   DIFF_PAYLOAD_NOTE_RESERVE_CHARS = 2048
-  DIFF_OPTS = GitCommitDiffCompaction::FULL_OPTS.join(' ')
-  DIFF_OPTS_MINIMAL = GitCommitDiffCompaction::LIGHT_UNIFIED_OPTS.join(' ')
   # User review: drop only -W when a path's function-context diff is this long or longer.
   REVIEW_DIFF_MAX_LINES = 500
   REVIEW_DIFF_SHORT_OPTS = (GitCommitDiffCompaction::FULL_OPTS - %w[-W]).freeze
@@ -80,31 +79,42 @@ module GitCommitDiffCapture
   def show_uncommitted_diff
     ref = worktree_uncommitted_ancestor
     puts "Uncommitted changes:".cyan
-    puts "git diff #{DIFF_OPTS} #{ref}".cyan
-    return puts if print_per_path_review_diffs(ref)
+    return puts if show_review_diffs(ref)
 
-    shown = system("git", "diff", *DIFF_OPTS.split, ref)
-    shown ||= system("git", "diff", *DIFF_OPTS_MINIMAL.split, ref)
-    system("git", "diff", *(%w[--no-ext-diff] + DIFF_OPTS_MINIMAL.split + [ref])) unless shown
+    full = GitCommitDiffCompaction::FULL_OPTS
+    light = GitCommitDiffCompaction::LIGHT_UNIFIED_OPTS
+    puts "git diff #{full.join(' ')} #{ref}".cyan
+    shown = system("git", "diff", *full, ref)
+    shown ||= system("git", "diff", *light, ref)
+    system("git", "diff", *(%w[--no-ext-diff] + light + [ref])) unless shown
     puts
   end
 
-  # Per path: prefer -w -W; if that output is REVIEW_DIFF_MAX_LINES+, omit -W only.
-  def print_per_path_review_diffs(ref)
+  # Prefer -w -W; omit -W only for paths whose function-context diff is REVIEW_DIFF_MAX_LINES+.
+  def show_review_diffs(ref)
     out, _, st = Open3.capture3("git", "diff", "--name-only", "-z", ref)
     return false unless st.success?
 
     paths = out.split("\0").reject(&:empty?)
     return false if paths.empty?
 
-    env = { "GIT_PAGER" => "cat" }
-    full = GitCommitDiffCompaction::FULL_OPTS
-    paths.each do |path|
-      measured, _, ok = Open3.capture3("git", "diff", *full, ref, "--", path)
-      opts = ok && measured.lines.size >= REVIEW_DIFF_MAX_LINES ? REVIEW_DIFF_SHORT_OPTS : full
-      system(env, "git", "diff", *opts, ref, "--", path)
-    end
+    with_w, without_w = paths.partition { |path| function_context?(ref, path) }
+    show_diff_group(ref, GitCommitDiffCompaction::FULL_OPTS, with_w)
+    show_diff_group(ref, REVIEW_DIFF_SHORT_OPTS, without_w)
     true
+  end
+
+  def function_context?(ref, path)
+    measured, _, ok = Open3.capture3("git", "diff", *GitCommitDiffCompaction::FULL_OPTS, ref, "--", path)
+    !(ok && measured.lines.size >= REVIEW_DIFF_MAX_LINES)
+  end
+
+  def show_diff_group(ref, opts, paths)
+    return if paths.empty?
+
+    cmd = ["git", "diff", *opts, ref, "--", *paths]
+    puts cmd.shelljoin.cyan
+    system(*cmd)
   end
 
   def format_budget_omitted_paths_note(paths, max_chars)
