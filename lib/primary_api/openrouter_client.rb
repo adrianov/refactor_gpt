@@ -102,23 +102,10 @@ class OpenrouterClient
   end
 
   def extract_answer(response)
-    answer = message_content_from(response)
+    answer = CompletionAnswer.from_body(response&.body)
     return answer unless answer.nil? || answer.empty?
 
     warn_failure(response)
-  end
-
-  def message_content_from(response)
-    return nil unless response&.body
-
-    parsed = Oj.load(response.body)
-    return nil unless parsed.is_a?(Hash)
-
-    message = parsed.dig("choices", 0, "message")
-    return nil unless message.is_a?(Hash)
-
-    content = message["content"]
-    content.nil? || content.empty? ? message["reasoning_content"] : content
   end
 
   def warn_failure(response)

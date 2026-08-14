@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'oj'
+
 # Extracts JSON objects from OpenRouter text when response_format is ignored.
 module OpenrouterJson
   module_function

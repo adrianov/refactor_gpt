@@ -141,14 +141,11 @@ class OpenAiClient
     raise e
   end
 
-  def extract_answer(response)
-    return nil unless response&.body
-
-    parsed_response = Oj.load(response.body)
-    return nil unless parsed_response.is_a?(Hash)
-
-    answer = parsed_response.dig("choices", 0, "message", "content")
-    answer = parsed_response.dig("choices", 0, "message", "reasoning_content") if answer.nil? || answer.empty?
+  def extract_answer(response, json: false)
+    answer = CompletionAnswer.from_body(response&.body)
+    if json && answer && !OpenrouterJson.valid?(answer)
+      answer = OpenrouterJson.extract_from_text(answer) || answer
+    end
     return answer unless answer.nil? || answer.empty?
 
     warn "No answer returned from OpenAI API. Full response body:"
@@ -174,7 +171,7 @@ class OpenAiClient
       debug_request(body) if @debug
       response = make_api_request(body)
       handle_response_errors(response)
-      answer = extract_answer(response)
+      answer = extract_answer(response, json: json)
       debug_response(answer) if @debug
       answer
     end
