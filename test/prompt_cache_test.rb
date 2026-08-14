@@ -7,7 +7,7 @@ require_relative '../lib/loader'
 class TestPromptCache < Minitest::Test
   OPENROUTER = 'https://openrouter.ai/api/v1'
   OPENAI = 'https://api.openai.com/v1'
-  OTHER = 'https://opencode.ai/zen/v1'
+  OTHER = 'https://api.example.com/v1'
   SYSTEM = 'Be a concise Ruby assistant.'
 
   def messages(system: SYSTEM, user: 'Hi')

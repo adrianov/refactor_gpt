@@ -10,7 +10,7 @@ module LlmRouter
   }.freeze
 
   CLAUDE_PREFIX = /^claude-/i
-  OPENAI_PREFIX = /^(gpt-|composer-|dall-e)/i
+  OPENAI_PREFIX = /^(gpt-|composer-|dall-e|openrouter\/)/i
   GEMINI_PREFIX = /^gemini-/i
 
   DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6'
@@ -45,9 +45,9 @@ module LlmRouter
 
   def self.default_base_url(backend)
     case backend
-    when :claude then 'https://opencode.ai/zen/v1/messages'
+    when :claude then 'https://openrouter.ai/api/v1'
     when :openai then 'https://api.openai.com/v1'
-    when :gemini then 'https://opencode.ai/zen/v1'
+    when :gemini then 'https://openrouter.ai/api/v1'
     else nil
     end
   end
@@ -64,7 +64,11 @@ module LlmRouter
 
     return DEFAULT_CLAUDE_MODEL if token_set?(env, 'CLAUDE_ACCESS_TOKEN')
     return DEFAULT_GEMINI_MODEL if token_set?(env, 'GEMINI_ACCESS_TOKEN')
-    return DEFAULT_OPENAI_MODEL if token_set?(env, 'OPENAI_ACCESS_TOKEN')
+
+    if token_set?(env, 'OPENAI_ACCESS_TOKEN')
+      from_env = env['DEFAULT_MODEL'].to_s.strip
+      return from_env.empty? ? DEFAULT_OPENAI_MODEL : from_env
+    end
 
     nil
   end

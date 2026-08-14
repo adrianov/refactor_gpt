@@ -16,7 +16,7 @@ class GeminiClient
 
   def initialize(model: nil, debug: false, max_completion_tokens: nil,
     progress_title: nil, api_base_url: nil, api_key: nil)
-    @api_base_url = api_base_url || fetch_env('GEMINI_BASE_URL', 'https://opencode.ai/zen/v1')
+    @api_base_url = api_base_url || fetch_env('GEMINI_BASE_URL', 'https://openrouter.ai/api/v1')
     @api_key = api_key || fetch_env('GEMINI_ACCESS_TOKEN')
     @proxy_url = resolve_proxy_url
     @model = model || fetch_env('GEMINI_MODEL', DEFAULT_MODEL)
