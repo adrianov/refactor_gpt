@@ -52,6 +52,11 @@ class MrReviewClient
   end
 
   def system_instruction
+    prefix = formatted_project_rules(Dir.pwd)
+    prefix.empty? ? review_instruction : "#{prefix}\n\n#{review_instruction}"
+  end
+
+  def review_instruction
     <<~HEREDOC
       You are an expert code reviewer performing an automated MR (merge request) review.
 
@@ -66,6 +71,7 @@ class MrReviewClient
       - **Performance**: N+1 queries, unnecessary loops, missing indexes, expensive operations in hot paths
       - **Code quality**: Unused variables/methods, dead code, overly complex methods, missing error handling
       - **Naming and style**: Misleading names, inconsistent conventions, violation of project patterns
+      - **Cursor rules**: leftover breaches of the project and user `.cursor/rules/` attached above
       - **Tests**: Missing tests for changed behavior, brittle assertions, untested edge cases
       - **Design**: Violation of SOLID/DRY/KISS, inappropriate responsibilities, poor abstractions
 

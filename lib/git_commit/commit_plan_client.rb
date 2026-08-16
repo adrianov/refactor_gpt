@@ -175,8 +175,7 @@ class CommitPlanClient
   end
 
   def system_instruction
-    agents = Utility.utf8_safe(load_project_rules(Dir.pwd))
-    project_context = agents.empty? ? "" : Utility.utf8_join("\n", "Project guidelines:", agents, "")
-    Utility.utf8_join("", project_context, CommitPlanInstructions.system_instruction)
+    prefix = Utility.utf8_safe(formatted_project_rules(Dir.pwd))
+    Utility.utf8_join("", prefix.empty? ? "" : "#{prefix}\n", CommitPlanInstructions.system_instruction)
   end
 end

@@ -62,6 +62,8 @@ module CommitPlanInstructions
           - Classes or modules so small they add indirection without value — consider merging into the caller
         - **Responsibility overload**: a class or module accumulates too many responsibilities and should be divided into focused units
         - **Spec description quality**: RSpec `it`, `describe`, and `context` strings must express business intent — what the user or system gains or avoids — not implementation details. Flag descriptions that name HTTP headers, internal method names, library classes, or low-level protocol specifics (e.g. "does not send x-amz-checksum-crc32 from Active Storage client") when a behavior-level wording is possible (e.g. "uploads attachment without checksum validation errors"). Good descriptions answer "what outcome is guaranteed?" not "what code runs?".
+        - **Cursor rules**: The guidelines above include `.cursor/rules/` from the project and from
+          `~/.cursor/rules/` on this machine. Flag leftover breaches of those rules as `guideline` warnings.
       - Respect user-provided hints when choosing commit messages or grouping files, unless they conflict with actual diffs.
       - **JIRA Issue Reference Consistency** (critical rule):
         - Check branch name and recent commits for JIRA task references (patterns like PT-4668, ABC-123, etc.).
@@ -117,7 +119,7 @@ module CommitPlanInstructions
     <<~HEREDOC
       - For each issue that **remains after applying the commits** (i.e. introduced or not addressed by this changeset — never a problem that the diff itself fixes), produce a warning entry with:
           - The affected file path
-          - A `category` from: correctness | undefined_reference | dead_code | runtime_risk | performance | dry | solid | complexity | responsibility | spec_quality
+          - A `category` from: correctness | undefined_reference | dead_code | runtime_risk | performance | dry | solid | complexity | responsibility | spec_quality | guideline
           - A `description` naming the symbols involved, what is wrong, and what to do instead
           - A probability (0.0–1.0) reflecting confidence this is a real issue (omit near-zero confidence items)
           - **Structural categories** (`performance`, `dry`, `solid`, `responsibility`, `complexity`): make `description` architecturally deep (2-4 sentences). State the structural mismatch (wrong layer, pull-on-render vs push-on-change, missing aggregate, responsibility bleed) — not only the local symptom or big-O. Prescribe the single most fitting pattern for this stack and problem shape (e.g. materialized aggregate with event-driven invalidation; observer on membership/presence; incremental counters instead of full walks; paint/render path free of service lookups; strategy/policy; dependency inversion). State where state or responsibility lives and which events recompute or invalidate it. Reject bare "cache a boolean" / "memoize this" / "add a flag" tips unless framed with that ownership and invalidation. One structural remedy beats a list of micro-opts.

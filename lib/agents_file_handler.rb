@@ -1,21 +1,27 @@
 # frozen_string_literal: true
 
 # Shared module for loading project guidelines from AGENTS.md, .cursorrules,
-# .cursor/rules/*.{mdc,md}, and REFACTOR.md from the program directory.
+# project and user .cursor/rules/*.{mdc,md}, and REFACTOR.md from the program directory.
 module AgentsFileHandler
   PROJECT_ROOT_RULE_FILES = %w[AGENTS.md .cursorrules].freeze
   CURSOR_RULES_DIR = '.cursor/rules'
   CURSOR_RULE_EXTENSIONS = %w[mdc md].freeze
+  RULES_LABEL = 'Project and user Cursor rules'
 
   def load_agents_file(project_root = nil)
     project_dir = project_root || Dir.pwd
-    parts = collect_project_rule_parts(project_dir)
+    parts = collect_analysis_rule_parts(project_dir)
     append_program_refactor_md(parts)
     join_rule_parts(parts)
   end
 
   def load_project_rules(project_root = nil)
-    join_rule_parts(collect_project_rule_parts(project_root || Dir.pwd))
+    join_rule_parts(collect_analysis_rule_parts(project_root || Dir.pwd))
+  end
+
+  def formatted_project_rules(project_root = nil)
+    rules = load_project_rules(project_root)
+    rules.empty? ? '' : "#{RULES_LABEL}:\n#{rules}"
   end
 
   def load_refactor_md
@@ -36,8 +42,10 @@ module AgentsFileHandler
 
   private
 
-  def collect_project_rule_parts(project_dir)
-    read_root_rule_files(project_dir) + read_cursor_rule_file_bodies(project_dir)
+  def collect_analysis_rule_parts(project_dir)
+    read_root_rule_files(project_dir) +
+      read_cursor_rules_from(File.join(project_dir, CURSOR_RULES_DIR)) +
+      read_user_cursor_rule_parts(project_dir)
   end
 
   def read_root_rule_files(project_dir)
@@ -46,8 +54,19 @@ module AgentsFileHandler
     end
   end
 
-  def read_cursor_rule_file_bodies(project_dir)
-    rules_dir = File.join(project_dir, CURSOR_RULES_DIR)
+  def user_cursor_rules_dir
+    @user_cursor_rules_dir || File.join(Dir.home, CURSOR_RULES_DIR)
+  end
+
+  def read_user_cursor_rule_parts(project_dir)
+    user_dir = user_cursor_rules_dir
+    return [] unless File.directory?(user_dir)
+    return [] if File.expand_path(user_dir) == File.expand_path(File.join(project_dir, CURSOR_RULES_DIR))
+
+    read_cursor_rules_from(user_dir)
+  end
+
+  def read_cursor_rules_from(rules_dir)
     return [] unless File.directory?(rules_dir)
 
     cursor_rule_paths(rules_dir).filter_map { |path| read_cursor_rule_file(path) }
@@ -86,8 +105,8 @@ module AgentsFileHandler
   end
 
   def append_program_refactor_md(parts)
-    refactor_path = File.join(script_directory, 'REFACTOR.md')
-    parts << read_utf8_file(refactor_path).strip if File.exist?(refactor_path)
+    body = load_refactor_md
+    parts << body unless body.empty?
   end
 
   def join_rule_parts(parts)
