@@ -116,8 +116,7 @@ class AgentPromptContext
   end
 
   def read_dev_md
-    path = File.join(Dir.pwd, 'DEV.md')
-    File.exist?(path) ? read_utf8_file(path).strip : ''
+    CursorRules::Loader.read_file(File.join(Dir.pwd, 'DEV.md')).to_s
   end
 
   def read_agents_files
