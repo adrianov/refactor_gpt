@@ -35,8 +35,40 @@ module CommitPlanResponse
     text[start..finish] if start && finish && finish > start
   end
 
-  # Models often emit a trailing comma before } or ] in otherwise valid plans.
+  # Drop commas that trail a value before } or ], ignoring commas inside JSON strings.
   def strip_trailing_commas(text)
-    text.to_s.gsub(/,(\s*[}\]])/, '\1')
+    s = text.to_s
+    out = +""
+    i = 0
+    in_string = false
+    escape = false
+    while i < s.length
+      ch = s[i]
+      if in_string
+        out << ch
+        in_string, escape = update_string_state(ch, escape)
+      elsif ch == '"'
+        in_string = true
+        out << ch
+      elsif !(ch == "," && trailing_comma?(s, i))
+        out << ch
+      end
+      i += 1
+    end
+    out
+  end
+
+  def update_string_state(ch, escape)
+    return [true, false] if escape
+    return [true, true] if ch == "\\"
+    return [false, false] if ch == '"'
+
+    [true, false]
+  end
+
+  def trailing_comma?(s, i)
+    j = i + 1
+    j += 1 while j < s.length && s[j].match?(/\s/)
+    j < s.length && (s[j] == "}" || s[j] == "]")
   end
 end
