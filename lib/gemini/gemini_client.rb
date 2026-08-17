@@ -121,14 +121,6 @@ class GeminiClient
     @transport.endpoint
   end
 
-  def resolve_proxy_url
-    PrimaryApiProxy.resolve(fetch_env('PROXY_URL', nil), proxy_env)
-  end
-
-  def proxy_env
-    (@env_vars || load_env_vars).merge(ENV.to_h)
-  end
-
   def handle_response_errors(response)
     return if response.status == 200
 

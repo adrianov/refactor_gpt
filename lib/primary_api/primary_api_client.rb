@@ -9,4 +9,8 @@ module PrimaryApiClient
     base.include ApiErrorDisplay
     base.include PrimaryApiProgress
   end
+
+  def resolve_proxy_url
+    PrimaryApiProxy.resolve(nil, @env_vars || load_env_vars)
+  end
 end

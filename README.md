@@ -59,10 +59,10 @@ Ruby CLI tools that use large language models for refactoring, code search, shel
    Supported providers cache a stable system prompt (instructions and project rules) on OpenRouter. Working-tree state such as git status, diffs, and directory listings goes in the user message so different changes still hit the same cache.
 
    **Proxy (optional):**
-   - Set `PROXY_URL`, or the standard `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` variables
-   - SOCKS5 takes precedence when more than one is set (`socks://` is treated as `socks5://`)
-   - Example: `PROXY_URL=socks5://127.0.0.1:1080`
-   - Skip these if a proxy is not required
+   - Add `PROXY_URL` to this app's `.env` (example: `PROXY_URL=socks5://127.0.0.1:1080`)
+   - `socks://` and `socks5h://` become `socks5://`
+   - Shell `HTTP_PROXY` / `HTTPS_PROXY` are unused; they never replace `.env`
+   - Leave `PROXY_URL` unset when no proxy is needed
 
 ## Setting up Aliases
 

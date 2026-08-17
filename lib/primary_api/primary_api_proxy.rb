@@ -1,19 +1,17 @@
 # frozen_string_literal: true
 
-# Chooses an outbound proxy URL for API clients from PROXY_URL and common proxy env vars.
-# When several values are present, SOCKS5 wins; socks:// and socks5h:// become socks5://.
+# Chooses an outbound proxy URL from the app `.env` (`PROXY_URL` and SOCKS vars).
+# Process `HTTP_PROXY` / `HTTPS_PROXY` are ignored so a dead HTTP proxy cannot override SOCKS5.
 module PrimaryApiProxy
   CANDIDATE_KEYS = %w[
     PROXY_URL
     ALL_PROXY all_proxy
     SOCKS5_PROXY SOCKS_PROXY socks5_proxy socks_proxy
-    HTTPS_PROXY https_proxy
-    HTTP_PROXY http_proxy
   ].freeze
 
   module_function
 
-  def resolve(explicit = nil, env = ENV)
+  def resolve(explicit = nil, env = {})
     values = []
     values << explicit unless blank?(explicit)
     CANDIDATE_KEYS.each do |key|

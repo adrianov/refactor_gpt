@@ -111,14 +111,6 @@ class OpenAiClient
     )
   end
 
-  def resolve_proxy_url
-    PrimaryApiProxy.resolve(fetch_env('PROXY_URL', nil), proxy_env)
-  end
-
-  def proxy_env
-    (@env_vars || load_env_vars).merge(ENV.to_h)
-  end
-
   def request_headers
     {
       'Content-Type' => 'application/json',
