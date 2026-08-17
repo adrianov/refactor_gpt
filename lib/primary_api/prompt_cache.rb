@@ -3,30 +3,37 @@
 require 'digest'
 
 # Applies prompt-cache markers when the provider supports them.
-# OpenRouter Anthropic/Qwen: cache_control breakpoints + prompt_cache_key.
+# OpenRouter Anthropic/Qwen and openrouter/auto: cache_control breakpoints + prompt_cache_key.
+# Auto also gets session_id (process-scoped by default) so the router pins model+provider.
 # Other OpenRouter models: prompt_cache_key for sticky routing only.
 # Direct OpenAI Chat Completions rejects prompt_cache_key — never send it there.
 # https://openrouter.ai/docs/guides/best-practices/prompt-caching
 module PromptCache
   KEY_PREFIX = 'refactor-sys-'
+  SESSION_MAX = 256
   EPHEMERAL = {type: 'ephemeral'}.freeze
   EXPLICIT_MODEL = %r{\A(anthropic/|claude-|qwen/|alibaba/)}i
 
   module_function
 
-  def apply!(body, model:, base_url: nil)
+  def apply!(body, model:, base_url: nil, session_id: nil)
     return unless openrouter?(base_url)
     return if system_text(body[:messages]).strip.empty?
 
-    if explicit_breakpoints?(model)
+    if explicit_breakpoints?(model) || auto?(model)
       apply_explicit!(body)
     else
       assign_cache_key!(body)
     end
+    stamp_session!(body, model: model, session_id: session_id)
   end
 
   def cache_key(text)
     "#{KEY_PREFIX}#{Digest::SHA256.hexdigest(text)[0, 16]}"
+  end
+
+  def auto?(model)
+    wire_model(model).casecmp?('auto')
   end
 
   def explicit_breakpoints?(model)
@@ -42,6 +49,14 @@ module PromptCache
   def assign_cache_key!(body)
     text = system_text(body[:messages])
     body[:prompt_cache_key] = cache_key(text) unless text.strip.empty?
+  end
+
+  def stamp_session!(body, model:, session_id:)
+    return unless auto?(model)
+
+    sid = session_id.to_s.strip
+    sid = "refactor-#{Process.pid}" if sid.empty?
+    body[:session_id] = sid[0, SESSION_MAX]
   end
 
   def system_with_cache(message)

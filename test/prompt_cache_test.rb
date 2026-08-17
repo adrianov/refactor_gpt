@@ -3,7 +3,7 @@
 require 'minitest/autorun'
 require_relative '../lib/loader'
 
-# PromptCache adds Anthropic/Qwen breakpoints and sticky prompt_cache_key only when supported.
+# PromptCache adds Anthropic/Qwen/Auto breakpoints and sticky prompt_cache_key only when supported.
 class TestPromptCache < Minitest::Test
   OPENROUTER = 'https://openrouter.ai/api/v1'
   OPENAI = 'https://api.openai.com/v1'
@@ -14,9 +14,9 @@ class TestPromptCache < Minitest::Test
     [{role: 'system', content: system}, {role: 'user', content: user}]
   end
 
-  def apply(model:, base_url:, msgs: nil)
+  def apply(model:, base_url:, msgs: nil, session_id: nil)
     body = {model: model, messages: (msgs || messages).map(&:dup)}
-    PromptCache.apply!(body, model: model, base_url: base_url)
+    PromptCache.apply!(body, model: model, base_url: base_url, session_id: session_id)
     body
   end
 
@@ -28,6 +28,7 @@ class TestPromptCache < Minitest::Test
        msgs: [{role: 'system', content: '  '}, {role: 'user', content: 'hi'}])].each do |body|
       refute body.key?(:cache_control)
       refute body.key?(:prompt_cache_key)
+      refute body.key?(:session_id)
       sys = body[:messages].find { |m| m[:role] == 'system' }
       refute_instance_of Array, sys[:content] if sys
     end
@@ -37,6 +38,7 @@ class TestPromptCache < Minitest::Test
     body = apply(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER)
     assert_equal({type: 'ephemeral'}, body[:cache_control])
     assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key]
+    refute body.key?(:session_id)
     assert_equal(
       [{type: 'text', text: SYSTEM, cache_control: {type: 'ephemeral'}}],
       body[:messages].find { |m| m[:role] == 'system' }[:content]
@@ -55,11 +57,29 @@ class TestPromptCache < Minitest::Test
     body = apply(model: 'qwen/qwen3-32b', base_url: OPENROUTER)
     assert_equal({type: 'ephemeral'}, body[:cache_control])
     assert body[:prompt_cache_key]
+    refute body.key?(:session_id)
   end
 
-  def test_openrouter_auto_gets_key_without_cache_control
+  def test_openrouter_auto_gets_cache_markers_and_session_id
     body = apply(model: 'openrouter/auto', base_url: OPENROUTER)
+    assert_equal({type: 'ephemeral'}, body[:cache_control])
+    assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key]
+    assert_equal "refactor-#{Process.pid}", body[:session_id]
+    assert_equal(
+      [{type: 'text', text: SYSTEM, cache_control: {type: 'ephemeral'}}],
+      body[:messages].find { |m| m[:role] == 'system' }[:content]
+    )
+  end
+
+  def test_openrouter_auto_uses_explicit_session_id
+    body = apply(model: 'openrouter/auto', base_url: OPENROUTER, session_id: 'refactor-run-42')
+    assert_equal 'refactor-run-42', body[:session_id]
+  end
+
+  def test_openrouter_other_model_gets_key_without_cache_control
+    body = apply(model: 'openai/gpt-4o-mini', base_url: OPENROUTER)
     refute body.key?(:cache_control)
+    refute body.key?(:session_id)
     assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key]
     assert_equal SYSTEM, body[:messages].find { |m| m[:role] == 'system' }[:content]
   end
@@ -68,6 +88,7 @@ class TestPromptCache < Minitest::Test
     body = apply(model: 'gpt-5-nano', base_url: OPENAI)
     refute body.key?(:cache_control)
     refute body.key?(:prompt_cache_key)
+    refute body.key?(:session_id)
     assert_equal SYSTEM, body[:messages].find { |m| m[:role] == 'system' }[:content]
   end
 
@@ -89,6 +110,15 @@ class TestPromptCache < Minitest::Test
     body = client.send(:build_request_body, messages)
     assert_equal({type: 'ephemeral'}, body[:cache_control])
     assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key]
+    refute body.key?(:session_id)
+  end
+
+  def test_openrouter_client_applies_cache_on_auto_model
+    client = OpenrouterClient.new(api_key: 'test-key', model: 'openrouter/auto')
+    body = client.send(:build_request_body, messages)
+    assert_equal({type: 'ephemeral'}, body[:cache_control])
+    assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key]
+    assert_equal "refactor-#{Process.pid}", body[:session_id]
   end
 
   def test_openrouter_client_skips_explicit_cache_off_openrouter
@@ -100,6 +130,7 @@ class TestPromptCache < Minitest::Test
     body = client.send(:build_request_body, messages)
     refute body.key?(:cache_control)
     refute body.key?(:prompt_cache_key)
+    refute body.key?(:session_id)
   end
 
   def test_openai_client_skips_cache_on_openai_host
@@ -110,6 +141,7 @@ class TestPromptCache < Minitest::Test
     body = client.send(:build_request_body, messages)
     refute body.key?(:cache_control)
     refute body.key?(:prompt_cache_key)
+    refute body.key?(:session_id)
   end
 end
 
