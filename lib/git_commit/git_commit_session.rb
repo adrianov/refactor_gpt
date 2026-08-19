@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "shellwords"
 require "colorize"
 
 # One git_commit_gpt run: plan, confirm or auto-commit, then push or watch.
@@ -8,11 +9,12 @@ class GitCommitSession
 
   def initialize(options)
     @options = options
-    @planner = GitCommitPlanner.new(debug: options.debug, hint: options.hint, quiet: options.auto)
+    @cwd = Dir.pwd
   end
 
   def run
     Dir.chdir(git_root)
+    setup_planner
     puts "Model: #{model_name}".cyan unless @options.auto
 
     plan = @planner.build(show_diff: !@options.auto)
@@ -24,6 +26,14 @@ class GitCommitSession
   end
 
   private
+
+  def setup_planner
+    @pathspecs = GitPathspec.resolve(@options.paths, cwd: @cwd, root: Dir.pwd)
+    GitPathspec.assert_present!(@pathspecs)
+    @planner = GitCommitPlanner.new(
+      debug: @options.debug, hint: @options.hint, quiet: @options.auto, pathspecs: @pathspecs
+    )
+  end
 
   def git_root
     root = Utility.utf8_safe(`git rev-parse --show-toplevel 2>/dev/null`).strip
@@ -103,9 +113,13 @@ class GitCommitSession
     )
   end
 
+  def porcelain_status
+    run_cmd(["git", "status", "--porcelain", "--branch", *GitPathspec.args(@pathspecs)].shelljoin)
+  end
+
   def assert_status_unchanged(snapshot)
     return if snapshot.nil? || snapshot.empty?
-    return if run_cmd("git status --porcelain --branch") == snapshot
+    return if porcelain_status == snapshot
 
     warn "Abort: working tree changed after planning.".red
     warn "Re-run git_commit_gpt, or commit/stash the other changes first.".red
@@ -117,7 +131,7 @@ class GitCommitSession
     last_status = plan_status(plan) || plan["status_output"]
     loop do
       sleep WATCH_INTERVAL
-      new_status = run_cmd("git status --porcelain --branch")
+      new_status = porcelain_status
       next if new_status == last_status
 
       refreshed = @planner.build(show_diff: false)

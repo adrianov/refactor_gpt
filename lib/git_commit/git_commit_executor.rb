@@ -36,7 +36,7 @@ module GitCommitExecutor
     commit_msg = commit["message"].to_s.strip
     return false if commit_msg.empty?
 
-    run_git_commit(commit_msg)
+    run_git_commit(commit_msg, files)
   end
 
   def extract_commit_files(commit)
@@ -85,8 +85,8 @@ module GitCommitExecutor
     exit 1
   end
 
-  def run_git_commit(message)
-    commit_cmd = "git commit -m #{Shellwords.escape(message)}"
+  def run_git_commit(message, files)
+    commit_cmd = ["git", "commit", "-m", message, "--", *files].map { |p| Shellwords.escape(p) }.join(" ")
     puts "Running: #{commit_cmd}".green
     system(commit_cmd)
   end

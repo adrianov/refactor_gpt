@@ -20,14 +20,15 @@ class GitCommitDiffCompaction
 
   class << self
     # limit_chars comes from CommitPlanClient.diff_body_budgets_chars (single payload ceiling).
-    def build(ref_spec:, limit_chars:)
-      new(ref_spec: ref_spec, limit_chars: limit_chars).build
+    def build(ref_spec:, limit_chars:, pathspecs: [])
+      new(ref_spec: ref_spec, limit_chars: limit_chars, pathspecs: pathspecs).build
     end
   end
 
-  def initialize(ref_spec:, limit_chars:)
+  def initialize(ref_spec:, limit_chars:, pathspecs: [])
     @ref_spec = ref_spec.to_s
     @limit_chars = limit_chars
+    @pathspecs = Array(pathspecs)
     @tiers = {}
     @raw_by_path_tier = {}
     @detail_budget = 0
@@ -54,31 +55,14 @@ class GitCommitDiffCompaction
   end
 
   def raw_numstat_prefix
-    numstat_prefix(
-      ignore_whitespace: false,
+    GitCommitNumstat.prefix(
+      @ref_spec, pathspecs: @pathspecs, ignore_whitespace: false,
       header_line: '(whitespace or formatting only: unified diff and numstat without -w)'
     )
   end
 
   def global_numstat_prefix
-    numstat_prefix(ignore_whitespace: true)
-  end
-
-  def numstat_prefix(ignore_whitespace:, header_line: nil)
-    cmd = %w[git diff --numstat]
-    cmd << '-w' if ignore_whitespace
-    cmd << @ref_spec
-    out, _, st = Open3.capture3(*cmd)
-    return '' unless st.success?
-
-    stripped = utf8_safe(out).strip
-    return '' if stripped.empty?
-
-    flag = ignore_whitespace ? ' -w' : ''
-    lines = []
-    lines << header_line if header_line
-    lines << "(all paths: git diff --numstat#{flag} #{@ref_spec})"
-    "#{lines.join("\n")}\n#{stripped}\n"
+    GitCommitNumstat.prefix(@ref_spec, pathspecs: @pathspecs, ignore_whitespace: true)
   end
 
   def detailed_section_or_empty
@@ -104,14 +88,15 @@ class GitCommitDiffCompaction
   end
 
   def changed_paths(ref_spec)
-    out, _, st = Open3.capture3('git', 'diff', '--name-only', '-z', ref_spec)
+    out, _, st = Open3.capture3('git', 'diff', '--name-only', '-z', ref_spec, *GitPathspec.args(@pathspecs))
     return [] unless st.success?
 
     out.split("\0").reject(&:empty?)
   end
 
   def paths_deleted_only(ref_spec)
-    out, _, st = Open3.capture3('git', 'diff', '--diff-filter=D', '--name-only', '-z', ref_spec)
+    cmd = ['git', 'diff', '--diff-filter=D', '--name-only', '-z', ref_spec, *GitPathspec.args(@pathspecs)]
+    out, _, st = Open3.capture3(*cmd)
     return Set.new unless st.success?
 
     out.split("\0").reject(&:empty?).to_set

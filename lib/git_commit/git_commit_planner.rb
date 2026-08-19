@@ -1,14 +1,17 @@
 # frozen_string_literal: true
 
+require "open3"
 require "shellwords"
 require "colorize"
 
 # Builds a commit plan from porcelain status, compacted diffs, and the LLM client.
 class GitCommitPlanner
-  def initialize(debug:, hint:, quiet: false)
+  def initialize(debug:, hint:, quiet: false, pathspecs: [])
     @debug = debug
     @hint = hint
     @quiet = quiet
+    @pathspecs = Array(pathspecs)
+    @capture = GitCommitDiffCapture.new(pathspecs: @pathspecs)
   end
 
   def build(show_diff:)
@@ -17,7 +20,7 @@ class GitCommitPlanner
 
     context = plan_context(status)
     diff = uncommitted_diff(context[:budgets])
-    GitCommitDiffCapture.show_if_needed(show_diff)
+    @capture.show_if_needed(show_diff)
     show_rubocop_hint(status) if show_diff
     finalize_plan(request_plan(status, context, diff), status)
   end
@@ -32,12 +35,16 @@ class GitCommitPlanner
     exit 1
   end
 
+  def porcelain_status
+    run_cmd(["git", "status", "--porcelain", "--branch", *GitPathspec.args(@pathspecs)].shelljoin)
+  end
+
   def status_for_plan
-    status = run_cmd("git status --porcelain --branch")
+    status = porcelain_status
     return nil unless changes?(status)
 
     intend_untracked
-    status = run_cmd("git status --porcelain --branch")
+    status = porcelain_status
     return nil unless changes?(status)
 
     status
@@ -51,8 +58,7 @@ class GitCommitPlanner
   end
 
   def intend_untracked
-    paths = Utility.utf8_safe(`git ls-files --others --exclude-standard`).split("\n").reject(&:empty?)
-    paths.reject! { |p| GitCommitExecutor.ephemeral_path?(p) }
+    paths = untracked_paths
     return if paths.empty?
 
     cmd = ["git", "add", "-N", *paths].map { |p| Shellwords.escape(p) }.join(" ")
@@ -60,8 +66,17 @@ class GitCommitPlanner
     system("#{cmd} 2>/dev/null")
   end
 
+  def untracked_paths
+    out, _, status = Open3.capture3(
+      "git", "ls-files", "--others", "--exclude-standard", *GitPathspec.args(@pathspecs)
+    )
+    return [] unless status.success?
+
+    Utility.utf8_safe(out).split("\n").reject(&:empty?).reject { |p| GitCommitExecutor.ephemeral_path?(p) }
+  end
+
   def plan_context(status)
-    mr_numstat = GitCommitDiffCapture.fetch_mr_numstat
+    mr_numstat = @capture.fetch_mr_numstat
     recent_commits = Utility.utf8_safe(`git log -10 --oneline 2>/dev/null`).strip
     recent_commands = RecentShellCommands.last_few(5)
     budgets = CommitPlanClient.diff_body_budgets_chars(
@@ -75,9 +90,9 @@ class GitCommitPlanner
   end
 
   def uncommitted_diff(budgets)
-    diff = Utility.utf8_safe(GitCommitDiffCapture.compact_uncommitted_diff(budgets[:uncommitted]))
-    diff = Utility.utf8_safe(GitCommitDiffCapture.fallback_uncommitted_diff) if diff.strip.empty?
-    GitCommitDiffCapture.abort_without_uncommitted_diff if diff.nil?
+    diff = Utility.utf8_safe(@capture.compact_uncommitted_diff(budgets[:uncommitted]))
+    diff = Utility.utf8_safe(@capture.fallback_uncommitted_diff) if diff.strip.empty?
+    @capture.abort_without_uncommitted_diff if diff.nil?
     diff
   end
 
@@ -93,9 +108,32 @@ class GitCommitPlanner
     )
     return :plan_rejected if result == :plan_rejected
 
+    return result_with_status(result, status) if @pathspecs.empty?
+
+    restrict_to_status!(result, status)
+    return :plan_rejected if Array(result["commits"]).empty?
+
+    result_with_status(result, status)
+  end
+
+  def result_with_status(result, status)
     result["status_output"] = status
-    result["status_snapshot"] = run_cmd("git status --porcelain --branch")
+    result["status_snapshot"] = porcelain_status
     result
+  end
+
+  def restrict_to_status!(result, status)
+    allowed = CommitPlanFinalize.porcelain_filenames(status).to_set
+    result["commits"] = keep_allowed_commits(result["commits"], allowed)
+  end
+
+  def keep_allowed_commits(commits, allowed)
+    Array(commits).filter_map do |commit|
+      files = Array(commit["files"]).select { |file| allowed.include?(file.to_s) }
+      next if files.empty?
+
+      commit.merge("files" => files)
+    end
   end
 
   def show_rubocop_hint(status)

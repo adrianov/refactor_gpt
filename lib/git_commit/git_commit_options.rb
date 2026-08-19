@@ -3,13 +3,14 @@
 require "colorize"
 
 # CLI flags for git_commit_gpt: --debug, --watch, --auto [0-100] (quiet, muted),
-# --commit auto|yes|no (default auto), --push, plus free-text hint.
+# --commit auto|yes|no (default auto), --push, --file PATH (repeatable), -- paths, plus free-text hint.
 class GitCommitOptions
   DEFAULT_WARNING_LEVEL = 50
   DEFAULT_COMMIT = "auto"
   COMMIT_MODES = %w[auto yes no].freeze
+  SIMPLE_FLAGS = {"--debug" => :@debug, "--watch" => :@watch, "--push" => :@push}.freeze
 
-  Options = Struct.new(:debug, :watch, :auto, :warning_level, :commit, :push, :hint, keyword_init: true) do
+  Options = Struct.new(:debug, :watch, :auto, :warning_level, :commit, :push, :hint, :paths, keyword_init: true) do
     def allows_warnings?(warnings)
       Array(warnings).none? { |warning| score(warning) > warning_level }
     end
@@ -43,6 +44,7 @@ class GitCommitOptions
     @commit = DEFAULT_COMMIT
     @push = false
     @hint_parts = []
+    @paths = []
   end
 
   def parse
@@ -53,18 +55,22 @@ class GitCommitOptions
     Options.new(
       debug: @debug, watch: @watch, auto: @auto,
       warning_level: @warning_level, commit: @commit, push: @push,
-      hint: @hint_parts.join(" ").strip
+      hint: @hint_parts.join(" ").strip, paths: @paths.uniq
     )
   end
 
   private
 
   def take(arg, index)
+    return flag(SIMPLE_FLAGS[arg], index) if SIMPLE_FLAGS.key?(arg)
+    return index + 1 if arg == "--print"
+    return take_rest_paths(index) if arg == "--"
+
+    take_valued(arg, index)
+  end
+
+  def take_valued(arg, index)
     case arg
-    when "--debug" then flag(:@debug, index)
-    when "--watch" then flag(:@watch, index)
-    when "--push" then flag(:@push, index)
-    when "--print" then index + 1
     when /\A--auto=(.+)\z/
       set_auto_level(Regexp.last_match(1))
       index + 1
@@ -73,9 +79,9 @@ class GitCommitOptions
       set_commit(Regexp.last_match(1))
       index + 1
     when "--commit" then take_commit(index)
-    else
-      @hint_parts << arg
-      index + 1
+    when /\A--file=(.*)\z/ then add_file(Regexp.last_match(1), index, step: 1)
+    when "--file" then take_file(index)
+    else take_free_arg(arg, index)
     end
   end
 
@@ -123,5 +129,31 @@ class GitCommitOptions
   def abort_commit(value)
     warn "Invalid --commit #{value.inspect}; expected auto, yes, or no.".red
     exit 1
+  end
+
+  def take_file(index)
+    add_file(@args[index + 1], index, step: 2)
+  end
+
+  def add_file(value, index, step:)
+    abort_file(value) if value.to_s.empty? || value.start_with?("-")
+
+    @paths << value
+    index + step
+  end
+
+  def abort_file(value)
+    warn "Invalid --file #{value.inspect}; expected a path.".red
+    exit 1
+  end
+
+  def take_rest_paths(index)
+    @paths.concat(@args[(index + 1)..] || [])
+    @args.length
+  end
+
+  def take_free_arg(arg, index)
+    CliPaths.path_arg?(arg) ? @paths << arg : @hint_parts << arg
+    index + 1
   end
 end

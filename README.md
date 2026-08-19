@@ -200,9 +200,10 @@ Features:
 Plans and creates structured git commits from the current working tree.
 
 Usage:
-./git_commit_gpt.rb [--watch] [--debug] [--auto [0-100]] [--commit auto|yes|no] [--push] [hint...]
+./git_commit_gpt.rb [--watch] [--debug] [--auto [0-100]] [--commit auto|yes|no] [--push] [--file PATH]... [-- PATH...] [hint...]
 
 Features:
+- `--file PATH`: repeatable. Limit planning and the commit to this path. Existing files or directories, paths that contain `/`, and arguments after `--` are pathspecs too. Other dirty files stay unstaged.
 - `--watch`: re-plan every 30s when analyzed files change
 - `--commit auto|yes|no`: default `auto` (flag may be omitted). `auto` — commit if there are no warnings, else ask. `yes` — commit. `no` — skip commit and push.
 - `--auto [level]`: quiet mode; commits when every warning is ≤ `level`% (default 50; also `--auto=75`). Prints warnings and the commit/push result only — omits diff, RuboCop hint, progress bar, impact, and sounds. Without `--push`, does not ask to push. `--commit yes|no` overrides whether to commit.
@@ -220,9 +221,10 @@ Features:
 Reads the current git changes and writes a technical explanation in Markdown.
 
 Usage:
-./git_explain_gpt.rb [--debug]
+./git_explain_gpt.rb [--debug] [--file PATH]... [-- PATH...] [path...]
 
 Features:
+- `--file PATH` (repeatable), `-- PATH...`, or an existing file or directory: explain only those paths, and only source-code extensions. Other dirty files are left out.
 - Uses `git status`, `git diff`, recent commits, and terminal history
 - Explains the change, the code, and how it fits the rest of the project
 - Cites file paths and line numbers

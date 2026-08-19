@@ -55,4 +55,35 @@ class TestGitCommitOptions < Minitest::Test
     assert options.proceed_without_prompt?([{"probability" => 0.4}], quiet: true)
     refute options.proceed_without_prompt?([{"probability" => 0.8}], quiet: true)
   end
+
+  def test_paths_default_empty
+    assert_empty GitCommitOptions.parse([]).paths
+  end
+
+  def test_file_flag_collects_paths_and_leaves_hint
+    options = GitCommitOptions.parse(%w[--file lib/foo.rb --file=lib/bar.rb keep messages short])
+    assert_equal %w[lib/foo.rb lib/bar.rb], options.paths
+    assert_equal "keep messages short", options.hint
+  end
+
+  def test_double_dash_collects_remaining_as_paths
+    options = GitCommitOptions.parse(%w[--auto -- deleted.rb other.rb])
+    assert_equal %w[deleted.rb other.rb], options.paths
+    assert options.auto
+    assert_equal "", options.hint
+  end
+
+  def test_slash_path_is_not_hint
+    options = GitCommitOptions.parse(%w[lib/missing.rb a hint])
+    assert_equal %w[lib/missing.rb], options.paths
+    assert_equal "a hint", options.hint
+  end
+
+  def test_invalid_file_flag_aborts
+    capture_io do
+      assert_raises(SystemExit) { GitCommitOptions.parse(%w[--file]) }
+      assert_raises(SystemExit) { GitCommitOptions.parse(%w[--file --auto]) }
+      assert_raises(SystemExit) { GitCommitOptions.parse(["--file="]) }
+    end
+  end
 end

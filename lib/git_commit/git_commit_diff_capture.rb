@@ -5,7 +5,7 @@ require "shellwords"
 require "colorize"
 
 # Captures uncommitted unified diffs and MR numstat for git_commit_gpt planning.
-module GitCommitDiffCapture
+class GitCommitDiffCapture
   DIFF_PAYLOAD_NOTE_RESERVE_CHARS = 2048
   # User review: drop only -W when a path's function-context diff is this long or longer.
   REVIEW_DIFF_MAX_LINES = 500
@@ -13,7 +13,9 @@ module GitCommitDiffCapture
   # Git’s canonical empty tree — valid diff base when there is no HEAD (initial / orphan import).
   GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-  module_function
+  def initialize(pathspecs: [])
+    @pathspecs = Array(pathspecs)
+  end
 
   def show_if_needed(show_diff)
     show_uncommitted_diff if show_diff
@@ -22,7 +24,7 @@ module GitCommitDiffCapture
   def fetch_mr_numstat
     return "" unless system("git rev-parse -q --verify origin/HEAD >#{File::NULL} 2>&1")
 
-    out, _, st = Open3.capture3("git", "diff", "--numstat", "-w", "origin/HEAD...")
+    out, _, st = Open3.capture3("git", "diff", "--numstat", "-w", "origin/HEAD...", *pathspec_args)
     return "" unless st.success?
 
     Utility.utf8_safe(out).strip
@@ -30,7 +32,9 @@ module GitCommitDiffCapture
 
   def compact_uncommitted_diff(limit_chars)
     compaction_cap = [limit_chars - DIFF_PAYLOAD_NOTE_RESERVE_CHARS, 0].max
-    result = GitCommitDiffCompaction.build(ref_spec: worktree_uncommitted_ancestor, limit_chars: compaction_cap)
+    result = GitCommitDiffCompaction.build(
+      ref_spec: worktree_uncommitted_ancestor, limit_chars: compaction_cap, pathspecs: @pathspecs
+    )
     note = format_budget_omitted_paths_note(result.budget_omitted_paths, DIFF_PAYLOAD_NOTE_RESERVE_CHARS)
     body = Utility.utf8_safe(result.body)
     return body if note.empty?
@@ -49,6 +53,12 @@ module GitCommitDiffCapture
     exit 1
   end
 
+  private
+
+  def pathspec_args
+    GitPathspec.args(@pathspecs)
+  end
+
   def worktree_uncommitted_ancestor
     head_exists? ? "HEAD" : GIT_EMPTY_TREE
   end
@@ -58,7 +68,7 @@ module GitCommitDiffCapture
   end
 
   def try_git_unified_against(against = nil)
-    out, err = GitPerPathUnifiedDiff.capture_with_stderr(against)
+    out, err = GitPerPathUnifiedDiff.capture_with_stderr(against, pathspecs: @pathspecs)
     return out if out
 
     @last_git_diff_stderr = err.to_s
@@ -78,21 +88,22 @@ module GitCommitDiffCapture
 
   def show_uncommitted_diff
     ref = worktree_uncommitted_ancestor
+    extra = pathspec_args
     puts "Uncommitted changes:".cyan
     return puts if show_review_diffs(ref)
 
     full = GitCommitDiffCompaction::FULL_OPTS
     light = GitCommitDiffCompaction::LIGHT_UNIFIED_OPTS
-    puts "git diff #{full.join(' ')} #{ref}".cyan
-    shown = system("git", "diff", *full, ref)
-    shown ||= system("git", "diff", *light, ref)
-    system("git", "diff", *(%w[--no-ext-diff] + light + [ref])) unless shown
+    puts ["git", "diff", *full, ref, *extra].shelljoin.cyan
+    shown = system("git", "diff", *full, ref, *extra)
+    shown ||= system("git", "diff", *light, ref, *extra)
+    system("git", "diff", *(%w[--no-ext-diff] + light + [ref]), *extra) unless shown
     puts
   end
 
   # Prefer -w -W; omit -W only for paths whose function-context diff is REVIEW_DIFF_MAX_LINES+.
   def show_review_diffs(ref)
-    out, _, st = Open3.capture3("git", "diff", "--name-only", "-z", ref)
+    out, _, st = Open3.capture3("git", "diff", "--name-only", "-z", ref, *pathspec_args)
     return false unless st.success?
 
     paths = out.split("\0").reject(&:empty?)

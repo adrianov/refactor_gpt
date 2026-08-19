@@ -6,8 +6,8 @@ require 'open3'
 # (no single `git diff` over the entire tree). Used by git_commit_gpt try_git_unified_against.
 class GitPerPathUnifiedDiff
   class << self
-    def capture_with_stderr(against)
-      paths = diff_paths(against)
+    def capture_with_stderr(against, pathspecs: [])
+      paths = diff_paths(against, pathspecs)
       return ['', ''] if paths.empty?
 
       last_err = +''
@@ -38,8 +38,9 @@ class GitPerPathUnifiedDiff
       ]
     end
 
-    def diff_paths(against)
-      out, _, st = Open3.capture3('git', 'diff', *name_only_middle(against), '--name-only', '-z')
+    def diff_paths(against, pathspecs)
+      cmd = ['git', 'diff', *name_only_middle(against), '--name-only', '-z', *GitPathspec.args(pathspecs)]
+      out, _, st = Open3.capture3(*cmd)
       return [] unless st.success?
 
       out.split("\0").reject(&:empty?)
