@@ -60,22 +60,22 @@ module GitCommitExecutor
 
   def resolve_deleted_paths_for_index(paths)
     index_paths = `git ls-files`.split("\n")
-    paths.filter_map do |p|
-      next p if index_paths.include?(p)
-      next nil unless p.end_with?(".")
+    paths.map { |path| map_deleted_path(path, index_paths) }.uniq
+  end
 
-      json_path = "#{p.sub(/\.$/, "")}.json"
-      index_paths.include?(json_path) ? json_path : nil
-    end.uniq
+  def map_deleted_path(path, index_paths)
+    return path if index_paths.include?(path)
+    return path unless path.end_with?(".")
+
+    json_path = "#{path.sub(/\.$/, "")}.json"
+    index_paths.include?(json_path) ? json_path : path
   end
 
   def run_git_add_deleted(paths)
     return if paths.empty?
 
-    resolved = resolve_deleted_paths_for_index(paths)
-    return if resolved.empty?
-
-    add_u_cmd = ["git", "add", "-u", "--", *resolved].map { |p| Shellwords.escape(p) }.join(" ")
+    names = resolve_deleted_paths_for_index(paths)
+    add_u_cmd = ["git", "add", "-u", "--", *names].map { |p| Shellwords.escape(p) }.join(" ")
     puts "Running: #{add_u_cmd}".green
     abort_staging unless system(add_u_cmd)
   end
