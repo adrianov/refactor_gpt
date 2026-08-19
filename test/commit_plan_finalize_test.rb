@@ -4,13 +4,17 @@ require "minitest/autorun"
 require_relative "../lib/loader"
 
 class TestCommitPlanFinalize < Minitest::Test
-  def test_porcelain_filenames_extracts_modified_and_renamed_paths
-    status = <<~STATUS
-      ## main...origin/main
-       M app/models/user.rb
-      R100 old.rb -> new.rb
-    STATUS
-    assert_equal %w[app/models/user.rb new.rb], CommitPlanFinalize.porcelain_filenames(status)
+  def test_finalize_reincludes_omitted_rename_source
+    status = "R100 old.rb -> new.rb\n"
+    plan = {
+      "commits" => [{ "message" => "refactor: rename old.rb", "files" => ["new.rb"] }],
+      "warnings" => [],
+      "excluded_files" => []
+    }
+    result = CommitPlanFinalize.finalize(plan, status)
+    files = result["commits"].flat_map { |c| c["files"] }
+    assert_includes files, "old.rb"
+    assert_includes files, "new.rb"
   end
 
   def test_finalize_reincludes_wrongly_excluded_source_file

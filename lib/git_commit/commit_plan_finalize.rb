@@ -26,9 +26,10 @@ module CommitPlanFinalize
     commits = plan["commits"] || []
     return nil if commits.empty?
 
-    status_filenames = porcelain_filenames(status_output)
+    status_filenames = GitStatusPaths.filenames(status_output)
     result = build_result(plan, commits, status_filenames)
     reinclude_excluded_code_files(result)
+    reinclude_missing_gone_paths(result, status_filenames)
     result
   end
 
@@ -87,7 +88,7 @@ module CommitPlanFinalize
   end
 
   def warn_empty_commits(status_output, raw_response)
-    paths = porcelain_filenames(status_output)
+    paths = GitStatusPaths.filenames(status_output)
     warn "Commit plan rejected: model returned no commits.".red
     if paths.any?
       warn "Git status lists #{paths.size} changed path(s); re-run git_commit_gpt or pass --debug.".yellow
@@ -109,16 +110,6 @@ module CommitPlanFinalize
     excluded = plan["excluded_files"] || []
     GitCommitDisplay.display_warnings(warnings) unless warnings.empty?
     GitCommitDisplay.display_excluded_files(excluded) unless excluded.empty?
-  end
-
-  def porcelain_filenames(porcelain_output)
-    porcelain_output.split("\n").filter_map do |line|
-      next if line.strip.empty? || line.start_with?("##")
-
-      status_and_path = line.sub(/^.{2}\s+/, "")
-      path = status_and_path.include?("->") ? status_and_path.split("->").last.strip : status_and_path
-      path.match(/\A"(.*)"\z/) ? Regexp.last_match(1) : path
-    end
   end
 
   def build_result(plan, commits, status_filenames)
@@ -143,6 +134,21 @@ module CommitPlanFinalize
     append_paths_to_last_commit(commits, paths)
   end
 
+  def reinclude_missing_gone_paths(result, status_filenames)
+    commits = result["commits"] || []
+    return if commits.empty?
+
+    listed = listed_plan_paths(result)
+    missing = status_filenames.reject { |path| listed.include?(path) || File.exist?(path) }
+    append_paths_to_last_commit(commits, missing)
+  end
+
+  def listed_plan_paths(result)
+    files = Array(result["commits"]).flat_map { |c| Array(c["files"]) }
+    excluded = Array(result["excluded_files"]).map { |e| e["path"] }
+    (files + excluded).map(&:to_s).reject(&:empty?).to_set
+  end
+
   def partition_truncation_excluded(excluded, code_exts)
     to_reinclude, kept = excluded.partition { |e| code_file_excluded?(e, code_exts) }
     paths = to_reinclude.map { |e| e["path"].to_s }.reject(&:empty?)
@@ -162,8 +168,10 @@ module CommitPlanFinalize
     last = commits.last
     last["files"] = Array(last["files"]) + paths
   end
-  private_class_method :build_result, :reinclude_excluded_code_files, :partition_truncation_excluded,
-    :code_file_excluded?, :append_paths_to_last_commit, :warn_rejection, :warn_empty_commits,
+  private_class_method :build_result, :reinclude_excluded_code_files, :reinclude_missing_gone_paths,
+    :listed_plan_paths, :partition_truncation_excluded,
+    :code_file_excluded?, :append_paths_to_last_commit, :warn_rejection,
+    :warn_empty_commits,
     :print_raw_response, :display_plan_extras, :pick_plan_array, :nested_fields_in_qa?,
     :unwrap_plan_payload, :plan_like?
 end

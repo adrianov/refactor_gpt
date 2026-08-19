@@ -123,7 +123,7 @@ class GitCommitPlanner
   end
 
   def restrict_to_status!(result, status)
-    allowed = CommitPlanFinalize.porcelain_filenames(status).to_set
+    allowed = GitStatusPaths.filenames(status).to_set
     result["commits"] = keep_allowed_commits(result["commits"], allowed)
   end
 

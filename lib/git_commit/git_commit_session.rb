@@ -30,6 +30,7 @@ class GitCommitSession
   def setup_planner
     @pathspecs = GitPathspec.resolve(@options.paths, cwd: @cwd, root: Dir.pwd)
     GitPathspec.assert_present!(@pathspecs)
+    @pathspecs = GitStatusPaths.expand_partners(@pathspecs)
     @planner = GitCommitPlanner.new(
       debug: @options.debug, hint: @options.hint, quiet: @options.auto, pathspecs: @pathspecs
     )

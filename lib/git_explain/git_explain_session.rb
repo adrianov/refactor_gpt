@@ -10,6 +10,7 @@ class GitExplainSession
   end
 
   def run
+    @paths = GitStatusPaths.expand_partners(@paths)
     spec = GitPathspec.args(@paths)
     status = git_output("status", "--porcelain", "--branch", *spec)
     return no_changes if clean?(status)
