@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require "tmpdir"
 require_relative "../lib/loader"
 
 class TestGitCommitOptions < Minitest::Test
@@ -79,11 +80,57 @@ class TestGitCommitOptions < Minitest::Test
     assert_equal "a hint", options.hint
   end
 
+  def test_deleted_tracked_file_is_path_not_hint
+    in_repo do
+      File.write("gone.rb", "ok\n")
+      system("git", "add", "gone.rb", exception: true)
+      system("git", "commit", "-qm", "init", exception: true)
+      File.delete("gone.rb")
+
+      options = GitCommitOptions.parse(%w[gone.rb a hint])
+      assert_equal %w[gone.rb], options.paths
+      assert_equal "a hint", options.hint
+    end
+  end
+
+  def test_staged_deletion_is_path_not_hint
+    in_repo do
+      File.write("gone.rb", "ok\n")
+      system("git", "add", "gone.rb", exception: true)
+      system("git", "commit", "-qm", "init", exception: true)
+      system("git", "rm", "-q", "gone.rb", exception: true)
+
+      options = GitCommitOptions.parse(%w[gone.rb keep it])
+      assert_equal %w[gone.rb], options.paths
+      assert_equal "keep it", options.hint
+    end
+  end
+
+  def test_unknown_basename_is_hint
+    options = GitCommitOptions.parse(%w[no_such_file.rb please])
+    assert_empty options.paths
+    assert_equal "no_such_file.rb please", options.hint
+  end
+
   def test_invalid_file_flag_aborts
     capture_io do
       assert_raises(SystemExit) { GitCommitOptions.parse(%w[--file]) }
       assert_raises(SystemExit) { GitCommitOptions.parse(%w[--file --auto]) }
       assert_raises(SystemExit) { GitCommitOptions.parse(["--file="]) }
+    end
+  end
+
+  private
+
+  def in_repo
+    Dir.mktmpdir do |dir|
+      Dir.chdir(dir) do
+        system("git", "init", "-q", exception: true)
+        system("git", "config", "user.email", "t@t.com", exception: true)
+        system("git", "config", "user.name", "t", exception: true)
+        system("git", "config", "commit.gpgsign", "false", exception: true)
+        yield
+      end
     end
   end
 end

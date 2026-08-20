@@ -203,7 +203,7 @@ Usage:
 ./git_commit_gpt.rb [--watch] [--debug] [--auto [0-100]] [--commit auto|yes|no] [--push] [--file PATH]... [-- PATH...] [hint...]
 
 Features:
-- `--file PATH`: repeatable. Restrict planning and the commit to this pathspec. Existing files or directories, paths that contain `/`, and arguments after `--` count as well. A matching rename (both names) and deletions in the same directory or the parent directory are included; other dirty files stay unstaged.
+- `--file PATH`: repeatable. Restrict planning and the commit to this pathspec. Existing files or directories, deleted files git still lists, paths that contain `/`, and arguments after `--` count as well. A matching rename (both names) and deletions in the same directory or the parent directory are included; other dirty files stay unstaged.
 - `--watch`: re-plan every 30s when analyzed files change
 - `--commit auto|yes|no`: default `auto` (flag may be omitted). `auto` — commit if there are no warnings, else ask. `yes` — commit. `no` — skip commit and push.
 - `--auto [level]`: quiet mode; commits when every warning is ≤ `level`% (default 50; also `--auto=75`). Prints warnings and the commit/push result only — omits diff, RuboCop hint, progress bar, impact, and sounds. Without `--push`, does not ask to push. `--commit yes|no` overrides whether to commit.
@@ -225,7 +225,7 @@ Usage:
 ./git_explain_gpt.rb [--debug] [--file PATH]... [-- PATH...] [path...]
 
 Features:
-- `--file PATH` (repeatable), `-- PATH...`, or an existing file or directory: explain only those pathspecs, and only source-code extensions. A matching rename (both names) and deletions in the same directory or the parent directory are included; other dirty files are left out.
+- `--file PATH` (repeatable), `-- PATH...`, an existing file or directory, or a deleted file git still lists: explain only those pathspecs, and only source-code extensions. A matching rename (both names) and deletions in the same directory or the parent directory are included; other dirty files are left out.
 - Uses `git status`, `git diff`, recent commits, and terminal history
 - Explains the change, the code, and how it fits the rest of the project
 - Cites file paths and line numbers

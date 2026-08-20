@@ -1,11 +1,11 @@
 # frozen_string_literal: true
 
-# Detects CLI file pathspecs vs free-text, and filters by supported extensions.
+# Detects CLI file pathspecs vs free-text (including deleted paths known to git), and filters by extension.
 module CliPaths
   module_function
 
   def path_arg?(arg)
-    File.exist?(arg) || arg.include?("/") || arg.start_with?(".")
+    File.exist?(arg) || arg.include?("/") || arg.start_with?(".") || GitPathspec.known_to_git?(arg)
   end
 
   def supported?(path, extensions)

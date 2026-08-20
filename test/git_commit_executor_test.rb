@@ -28,6 +28,30 @@ class TestGitCommitExecutor < Minitest::Test
     end
   end
 
+  def test_commits_deleted_tracked_file
+    Dir.mktmpdir do |dir|
+      Dir.chdir(dir) do
+        init_repo
+        File.write("gone.rb", "ok\n")
+        system("git", "add", "gone.rb", exception: true)
+        system("git", "commit", "-qm", "init", exception: true)
+        File.delete("gone.rb")
+
+        ok = nil
+        capture_io do
+          ok = GitCommitExecutor.execute_single_commit(
+            "message" => "chore: remove gone",
+            "files" => %w[gone.rb]
+          )
+        end
+
+        assert ok
+        assert_equal %w[gone.rb], committed_paths
+        refute File.exist?("gone.rb")
+      end
+    end
+  end
+
   def test_skips_commit_when_no_planned_path_is_staged
     Dir.mktmpdir do |dir|
       Dir.chdir(dir) do

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require "tmpdir"
 require_relative "../lib/loader"
 
 class TestGitPathspec < Minitest::Test
@@ -23,5 +24,32 @@ class TestGitPathspec < Minitest::Test
   def test_resolve_keeps_globs
     root = File.expand_path("..", __dir__)
     assert_equal ["lib/*.rb"], GitPathspec.resolve(["lib/*.rb"], cwd: root, root: root)
+  end
+
+  def test_deleted_tracked_file_is_known
+    in_repo do
+      File.write("gone.rb", "ok\n")
+      system("git", "add", "gone.rb", exception: true)
+      system("git", "commit", "-qm", "init", exception: true)
+      File.delete("gone.rb")
+
+      assert GitPathspec.known_to_git?("gone.rb")
+      refute GitPathspec.known_to_git?("missing.rb")
+      GitPathspec.assert_present!(["gone.rb"])
+    end
+  end
+
+  private
+
+  def in_repo
+    Dir.mktmpdir do |dir|
+      Dir.chdir(dir) do
+        system("git", "init", "-q", exception: true)
+        system("git", "config", "user.email", "t@t.com", exception: true)
+        system("git", "config", "user.name", "t", exception: true)
+        system("git", "config", "commit.gpgsign", "false", exception: true)
+        yield
+      end
+    end
   end
 end
