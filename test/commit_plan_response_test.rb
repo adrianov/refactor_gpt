@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require "oj"
 require_relative "../lib/loader"
 
 class TestCommitPlanResponse < Minitest::Test
@@ -57,5 +58,20 @@ class TestCommitPlanResponse < Minitest::Test
     JSON
     plan = CommitPlanResponse.parse(raw, 1)
     assert_equal "Broken text, } still in string", plan.dig("quality_assessment", "explanation")
+  end
+
+  def test_load_plan_recovers_later_object_from_commentary
+    plan = {
+      "quality_assessment" => { "direction" => "increased", "explanation" => "Safer." },
+      "commits" => [{ "message" => "Move specs off HTML", "files" => ["spec/requests/days_spec.rb"] }]
+    }
+    json = Oj.dump(plan, mode: :compat)
+    raw = "{ \"commits\": [ { \"files\": [\"spec/requests/dimes_spec.rb\"\nLet me recompose.\n#{json}"
+    loaded = CommitPlanResponse.load_plan(raw)
+    assert_equal ["spec/requests/days_spec.rb"], loaded.dig("commits", 0, "files")
+  end
+
+  def test_load_plan_returns_nil_when_no_plan_object
+    assert_nil CommitPlanResponse.load_plan("Let me recompose.\n{ not json")
   end
 end

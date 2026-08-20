@@ -107,12 +107,22 @@ class CommitPlanClient
          recent_commits, recent_commands)}
     ]
     payload_size_kb = CommitPlanResponse.payload_size_kb(@client.model, messages)
-    raw_response = ask(messages, json: true)
-    plan = CommitPlanResponse.parse(raw_response, payload_size_kb)
+    raw_response, plan = fetch_plan(messages)
+    CommitPlanResponse.abort_unparsed!(raw_response, payload_size_kb) unless plan
     { plan: plan, raw_response: raw_response }
   end
 
   private
+
+  def fetch_plan(messages)
+    raw = ask(messages, json: true)
+    plan = CommitPlanResponse.load_plan(raw)
+    return [raw, plan] if plan
+
+    warn "Invalid JSON from the model; asking once more for a JSON-only reply.".yellow
+    raw = ask(messages + [{role: "user", content: CommitPlanInstructions.json_retry_instruction}], json: true)
+    [raw, CommitPlanResponse.load_plan(raw)]
+  end
 
   def append_section(parts, current_size_chars, max_size_chars, text)
     chunk = Utility.utf8_safe(text)

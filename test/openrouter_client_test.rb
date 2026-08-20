@@ -58,6 +58,16 @@ class TestOpenrouterClient < Minitest::Test
     assert_equal '{"a":1}', OpenrouterJson.extract_from_text(text)
   end
 
+  def test_openrouter_json_ignores_braces_inside_strings
+    text = 'prefix {"a":"use } here","b":2} suffix'
+    assert_equal '{"a":"use } here","b":2}', OpenrouterJson.extract_from_text(text)
+  end
+
+  def test_openrouter_json_prefers_later_complete_object
+    text = '{ "partial": [ { "x": 1 } Let me redo {"a":1,"b":2}'
+    assert_equal '{"a":1,"b":2}', OpenrouterJson.extract_from_text(text)
+  end
+
   def test_request_headers_include_app_attribution
     headers = client.send(:request_headers)
     assert_equal 'https://github.com/adrianov/refactor_gpt', headers['HTTP-Referer']

@@ -168,7 +168,23 @@ module CommitPlanInstructions
       If impact is neutral or unclear from the diff, use "unchanged" for direction and say so briefly in `explanation`.
       Final check: every path from `git status` (non-## lines) must appear in exactly one `commits[].files` or `excluded_files[].path`. Fix the plan before returning if any path is missing.
 
-      Do not include any text outside of the JSON.
+      JSON discipline (critical):
+      - The entire assistant message is one JSON object: first character `{`, last character `}`.
+      - Copy every `files` path from git status exactly (the substring after the status flags). Do not retype paths from memory.
+      - If you notice a mistake, output a replacement JSON object as the whole reply. Never write commentary, a path inventory, or "let me recompose".
+      - No markdown fence. No text outside the JSON.
+    HEREDOC
+  end
+
+  def json_retry_instruction
+    <<~HEREDOC
+      Stop. The previous reply was not valid JSON (commentary, a path inventory, or a truncated object).
+
+      Reply with one JSON object only:
+      - First character `{`, last character `}`
+      - No markdown fence and no text before or after
+      - Copy every `files` path from git status exactly; do not retype paths from memory
+      - If a path is wrong, fix it inside that one object. Do not explain.
     HEREDOC
   end
 end

@@ -22,6 +22,18 @@ module OpenrouterJson
     from_markdown(content) || from_balanced_braces(content)
   end
 
+  def objects(content)
+    found = []
+    text = content.to_s
+    each_unquoted_index(text) do |i, ch|
+      next unless ch == '{'
+
+      finish = matching_brace(text, i)
+      found << text[i..finish] if finish
+    end
+    found
+  end
+
   def from_markdown(content)
     json_match = content.match(/```(?:json)?\s*(\{.*\})\s*```/m)
     return nil unless json_match
@@ -30,35 +42,65 @@ module OpenrouterJson
   end
 
   def from_balanced_braces(content)
-    brace_start = content.index("{")
-    return nil unless brace_start
-
-    brace_end = matching_brace(content, brace_start)
-    return nil unless brace_end
-
-    candidate = content[brace_start..brace_end]
-    candidate if valid?(candidate)
+    best_object(objects(content))
   end
 
   def balanced_slice(content)
-    return content if content.start_with?("{") && content.end_with?("}") && valid?(content)
+    return content if content.start_with?('{') && content.end_with?('}') && valid?(content)
 
     from_balanced_braces(content)
   end
 
   def matching_brace(content, start_pos)
-    brace_count = 0
+    depth = 0
+    in_string = false
+    escape = false
+    (start_pos...content.length).each do |idx|
+      ch = content[idx]
+      if in_string
+        in_string, escape = next_string_state(ch, escape)
+        next
+      end
 
-    content[start_pos..].each_char.with_index(start_pos) do |char, idx|
-      case char
-      when "{"
-        brace_count += 1
-      when "}"
-        brace_count -= 1
-        return idx if brace_count.zero?
+      case ch
+      when '"' then in_string = true
+      when '{' then depth += 1
+      when '}'
+        depth -= 1
+        return idx if depth.zero?
       end
     end
-
     nil
+  end
+
+  def each_unquoted_index(text)
+    in_string = false
+    escape = false
+    text.length.times do |i|
+      ch = text[i]
+      if in_string
+        in_string, escape = next_string_state(ch, escape)
+      elsif ch == '"'
+        in_string = true
+      else
+        yield i, ch
+      end
+    end
+  end
+
+  def next_string_state(ch, escape)
+    return [true, false] if escape
+    return [true, true] if ch == '\\'
+    return [false, false] if ch == '"'
+
+    [true, false]
+  end
+
+  def best_object(candidates)
+    valid = candidates.select { |c| valid?(c) }
+    return nil if valid.empty?
+
+    longest = valid.map(&:length).max
+    valid.reverse.find { |c| c.length >= (longest * 4 / 5) }
   end
 end
