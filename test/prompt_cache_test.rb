@@ -3,7 +3,7 @@
 require 'minitest/autorun'
 require_relative '../lib/loader'
 
-# PromptCache adds Anthropic/Qwen/Auto breakpoints and sticky prompt_cache_key only when supported.
+# PromptCache adds Anthropic/Qwen/Gemini/Auto breakpoints and sticky prompt_cache_key only when supported.
 class TestPromptCache < Minitest::Test
   OPENROUTER = 'https://openrouter.ai/api/v1'
   OPENAI = 'https://api.openai.com/v1'
@@ -58,6 +58,19 @@ class TestPromptCache < Minitest::Test
     assert_equal({type: 'ephemeral'}, body[:cache_control])
     assert body[:prompt_cache_key]
     refute body.key?(:session_id)
+  end
+
+  def test_openrouter_gemini_wraps_system_and_sets_key
+    %w[google/gemini-3.7-flash gemini-3.7-flash openrouter/google/gemini-3.7-flash].each do |model|
+      body = apply(model: model, base_url: OPENROUTER)
+      assert_equal({type: 'ephemeral'}, body[:cache_control], model)
+      assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key], model
+      refute body.key?(:session_id)
+      assert_equal(
+        [{type: 'text', text: SYSTEM, cache_control: {type: 'ephemeral'}}],
+        body[:messages].find { |m| m[:role] == 'system' }[:content]
+      )
+    end
   end
 
   def test_openrouter_auto_gets_cache_markers_and_session_id

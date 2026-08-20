@@ -3,7 +3,7 @@
 require 'digest'
 
 # Applies prompt-cache markers when the provider supports them.
-# OpenRouter Anthropic/Qwen and openrouter/auto: cache_control breakpoints + prompt_cache_key.
+# OpenRouter Anthropic/Qwen/Gemini and openrouter/auto: cache_control breakpoints + prompt_cache_key.
 # Auto also gets session_id (process-scoped by default) so the router pins model+provider.
 # Other OpenRouter models: prompt_cache_key for sticky routing only.
 # Direct OpenAI Chat Completions rejects prompt_cache_key — never send it there.
@@ -12,7 +12,7 @@ module PromptCache
   KEY_PREFIX = 'refactor-sys-'
   SESSION_MAX = 256
   EPHEMERAL = {type: 'ephemeral'}.freeze
-  EXPLICIT_MODEL = %r{\A(anthropic/|claude-|qwen/|alibaba/)}i
+  EXPLICIT_MODEL = %r{\A(anthropic/|claude-|qwen/|alibaba/|google/gemini-|gemini-)}i
 
   module_function
 

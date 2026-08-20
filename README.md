@@ -56,7 +56,7 @@ Ruby CLI tools that use large language models for refactoring, code search, shel
 
    If `MODEL` is unset, the default follows which token is present (Claude first, then Gemini, then OpenAI). The `--search` flag uses OpenAI's search model.
 
-   Supported providers cache a stable system prompt (instructions and project rules) on OpenRouter. Working-tree state such as git status, diffs, and directory listings goes in the user message so different changes still hit the same cache.
+   Supported providers (Anthropic, Qwen, Gemini, and Auto) cache a stable system prompt (instructions and project rules) on OpenRouter via `cache_control`. Working-tree state such as git status, diffs, and directory listings goes in the user message so different changes still hit the same cache.
 
    **Proxy (optional):**
    - Add `PROXY_URL` to this app's `.env` (example: `PROXY_URL=socks5://127.0.0.1:1080`)
