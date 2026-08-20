@@ -212,6 +212,7 @@ Features:
 - Groups changed files into a small number of coherent commits (by feature, refactor, docs, tests, etc.)
 - Writes conventional-style one-line commit messages
 - Puts every changed file in exactly one suggested commit
+- Drops planned paths that are not in `git status`; `git commit` only receives staged pathspecs
 - Prints a commit plan before any `git add`/`git commit`
 - Reviews the diff for defects and for breaks of Cursor rules from the project `.cursor/rules/` and the user `~/.cursor/rules/`, then prints each warning with a probability score
 - Falls back to OpenRouter when the primary API is rate-limited or briefly unavailable

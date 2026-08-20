@@ -35,6 +35,12 @@ class TestCommitPathCorrections < Minitest::Test
     status = %w[json/a.rb jsonjsonjson/a.rb]
     commits = [{ "files" => ["a.rb"] }]
     result = CommitPathCorrections.apply_to_commits(commits, status)
-    assert_equal ["a.rb"], result.first["files"]
+    assert_empty result.first["files"]
+  end
+
+  def test_drops_paths_absent_from_git_status
+    commits = [{ "files" => ["json/CMakeLists.txt", "app/services/usedesk/send_order_buttons.rb"] }]
+    result = CommitPathCorrections.apply_to_commits(commits, STATUS)
+    assert_equal ["json/CMakeLists.txt"], result.first["files"]
   end
 end

@@ -108,11 +108,6 @@ class GitCommitPlanner
     )
     return :plan_rejected if result == :plan_rejected
 
-    return result_with_status(result, status) if @pathspecs.empty?
-
-    restrict_to_status!(result, status)
-    return :plan_rejected if Array(result["commits"]).empty?
-
     result_with_status(result, status)
   end
 
@@ -120,20 +115,6 @@ class GitCommitPlanner
     result["status_output"] = status
     result["status_snapshot"] = porcelain_status
     result
-  end
-
-  def restrict_to_status!(result, status)
-    allowed = GitStatusPaths.filenames(status).to_set
-    result["commits"] = keep_allowed_commits(result["commits"], allowed)
-  end
-
-  def keep_allowed_commits(commits, allowed)
-    Array(commits).filter_map do |commit|
-      files = Array(commit["files"]).select { |file| allowed.include?(file.to_s) }
-      next if files.empty?
-
-      commit.merge("files" => files)
-    end
   end
 
   def show_rubocop_hint(status)

@@ -12,9 +12,9 @@ module CommitPathCorrections
     commits.each do |commit|
       next unless commit["files"]
 
-      commit["files"] = commit["files"].map do |path|
-        correct_path(path, status_set, deleted_paths)
-      end
+      commit["files"] = commit["files"].filter_map do |path|
+        correct_path(path.to_s, status_set, deleted_paths)
+      end.uniq
     end
 
     commits
@@ -29,9 +29,9 @@ module CommitPathCorrections
     restored = correct_missing_json_in_basename(path, status_set)
     return restored if restored
     return correct_trailing_dot_json(path, status_set) if path.end_with?(".")
-    return resolve_deleted(path, deleted_paths) || path unless File.exist?(path)
+    return resolve_deleted(path, deleted_paths) unless File.exist?(path)
 
-    path
+    nil
   end
 
   # Some models (e.g. GLM) drop every "json" substring from paths in JSON output.
@@ -58,7 +58,7 @@ module CommitPathCorrections
 
   def correct_trailing_dot_json(path, status_set)
     without_dot = path.sub(/\.$/, "")
-    status_set.include?("#{without_dot}.json") ? "#{without_dot}.json" : path
+    status_set.include?("#{without_dot}.json") ? "#{without_dot}.json" : nil
   end
 
   def resolve_deleted(plan_path, deleted_paths)

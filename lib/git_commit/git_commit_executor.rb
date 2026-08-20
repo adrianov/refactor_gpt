@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "open3"
 require "shellwords"
 require "colorize"
 
@@ -28,15 +29,26 @@ module GitCommitExecutor
   end
 
   def execute_single_commit(commit)
-    files = extract_commit_files(commit).reject { |p| ephemeral_path?(p) }
-    return false if files.empty?
+    files = committable_files(commit)
+    return false if files.empty? || commit["message"].to_s.strip.empty?
 
     run_git_add(files)
+    staged = staged_among(files)
+    return false if staged.empty?
 
-    commit_msg = commit["message"].to_s.strip
-    return false if commit_msg.empty?
+    run_git_commit(commit["message"].to_s.strip, staged)
+  end
 
-    run_git_commit(commit_msg, files)
+  def committable_files(commit)
+    extract_commit_files(commit).reject { |path| ephemeral_path?(path) }
+  end
+
+  def staged_among(planned)
+    out, _, status = Open3.capture3("git", "diff", "--cached", "--name-only", "-z")
+    return [] unless status.success?
+
+    cached = out.split("\0").reject(&:empty?).to_set
+    planned.select { |path| cached.include?(path) }
   end
 
   def extract_commit_files(commit)

@@ -30,7 +30,8 @@ module CommitPlanFinalize
     result = build_result(plan, commits, status_filenames)
     reinclude_excluded_code_files(result)
     reinclude_missing_gone_paths(result, status_filenames)
-    result
+    keep_status_paths(result, status_filenames)
+    result["commits"].empty? ? nil : result
   end
 
   # Unwrap array wrappers (e.g. [["PT-123"], {plan}]) and hoist nested QA fields.
@@ -134,6 +135,16 @@ module CommitPlanFinalize
     append_paths_to_last_commit(commits, paths)
   end
 
+  def keep_status_paths(result, status_filenames)
+    allowed = status_filenames.to_set
+    result["commits"] = Array(result["commits"]).filter_map do |commit|
+      files = Array(commit["files"]).map(&:to_s).select { |path| allowed.include?(path) }.uniq
+      next if files.empty?
+
+      commit.merge("files" => files)
+    end
+  end
+
   def reinclude_missing_gone_paths(result, status_filenames)
     commits = result["commits"] || []
     return if commits.empty?
@@ -168,7 +179,8 @@ module CommitPlanFinalize
     last = commits.last
     last["files"] = Array(last["files"]) + paths
   end
-  private_class_method :build_result, :reinclude_excluded_code_files, :reinclude_missing_gone_paths,
+  private_class_method :build_result, :reinclude_excluded_code_files, :keep_status_paths,
+    :reinclude_missing_gone_paths,
     :listed_plan_paths, :partition_truncation_excluded,
     :code_file_excluded?, :append_paths_to_last_commit, :warn_rejection,
     :warn_empty_commits,

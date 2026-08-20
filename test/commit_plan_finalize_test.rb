@@ -102,4 +102,35 @@ class TestCommitPlanFinalize < Minitest::Test
     files = result["commits"].flat_map { |c| c["files"] }
     assert_equal %w[app/interactors/ex_matching/match.rb app/models/exchanger.rb].sort, files.sort
   end
+
+  def test_finalize_drops_paths_not_in_git_status
+    status = " M README.md\n"
+    plan = {
+      "commits" => [{
+        "message" => "feat: send order buttons",
+        "files" => [
+          "README.md",
+          "app/services/usedesk/send_order_buttons.rb",
+          "spec/services/usedesk/send_order_buttons_spec.rb"
+        ]
+      }],
+      "warnings" => [],
+      "excluded_files" => []
+    }
+    result = CommitPlanFinalize.finalize(plan, status)
+    assert_equal ["README.md"], result["commits"].first["files"]
+  end
+
+  def test_finalize_returns_nil_when_all_paths_are_unknown
+    status = " M README.md\n"
+    plan = {
+      "commits" => [{
+        "message" => "feat: send order buttons",
+        "files" => ["spec/services/usedesk/send_order_buttons_spec.rb"]
+      }],
+      "warnings" => [],
+      "excluded_files" => []
+    }
+    assert_nil CommitPlanFinalize.finalize(plan, status)
+  end
 end
