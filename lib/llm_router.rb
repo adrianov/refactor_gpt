@@ -15,7 +15,7 @@ module LlmRouter
 
   DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6'
   DEFAULT_OPENAI_MODEL = 'gpt-5-nano'
-  DEFAULT_GEMINI_MODEL = 'gemini-3-flash'
+  DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash'
 
   def self.backend_for_model(name)
     return nil if name.nil? || name.to_s.strip.empty?
@@ -31,7 +31,7 @@ module LlmRouter
   def self.config_for_model(name, env_vars = nil)
     env = env_vars || ENV
     model = name.to_s.strip
-    backend = backend_for_model(model)
+    backend = resolved_backend(model, env)
     return nil unless backend
 
     cfg = BACKENDS[backend]
@@ -42,6 +42,14 @@ module LlmRouter
     base_url = default_base_url(backend) if base_url.to_s.empty?
     { backend: backend, base_url: base_url, access_token: access_token, model: model }
   end
+
+  def self.resolved_backend(model, env)
+    backend = backend_for_model(model)
+    return :openai if backend == :gemini && !token_set?(env, 'GEMINI_ACCESS_TOKEN')
+
+    backend
+  end
+  private_class_method :resolved_backend
 
   def self.default_base_url(backend)
     case backend

@@ -5,8 +5,6 @@
 class AskGeminiClient
   include AskClientInstructions
 
-  DEFAULT_MODEL = "gemini-3-flash"
-
   attr_reader :model, :backend
 
   def initialize(model: nil, max_completion_tokens: nil, debug: false, progress: true, api_base_url: nil, api_key: nil)

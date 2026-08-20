@@ -9,7 +9,7 @@ class GeminiClient
   include AgentsFileHandler
   include PrimaryApiClient
 
-  DEFAULT_MODEL = 'gemini-3-flash'
+  DEFAULT_MODEL = 'gemini-3.7-flash'
   REQUEST_TIMEOUT = 600
   DEFAULT_PROGRESS_SPEED = 300
   PROGRESS_SPEED_FILE = File.join(Dir.home, '.gemini_gpt').freeze

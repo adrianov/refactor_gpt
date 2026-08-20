@@ -184,7 +184,7 @@ module Utility
   end
 
   def self.display_model_info(provider, model_name = nil)
-    display_model = model_name || ((provider == :gemini) ? "gemini-3-flash" : "default")
+    display_model = model_name || ((provider == :gemini) ? LlmRouter::DEFAULT_GEMINI_MODEL : "default")
     puts "Using: #{provider.to_s.capitalize} (#{display_model})"
   end
 end
