@@ -40,7 +40,7 @@ class TestErrorResponseBody < Minitest::Test
   end
 
   def test_http_400_with_upstream_429_raises_rate_limit_error
-    client = OpenAiClient.allocate
+    client = OpenrouterClient.allocate
     err = assert_raises(RateLimitError) do
       client.send(:handle_non_success_status, response_with(UPSTREAM_429_BODY, status: 400))
     end
@@ -48,16 +48,11 @@ class TestErrorResponseBody < Minitest::Test
     assert_includes err.raw_body, 'previous_errors'
   end
 
-  def test_gemini_http_400_with_upstream_429_raises_rate_limit_error
-    client = GeminiClient.allocate
+  def test_openrouter_client_flags_upstream_rate_limit_body_as_rate_limited
+    client = OpenrouterClient.allocate
     assert_raises(RateLimitError) do
-      client.send(:handle_non_success_status, response_with(PREVIOUS_ERRORS_429, status: 400))
+      client.send(:handle_non_success_status, response_with(UPSTREAM_429_BODY, status: 400))
     end
-  end
-
-  def test_openrouter_client_retries_upstream_rate_limit_body
-    client = OpenrouterClient.new(api_key: 'test-key')
-    assert client.send(:retryable?, response_with(UPSTREAM_429_BODY, status: 400))
-    refute client.send(:retryable?, response_with('{"error":{"code":400}}', status: 400))
+    refute ErrorResponseBody.upstream_rate_limited?('{"error":{"code":400}}')
   end
 end

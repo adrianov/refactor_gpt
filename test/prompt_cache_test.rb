@@ -146,8 +146,8 @@ class TestPromptCache < Minitest::Test
     refute body.key?(:session_id)
   end
 
-  def test_openai_client_skips_cache_on_openai_host
-    client = OpenAiClient.allocate
+  def test_openrouter_client_skips_cache_on_non_openrouter_host
+    client = OpenrouterClient.allocate
     client.instance_variable_set(:@model, 'gpt-5-nano')
     client.instance_variable_set(:@api_base_url, OPENAI)
     client.instance_variable_set(:@max_completion_tokens, nil)

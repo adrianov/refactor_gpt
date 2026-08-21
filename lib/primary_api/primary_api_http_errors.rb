@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-# Parse and raise primary API HTTP failures; BalanceError (Z.AI 1113) skips retry → OpenRouter.
+# Parse and raise primary API HTTP failures. Balance-exhausted errors skip retries, print, and exit.
 #
 # Host must implement: pretty_print_error / format_error_response (ApiErrorDisplay),
-# fallback_configured?, and is_network_resource_error?
+# and is_network_resource_error?
 module PrimaryApiHttpErrors
   def raise_rate_limit_error(response)
     retry_after = extract_retry_after(response)
@@ -11,7 +11,7 @@ module PrimaryApiHttpErrors
     error_message = extract_error_message_from_response(response)
     message = rate_limit_message(error_message)
 
-    return raise_or_exit_balance_error(response.status, balance_message(error_message), raw) if balance_exhausted?(
+    return exit_balance_error(response.status, balance_message(error_message), raw) if balance_exhausted?(
       error_message, raw
     )
 
@@ -26,18 +26,7 @@ module PrimaryApiHttpErrors
   def handle_non_success_status(response)
     raise_rate_limit_error(response) if rate_limit_response?(response)
     raise_server_error(response) if response.status >= 500 && response.status < 600
-    raise_access_denied_for_fallback(response) if response.status == 403
     raise_if_response_network_error(response)
-    pretty_print_error("API Error", response.status, ErrorResponseBody.format_body(response.body.to_s))
-    exit 1
-  end
-
-  def raise_access_denied_for_fallback(response)
-    return unless fallback_configured?
-
-    raw = ErrorResponseBody.raw_body_from_http_response(response)
-    detail = extract_error_message_from_response(response) || 'Access denied by security policy.'
-    raise AccessDeniedError.new("Primary API access denied: #{detail}", status: response.status, raw_body: raw)
   end
 
   def handle_error_response_without_status(response)
@@ -49,9 +38,7 @@ module PrimaryApiHttpErrors
     exit 1
   end
 
-  def raise_or_exit_balance_error(status, message, raw)
-    raise BalanceError.new(message, status: status, raw_body: raw) if fallback_configured?
-
+  def exit_balance_error(status, message, raw)
     detail = [message, ErrorResponseBody.format_body(raw)].reject { |s| s.to_s.strip.empty? }.join("\n\n")
     pretty_print_error("API Error", status, detail)
     exit 1
@@ -142,9 +129,7 @@ module PrimaryApiHttpErrors
   def raise_statusless_rate_limit(response, error_status)
     error_message = extract_error_message_from_response_object(response)
     raw = ErrorResponseBody.raw_body_from_http_response(response)
-    if balance_exhausted?(error_message, raw)
-      raise_or_exit_balance_error(error_status, balance_message(error_message), raw)
-    end
+    exit_balance_error(error_status, balance_message(error_message), raw) if balance_exhausted?(error_message, raw)
     ra = extract_retry_after_from_error_response(response)
     raise RateLimitError.new(rate_limit_message(error_message), retry_after: ra, raw_body: raw)
   end

@@ -1,13 +1,11 @@
 # frozen_string_literal: true
 
-# Primary API retry steps. When OpenRouter is configured, the first retry-worthy error is
-# re-raised for fallback. BalanceError is unrecoverable and propagates without retry.
+# Primary API retry steps with exponential backoff for rate limits, server errors, and network issues.
+# Balance-style dead ends print and exit via PrimaryApiHttpErrors instead of retrying.
 #
-# Host must implement: fallback_configured?, is_network_resource_error?,
-# exhaust_retry, exhaust_httpx_network_retries, and warn_*_body_on_first_retry (via PrimaryApiFallback).
+# Host must implement: raise_on_server_error?, is_network_resource_error?,
+# and primary_api_error_endpoint (for the once-per-request error-body warnings below).
 module PrimaryApiBackoff
-  RETRYABLE_FALLBACK_ERRORS = [NetworkResourceError, RateLimitError, ServerError].freeze
-
   def self.included(base)
     base.prepend(NetworkErrors)
     base.include(Methods)
@@ -29,15 +27,7 @@ module PrimaryApiBackoff
   end
 
   module Methods
-    def rethrow_for_openrouter_fallback(error)
-      return unless fallback_configured?
-      raise error if RETRYABLE_FALLBACK_ERRORS.any? { |klass| error.is_a?(klass) }
-
-      raise NetworkResourceError, "Network/resource error: #{error.message}"
-    end
-
     def primary_backoff_after_httpx(e, retries, max_retries, base_delay)
-      rethrow_for_openrouter_fallback(e)
       if is_network_resource_error?(e.message.to_s)
         primary_backoff_network_httpx(e, retries, max_retries, base_delay)
       else
@@ -62,7 +52,6 @@ module PrimaryApiBackoff
     end
 
     def primary_backoff_network_resource(e, retries, max_retries, base_delay)
-      rethrow_for_openrouter_fallback(e)
       r = retries + 1
       if r > max_retries
         exhaust_retry(e, "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}")
@@ -72,7 +61,6 @@ module PrimaryApiBackoff
     end
 
     def primary_backoff_rate_limit(e, retries, max_retries, base_delay)
-      rethrow_for_openrouter_fallback(e)
       r = retries + 1
       if r > max_retries
         exhaust_retry(e, "❌ Rate limit exceeded after #{max_retries} retries: #{e.message}")
@@ -82,7 +70,6 @@ module PrimaryApiBackoff
     end
 
     def primary_backoff_server(e, retries, max_retries, base_delay)
-      rethrow_for_openrouter_fallback(e)
       r = retries + 1
       if r > max_retries
         exhaust_retry(e, "❌ Server error persisted after #{max_retries} retries")
@@ -118,8 +105,6 @@ module PrimaryApiBackoff
       begin
         yield
       rescue NetworkResourceError => e
-        rethrow_for_openrouter_fallback(e)
-
         retries += 1
         if retries <= max_retries
           handle_network_resource_retry(e, retries, max_retries, base_delay)
@@ -159,6 +144,39 @@ module PrimaryApiBackoff
       delay = base_delay * (2**(retries - 1))
       warn "⚠️  Server error (#{error.status}), retrying in #{delay}s... (#{retries}/#{max_retries})"
       sleep(delay)
+    end
+
+    def exhaust_httpx_network_retries(e, max_retries)
+      exhaust_retry(e, "❌ Network/resource error persisted after #{max_retries} retries: #{e.message}")
+    end
+
+    # Stops the process when retries are exhausted, unless the host asked server errors to propagate.
+    def exhaust_retry(error, message)
+      raise error if error.is_a?(ServerError) && raise_on_server_error?
+
+      warn message
+      exit 1
+    end
+
+    def warn_rate_limit_body_on_first_retry(error, retries)
+      return unless retries == 1 && error.is_a?(RateLimitError) && !error.raw_body.to_s.strip.empty?
+
+      warn_primary_api_endpoint_line
+      ErrorResponseBody.warn_if_present("Primary API HTTP 429 response body:", error.raw_body)
+    end
+
+    def warn_server_body_on_first_retry(error, retries)
+      return unless retries == 1 && error.is_a?(ServerError) && !error.raw_body.to_s.strip.empty?
+
+      warn_primary_api_endpoint_line
+      ErrorResponseBody.warn_if_present("Primary API HTTP #{error.status} response body:", error.raw_body)
+    end
+
+    def warn_primary_api_endpoint_line
+      return unless respond_to?(:primary_api_error_endpoint, true)
+
+      ep = send(:primary_api_error_endpoint).to_s.strip
+      warn "Primary API endpoint: #{ep}" unless ep.empty?
     end
   end
 end
