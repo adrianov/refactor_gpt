@@ -92,13 +92,18 @@ class QualityHook
   end
 
   def bootstrap_path
-    extras = []
+    # rbenv exec exports RBENV_VERSION and RBENV_DIR for its child; without
+    # this every shim we spawn would run the hook interpreter's ruby resolved
+    # from the launch dir instead of each root's .ruby-version pin (e.g.
+    # bundle exec rubocop breaking on a foreign lockfile).
+    %w[RBENV_VERSION RBENV_DIR].each { |k| ENV.delete(k) }
+    ENV['PATH'] = (path_extras + [ENV['PATH'] || '/usr/bin:/bin']).join(':')
+  end
+
+  def path_extras
     home = ENV['HOME'].to_s
-    extras << "#{home}/.rbenv/shims" if File.directory?("#{home}/.rbenv/shims")
-    extras << "#{home}/.rbenv/bin" if File.directory?("#{home}/.rbenv/bin")
-    extras << '/opt/homebrew/bin' if File.directory?('/opt/homebrew/bin')
-    extras << "#{home}/.local/bin" if File.directory?("#{home}/.local/bin")
-    ENV['PATH'] = (extras + [ENV['PATH'] || '/usr/bin:/bin']).join(':')
+    ["#{home}/.rbenv/shims", "#{home}/.rbenv/bin", '/opt/homebrew/bin', "#{home}/.local/bin"]
+      .select { |d| File.directory?(d) }
   end
 
   def empty
