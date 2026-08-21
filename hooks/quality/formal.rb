@@ -51,8 +51,10 @@ module Quality
       rem = rubocop_remaining(files, rake: true, label: '-a --no-color', args: %w[-a --no-color])
       rem && "#{RUBOCOP_LEFT}\n\n#{truncate(rem)}"
     end
+    # AbcSize, lizard CCN, and ≥200-line extraction: QUALITY_OWN_GITHUB only (same as --push).
     def abcsize_report(files)
-      rb = ruby_files(files).reject { |f| f =~ %r{(^|/)db/migrate/}i || routing_file?(f) }
+      rb = ruby_files(files).select { |f| owned_repo?(f) }
+                            .reject { |f| f =~ %r{(^|/)db/migrate/}i || routing_file?(f) }
       rem = rubocop_remaining(rb, rake: false, label: '--only Metrics/AbcSize --format quiet',
                               args: %w[--only Metrics/AbcSize --format quiet])
       rem && "#{ABC_LEFT}\n\n#{truncate(rem)}"
@@ -63,7 +65,7 @@ module Quality
         STDERR.puts '[quality] lizard not found on PATH; skip'
         return nil
       end
-      keep = lizard_keep(lizard_python(bin), files)
+      keep = lizard_keep(lizard_python(bin), files.select { |f| owned_repo?(f) })
       return nil if keep.empty?
 
       STDERR.puts "[quality] lizard -C 15 -w -i 0 -Ecpre -- #{keep.join(' ')}"
@@ -72,7 +74,6 @@ module Quality
       STDERR.puts combined
       code == 0 || combined.strip.empty? ? nil : "#{LIZARD_LEFT}\n\n#{truncate(combined)}"
     end
-    # ≥200-line extraction only for QUALITY_OWN_GITHUB remotes (same gate as --push).
     def spec_length_report(this_turn)
       own = long_specs(this_turn.select { |f| f =~ /_spec\.rb$/i && owned_repo?(f) })
       own.empty? ? nil : own_spec_msg(own)

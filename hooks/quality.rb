@@ -5,9 +5,9 @@
 # Stages: formal → review → document → git_commit_gpt. One follow-up per stop.
 #
 # 1. Collect files edited after the last user message.
-# 2. Formal: RuboCop, AbcSize, lizard; ≥200-line spec/module extraction only
-#    when origin matches QUALITY_OWN_GITHUB (same gate as --push). Failures
-#    retry this stage after the agent fixes them.
+# 2. Formal: RuboCop always; AbcSize, lizard CCN, and ≥200-line spec/module
+#    extraction only when origin matches QUALITY_OWN_GITHUB (same gate as
+#    --push). Failures retry this stage after the agent fixes them.
 # 3. Review: completion check and scatter (once per cycle; reset if formal
 #    or commit complains), plus schema.rb.
 # 4. Document: wording for new .md files only, once, right before commit.
@@ -22,7 +22,8 @@
 # Optional env:
 #   GIT_COMMIT_GPT       — path to git_commit_gpt.rb (default: ../../git_commit_gpt.rb)
 #   QUALITY_OWN_GITHUB   — GitHub username/org; when set, owned remotes get
-#                          --push and ≥200-line spec/module extraction
+#                          --push, AbcSize, lizard CCN, and ≥200-line
+#                          spec/module extraction
 #   QUALITY_RUBOCOP_DOCKER=1 — run RuboCop via docker compose for matching apps
 #   QUALITY_RUBOCOP_DOCKER_SERVICE  — compose service name (required when docker on)
 #   QUALITY_RUBOCOP_DOCKER_BASENAME — Gemfile-root basename (default: SERVICE)
