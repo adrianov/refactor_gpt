@@ -6,7 +6,7 @@ Ruby CLI tools that use large language models for refactoring, code search, shel
 
 - Ruby 2.7 or higher
 - The Silver Searcher (`ag`) for code search
-- OpenAI API access
+- OpenRouter API key
 - Optional: [`glow`](https://github.com/charmbracelet/glow) for Markdown output in `ask_gpt.rb`
 
 ## Installation
@@ -36,27 +36,17 @@ Ruby CLI tools that use large language models for refactoring, code search, shel
    cp .env.example .env
    ```
 
-2. Edit `.env` and set your API credentials. Set `MODEL` (and optionally `TECHNICAL_MODEL`, `IMAGE_MODEL`). The backend follows the model name (e.g. `claude-*` → Claude, `gemini-*` → Gemini, `gpt-*` → OpenAI). Configure the backend(s) you use:
+2. Edit `.env` and set `OPENROUTER_API_KEY` (required). All tools call OpenRouter with the model
+   `stealth/ox-alpha` by default.
 
-   **Example models:**
-   ```
-   MODEL=claude-sonnet-4-6
-   TECHNICAL_MODEL=claude-haiku-4-5
-   IMAGE_MODEL=gemini-2.0-flash-exp
-   ```
+   Optional overrides:
+   - `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api/v1`)
+   - `MODEL` (default `stealth/ox-alpha`)
+   - `REQUEST_TIMEOUT` (default `600` seconds)
 
-   **Claude** (for `claude-*` models): `CLAUDE_BASE_URL`, `CLAUDE_ACCESS_TOKEN`
-
-   **OpenAI** (for `gpt-*`, `composer-*`, `dall-e*`): `OPENAI_BASE_URL`, `OPENAI_ACCESS_TOKEN`
-
-   **Gemini** (for `gemini-*`): `GEMINI_BASE_URL`, `GEMINI_ACCESS_TOKEN`
-
-   **OpenRouter fallback** (optional; used after retryable `429`, `5xx`, or network failures): `OPENROUTER_API_KEY`
-   Optional overrides: `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`
-
-   If `MODEL` is unset, the default follows which token is present (Claude first, then Gemini, then OpenAI). The `--search` flag uses OpenAI's search model.
-
-   Supported providers (Anthropic, Qwen, Gemini, and Auto) cache a stable system prompt (instructions and project rules) on OpenRouter via `cache_control`. Working-tree state such as git status, diffs, and directory listings goes in the user message so different changes still hit the same cache.
+   A stable system prompt (instructions and project rules) is cached on OpenRouter via `cache_control`.
+   Working-tree state such as git status, diffs, and directory listings goes in the user message so
+   different changes still hit the same cache.
 
    **Proxy (optional):**
    - Add `PROXY_URL` to this app's `.env` (example: `PROXY_URL=socks5://127.0.0.1:1080`)
@@ -102,7 +92,7 @@ refactor file.rb "make it more readable"
 agpt "find all database queries"
 bashgpt "list all files modified today"
 ask "explain how Ruby blocks work"
-ask --search "search the web for this"
+ask --short "quick answer, please"
 gcommit "plan and create structured git commits"
 ge "explain current git changes"
 superagent "refactor the whole project to use dry-rb"
@@ -119,7 +109,6 @@ Usage:
 ```
 
 Features:
-- **Multi-model fallback**: Tries Gemini, Claude, and other models in order.
 - **Automatic verification**: A separate agent pass checks that the changes satisfy the request.
 - **Out-of-scope handling**: If the request is outside the project, the agent may output `FAILED: OUT_OF_SCOPE`; verification is skipped and the run is treated as failed.
 - **Stdin job driver** (`--stdin-commands`): Read JSON job lines from stdin, run one agent step per job (implement/verification/refactor/ask), write `{"done":true,"code":N}` to stdout. A driver can keep one long-lived Ruby process and send several jobs.
@@ -179,7 +168,7 @@ A terminal assistant for questions, explanations, and quick ideas.
 
 Usage:
 ./ask_gpt.rb "Your question or request here"
-./ask_gpt.rb --search "Your question requiring web search"
+./ask_gpt.rb --short "Your question, answered briefly"
 
 Features:
 - Answers programming and non-programming questions
@@ -189,11 +178,6 @@ Features:
   - **md2term** (preferred) - Install with `pip install md2term` or `uv tool install md2term`
   - **glow** (fallback) - Install with `brew install glow` or equivalent for your system
   - Plain text if neither is installed
-- Picks a provider from `.env`:
-  - **Gemini 3 Flash** if `GEMINI_ACCESS_TOKEN` is set
-  - **GPT models** via the OpenAI API if `OPENAI_ACCESS_TOKEN` is set
-  - **Search mode** (`--search`) always uses OpenAI's `gpt-4o-search-preview` model
-  - **OpenRouter fallback** after retryable primary API failures when `OPENROUTER_API_KEY` is set
 
 ### git_commit_gpt.rb
 
@@ -215,7 +199,6 @@ Features:
 - Drops planned paths that are not in `git status`; `git commit` only receives staged pathspecs
 - Prints a commit plan before any `git add`/`git commit`
 - Reviews the diff for defects and for breaks of Cursor rules from the project `.cursor/rules/` and the user `~/.cursor/rules/`, then prints each warning with a probability score
-- Falls back to OpenRouter when the primary API is rate-limited or briefly unavailable
 
 ### git_explain_gpt.rb
 

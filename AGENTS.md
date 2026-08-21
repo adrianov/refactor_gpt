@@ -1,6 +1,6 @@
 # RefactorGPT Tools
 
-A collection of Ruby scripts that leverage GPT-5.1 to help with code refactoring, searching, and bash command generation.
+A collection of Ruby scripts that use OpenRouter models to help with code refactoring, searching, and bash command generation.
 
 ## Project Overview
 
@@ -56,13 +56,13 @@ When modifying LLM prompts or system instructions in AI-driven applications:
 - Prefer HEREDOC for multiline strings over string concatenation
 
 ### Imports and Dependencies
-- Use `require_relative` for local files: `require_relative "lib/openai_client"`
+- Use `require_relative` for local files: `require_relative "lib/openrouter_client"`
 - External gems required: `httpx`, `oj`, `ruby-progressbar`, `colorize`, `shellwords`, `tty-box`, `tty-cursor` (superagent TUI)
 - Use `rbconfig` for OS detection in cross-platform scripts
 - Use `reline` for interactive CLI input
 
 ### Naming Conventions
-- **Classes**: PascalCase (`OpenAiClient`, `FileProcessor`)
+- **Classes**: PascalCase (`OpenrouterClient`, `FileProcessor`)
 - **Modules**: PascalCase (`AgentsFileHandler`, `Utility`)
 - **Methods**: snake_case (`ask`, `refactor`, `build_system_instruction`)
 - **Constants**: UPPER_SNAKE_CASE (`DEFAULT_MODEL`, `REQUEST_TIMEOUT`, `CODE_EXTENSIONS`)
