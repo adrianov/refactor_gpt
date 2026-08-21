@@ -7,7 +7,6 @@ require 'uri'
 module OpenrouterHeaders
   REFERER = 'https://github.com/adrianov/refactor_gpt'
   TITLE = 'RefactorGPT'
-  CATEGORIES = 'cli-agent'
 
   module_function
 
@@ -16,20 +15,13 @@ module OpenrouterHeaders
 
     {
       'HTTP-Referer' => REFERER,
-      'X-OpenRouter-Title' => TITLE,
-      'X-OpenRouter-Categories' => CATEGORIES
+      'X-Title' => TITLE
     }
   end
 
   def openrouter_host?(base_url)
     host = uri_host(base_url)
     host&.end_with?('openrouter.ai')
-  end
-
-  def same_host?(url_a, url_b)
-    host_a = uri_host(url_a)
-    host_b = uri_host(url_b)
-    !host_a.nil? && host_a == host_b
   end
 
   def uri_host(url)

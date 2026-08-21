@@ -1,49 +1,43 @@
 # frozen_string_literal: true
 
+require 'ruby_llm'
 require 'minitest/autorun'
 require_relative '../lib/loader'
 
-# OpenRouter answer extraction must tolerate non-chat JSON without crashing.
+# Client wiring on ruby-llm: answer extraction, JSON fallback, attribution headers,
+# reasoning passthrough, and unexpected-error propagation.
 class TestOpenrouterClient < Minitest::Test
   def client
     OpenrouterClient.new(api_key: 'test-key', debug: false)
   end
 
-  def response_with(body, status: 200)
-    Object.new.tap do |resp|
-      resp.define_singleton_method(:status) { status }
-      resp.define_singleton_method(:body) { body }
+  def assistant_message(content:, thinking_text: nil)
+    RubyLLM::Message.new(
+      role: :assistant, content: content,
+      thinking: thinking_text && RubyLLM::Thinking.new(text: thinking_text)
+    )
+  end
+
+  def test_answer_from_returns_content
+    assert_equal 'hello', client.send(:answer_from, assistant_message(content: 'hello'))
+  end
+
+  def test_answer_from_uses_thinking_when_content_blank
+    assert_equal 'from thinking', 
+client.send(:answer_from, assistant_message(content: nil, thinking_text: 'from thinking'))
+  end
+
+  def test_ensure_answer_exits_on_empty
+    out, err = capture_io do
+      assert_raises(SystemExit) { client.send(:ensure_answer!, '', assistant_message(content: nil)) }
     end
-  end
-
-  def test_extract_answer_returns_content
-    resp = response_with('{"choices":[{"message":{"content":"hello"}}]}')
-    assert_equal 'hello', client.send(:extract_answer, resp)
-  end
-
-  def test_extract_answer_uses_reasoning_when_content_null
-    body = '{"choices":[{"message":{"content":null,"reasoning":"from thinking"}}]}'
-    assert_equal 'from thinking', client.send(:extract_answer, response_with(body))
-  end
-
-  def test_extract_answer_exits_on_null_body
-    resp = response_with('null')
-    out, err = capture_io { assert_raises(SystemExit) { client.send(:extract_answer, resp) } }
     assert_empty out
-    assert_includes err, 'No answer returned from OpenRouter API.'
-  end
-
-  def test_extract_answer_exits_on_missing_choices
-    resp = response_with('{"id":"x","error":{"message":"weird"}}')
-    _out, err = capture_io do
-      assert_raises(SystemExit) { client.send(:extract_answer, resp) }
-    end
     assert_includes err, 'No answer returned from OpenRouter API.'
   end
 
   def test_ask_propagates_unexpected_errors
     c = client
-    c.define_singleton_method(:make_request_with_debug) { |*| raise NoMethodError, "dig for nil" }
+    c.define_singleton_method(:build_chat) { |*| raise NoMethodError, 'dig for nil' }
     assert_raises(NoMethodError) { c.ask([{role: 'user', content: 'hi'}]) }
   end
 
@@ -68,10 +62,9 @@ class TestOpenrouterClient < Minitest::Test
   end
 
   def test_request_headers_include_app_attribution
-    headers = client.send(:request_headers)
-    assert_equal 'https://github.com/adrianov/refactor_gpt', headers['HTTP-Referer']
-    assert_equal 'RefactorGPT', headers['X-OpenRouter-Title']
-    assert_equal 'cli-agent', headers['X-OpenRouter-Categories']
+    chat = client.send(:build_chat, [{role: 'user', content: 'hi'}])
+    assert_equal 'https://github.com/adrianov/refactor_gpt', chat.headers['HTTP-Referer']
+    assert_equal 'RefactorGPT', chat.headers['X-Title']
   end
 
   def test_openrouter_headers_only_for_openrouter_hosts
@@ -80,20 +73,43 @@ class TestOpenrouterClient < Minitest::Test
     assert_empty OpenrouterHeaders.for_base_url('https://api.openai.com/v1')
   end
 
-  def test_build_request_body_includes_reasoning_when_set
+  def test_build_chat_includes_reasoning_when_set
     c = OpenrouterClient.new(api_key: 'test-key', reasoning: { effort: 'low' })
-    body = c.send(:build_request_body, [{ role: 'user', content: 'hi' }])
-    assert_equal({ effort: 'low' }, body[:reasoning])
+    thinking = c.send(:build_chat, [{role: 'user', content: 'hi'}]).instance_variable_get(:@thinking)
+    assert_equal 'low', thinking.effort
   end
 
-  def test_build_request_body_omits_reasoning_by_default
-    body = client.send(:build_request_body, [{ role: 'user', content: 'hi' }])
-    refute body.key?(:reasoning)
+  def test_build_chat_omits_reasoning_by_default
+    refute client.send(:build_chat, [{role: 'user', content: 'hi'}]).instance_variable_get(:@thinking)
   end
 
   def test_commit_plan_client_uses_low_reasoning
     inner = CommitPlanClient.new(debug: false, progress: false).instance_variable_get(:@client)
-    body = inner.send(:build_request_body, [{ role: 'user', content: 'hi' }])
-    assert_equal({ effort: 'low' }, body[:reasoning])
+    thinking = inner.send(:build_chat, [{role: 'user', content: 'hi'}]).instance_variable_get(:@thinking)
+
+    assert_equal 'low', thinking.effort
+  end
+
+  def env_with_status(status)
+    Object.new.tap { |env| env.define_singleton_method(:status) { status } }
+  end
+
+  def test_streaming_shim_routes_two_arg_on_data_to_chunk_path
+    seen = []
+    failed = []
+    handler = TyphoeusStreamingCompat.v2_on_data(->(chunk, _env) { seen << chunk }, ->(chunk, _env) { failed << chunk })
+    handler.call('data: {"id":1}', 13)
+    assert_equal ['data: {"id":1}'], seen
+    assert_empty failed
+  end
+
+  def test_streaming_shim_keeps_three_arg_behavior
+    ok = []
+    failed = []
+    handler = TyphoeusStreamingCompat.v2_on_data(->(chunk, _env) { ok << chunk }, ->(chunk, _env) { failed << chunk })
+    handler.call('a', 1, env_with_status(200))
+    handler.call('b', 2, env_with_status(500))
+    assert_equal ['a'], ok
+    assert_equal ['b'], failed
   end
 end

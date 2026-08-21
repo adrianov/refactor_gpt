@@ -18,7 +18,7 @@ Ruby CLI tools that use large language models for refactoring, code search, shel
    ```
    or:
    ```bash
-   gem install httpx oj ruby-progressbar colorize tty-box tty-cursor
+   gem install ruby_llm typhoeus faraday-typhoeus oj parser ruby-progressbar colorize tty-box tty-cursor tty-screen zeitwerk
    ```
 3. Install The Silver Searcher (required for `ag_gpt.rb`):
    - macOS: `brew install the_silver_searcher`

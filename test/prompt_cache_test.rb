@@ -9,152 +9,143 @@ class TestPromptCache < Minitest::Test
   OPENAI = 'https://api.openai.com/v1'
   OTHER = 'https://api.example.com/v1'
   SYSTEM = 'Be a concise Ruby assistant.'
+  CACHE_BLOCKS = [{type: 'text', text: SYSTEM, cache_control: {type: 'ephemeral'}}].freeze
 
   def messages(system: SYSTEM, user: 'Hi')
     [{role: 'system', content: system}, {role: 'user', content: user}]
   end
 
-  def apply(model:, base_url:, msgs: nil, session_id: nil)
-    body = {model: model, messages: (msgs || messages).map(&:dup)}
-    PromptCache.apply!(body, model: model, base_url: base_url, session_id: session_id)
-    body
+  def params(model:, base_url:, msgs: nil, session_id: nil)
+    PromptCache.request_params(msgs || messages, model: model, base_url: base_url, session_id: session_id)
+  end
+
+  def cached_system_content(model:, base_url:, msgs: nil)
+    PromptCache.cached_messages(msgs || messages, model: model, base_url: base_url)
+               .find { |m| m[:role] == 'system' }[:content]
+  end
+
+  def raw_blocks(content)
+    assert_instance_of RubyLLM::Content::Raw, content
+    content.value
   end
 
   def test_skips_when_system_prompt_is_blank
-    [apply(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER, msgs: [{role: 'user', content: 'hi'}]),
-     apply(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER,
-       msgs: [{role: 'system', content: ''}, {role: 'user', content: 'hi'}]),
-     apply(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER,
-       msgs: [{role: 'system', content: '  '}, {role: 'user', content: 'hi'}])].each do |body|
-      refute body.key?(:cache_control)
-      refute body.key?(:prompt_cache_key)
-      refute body.key?(:session_id)
-      sys = body[:messages].find { |m| m[:role] == 'system' }
-      refute_instance_of Array, sys[:content] if sys
+    blank_cases = [
+      [{role: 'user', content: 'hi'}],
+      [{role: 'system', content: ''}, {role: 'user', content: 'hi'}],
+      [{role: 'system', content: '  '}, {role: 'user', content: 'hi'}]
+    ]
+    blank_cases.each do |msgs|
+      assert_empty params(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER, msgs: msgs)
+      assert_equal(
+        msgs,
+        PromptCache.cached_messages(msgs, model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER)
+      )
     end
   end
 
   def test_openrouter_anthropic_wraps_system_and_sets_key
-    body = apply(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER)
-    assert_equal({type: 'ephemeral'}, body[:cache_control])
-    assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key]
-    refute body.key?(:session_id)
-    assert_equal(
-      [{type: 'text', text: SYSTEM, cache_control: {type: 'ephemeral'}}],
-      body[:messages].find { |m| m[:role] == 'system' }[:content]
-    )
+    result = params(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER)
+    assert_equal({type: 'ephemeral'}, result[:cache_control])
+    assert_equal PromptCache.cache_key(SYSTEM), result[:prompt_cache_key]
+    refute result.key?(:session_id)
+    assert_equal CACHE_BLOCKS, 
+raw_blocks(cached_system_content(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER))
   end
 
   def test_prompt_cache_key_stable_for_same_system_not_user_text
-    a = apply(model: 'openrouter/anthropic/claude-sonnet-4', base_url: OPENROUTER, msgs: messages(user: 'A'))
-    b = apply(model: 'openrouter/~anthropic/claude-haiku-latest', base_url: OPENROUTER, msgs: messages(user: 'B'))
-    c = apply(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER, msgs: messages(system: 'Other', user: 'A'))
+    a = params(model: 'openrouter/anthropic/claude-sonnet-4', base_url: OPENROUTER, msgs: messages(user: 'A'))
+    b = params(model: 'openrouter/~anthropic/claude-haiku-latest', base_url: OPENROUTER, msgs: messages(user: 'B'))
+    c = params(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER, msgs: messages(system: 'Other', user: 'A'))
     assert_equal a[:prompt_cache_key], b[:prompt_cache_key]
     refute_equal a[:prompt_cache_key], c[:prompt_cache_key]
   end
 
   def test_openrouter_qwen_uses_explicit_breakpoints
-    body = apply(model: 'qwen/qwen3-32b', base_url: OPENROUTER)
-    assert_equal({type: 'ephemeral'}, body[:cache_control])
-    assert body[:prompt_cache_key]
-    refute body.key?(:session_id)
+    result = params(model: 'qwen/qwen3-32b', base_url: OPENROUTER)
+    assert_equal({type: 'ephemeral'}, result[:cache_control])
+    assert result[:prompt_cache_key]
+    refute result.key?(:session_id)
   end
 
   def test_openrouter_gemini_wraps_system_and_sets_key
     %w[google/gemini-3.7-flash gemini-3.7-flash openrouter/google/gemini-3.7-flash].each do |model|
-      body = apply(model: model, base_url: OPENROUTER)
-      assert_equal({type: 'ephemeral'}, body[:cache_control], model)
-      assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key], model
-      refute body.key?(:session_id)
-      assert_equal(
-        [{type: 'text', text: SYSTEM, cache_control: {type: 'ephemeral'}}],
-        body[:messages].find { |m| m[:role] == 'system' }[:content]
-      )
+      result = params(model: model, base_url: OPENROUTER)
+      assert_equal({type: 'ephemeral'}, result[:cache_control], model)
+      assert_equal PromptCache.cache_key(SYSTEM), result[:prompt_cache_key], model
+      refute result.key?(:session_id)
+      assert_equal CACHE_BLOCKS, raw_blocks(cached_system_content(model: model, base_url: OPENROUTER)), model
     end
   end
 
   def test_openrouter_auto_gets_cache_markers_and_session_id
-    body = apply(model: 'openrouter/auto', base_url: OPENROUTER)
-    assert_equal({type: 'ephemeral'}, body[:cache_control])
-    assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key]
-    assert_equal "refactor-#{Process.pid}", body[:session_id]
-    assert_equal(
-      [{type: 'text', text: SYSTEM, cache_control: {type: 'ephemeral'}}],
-      body[:messages].find { |m| m[:role] == 'system' }[:content]
-    )
+    result = params(model: 'openrouter/auto', base_url: OPENROUTER)
+    assert_equal({type: 'ephemeral'}, result[:cache_control])
+    assert_equal PromptCache.cache_key(SYSTEM), result[:prompt_cache_key]
+    assert_equal "refactor-#{Process.pid}", result[:session_id]
+    assert_equal CACHE_BLOCKS, raw_blocks(cached_system_content(model: 'openrouter/auto', base_url: OPENROUTER))
   end
 
   def test_openrouter_auto_uses_explicit_session_id
-    body = apply(model: 'openrouter/auto', base_url: OPENROUTER, session_id: 'refactor-run-42')
-    assert_equal 'refactor-run-42', body[:session_id]
+    result = params(model: 'openrouter/auto', base_url: OPENROUTER, session_id: 'refactor-run-42')
+    assert_equal 'refactor-run-42', result[:session_id]
   end
 
   def test_openrouter_other_model_gets_key_without_cache_control
-    body = apply(model: 'openai/gpt-4o-mini', base_url: OPENROUTER)
-    refute body.key?(:cache_control)
-    refute body.key?(:session_id)
-    assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key]
-    assert_equal SYSTEM, body[:messages].find { |m| m[:role] == 'system' }[:content]
+    result = params(model: 'openai/gpt-4o-mini', base_url: OPENROUTER)
+    refute result.key?(:cache_control)
+    refute result.key?(:session_id)
+    assert_equal PromptCache.cache_key(SYSTEM), result[:prompt_cache_key]
+    assert_equal SYSTEM, cached_system_content(model: 'openai/gpt-4o-mini', base_url: OPENROUTER)
   end
 
-  def test_openai_host_gets_no_cache_fields
-    body = apply(model: 'gpt-5-nano', base_url: OPENAI)
-    refute body.key?(:cache_control)
-    refute body.key?(:prompt_cache_key)
-    refute body.key?(:session_id)
-    assert_equal SYSTEM, body[:messages].find { |m| m[:role] == 'system' }[:content]
-  end
-
-  def test_unknown_host_gets_no_cache_fields
-    body = apply(model: 'claude-sonnet-4-6', base_url: OTHER)
-    refute body.key?(:cache_control)
-    refute body.key?(:prompt_cache_key)
-    assert_equal SYSTEM, body[:messages].find { |m| m[:role] == 'system' }[:content]
+  def test_non_openrouter_hosts_get_no_cache_fields
+    [
+      {model: 'gpt-5-nano', base_url: OPENAI},
+      {model: 'claude-sonnet-4-6', base_url: OTHER}
+    ].each do |case_data|
+      assert_empty params(**case_data)
+      assert_equal SYSTEM, cached_system_content(**case_data)
+    end
   end
 
   def test_does_not_mutate_original_system_message
     original = messages
-    apply(model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER, msgs: original)
+    PromptCache.cached_messages(original, model: 'anthropic/claude-sonnet-4', base_url: OPENROUTER)
     assert_equal SYSTEM, original.first[:content]
   end
 
-  def test_openrouter_client_applies_cache_on_anthropic_model
-    client = OpenrouterClient.new(api_key: 'test-key', model: 'anthropic/claude-sonnet-4')
-    body = client.send(:build_request_body, messages)
-    assert_equal({type: 'ephemeral'}, body[:cache_control])
-    assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key]
-    refute body.key?(:session_id)
+  def cached_chat(model:, base_url: nil)
+    kwargs = { api_key: 'test-key', model: model }
+    kwargs[:api_base_url] = base_url if base_url
+    OpenrouterClient.new(**kwargs).send(:build_chat, messages)
   end
 
-  def test_openrouter_client_applies_cache_on_auto_model
-    client = OpenrouterClient.new(api_key: 'test-key', model: 'openrouter/auto')
-    body = client.send(:build_request_body, messages)
-    assert_equal({type: 'ephemeral'}, body[:cache_control])
-    assert_equal PromptCache.cache_key(SYSTEM), body[:prompt_cache_key]
-    assert_equal "refactor-#{Process.pid}", body[:session_id]
+  def system_content(chat)
+    chat.messages.find { |m| m.role == :system }.content
   end
 
-  def test_openrouter_client_skips_explicit_cache_off_openrouter
-    client = OpenrouterClient.new(
-      api_key: 'test-key',
-      api_base_url: 'https://api.anthropic.com/v1',
-      model: 'claude-sonnet-4-6'
-    )
-    body = client.send(:build_request_body, messages)
-    refute body.key?(:cache_control)
-    refute body.key?(:prompt_cache_key)
-    refute body.key?(:session_id)
+  def test_client_build_chat_applies_cache_on_anthropic_model
+    chat = cached_chat(model: 'anthropic/claude-sonnet-4')
+    assert_equal({type: 'ephemeral'}, chat.params[:cache_control])
+    assert_equal PromptCache.cache_key(SYSTEM), chat.params[:prompt_cache_key]
+    refute chat.params.key?(:session_id)
+    assert_equal CACHE_BLOCKS, raw_blocks(system_content(chat))
   end
 
-  def test_openrouter_client_skips_cache_on_non_openrouter_host
-    client = OpenrouterClient.allocate
-    client.instance_variable_set(:@model, 'gpt-5-nano')
-    client.instance_variable_set(:@api_base_url, OPENAI)
-    client.instance_variable_set(:@max_completion_tokens, nil)
-    body = client.send(:build_request_body, messages)
-    refute body.key?(:cache_control)
-    refute body.key?(:prompt_cache_key)
-    refute body.key?(:session_id)
+  def test_client_build_chat_applies_cache_on_auto_model
+    chat = cached_chat(model: 'openrouter/auto')
+    assert_equal({type: 'ephemeral'}, chat.params[:cache_control])
+    assert_equal PromptCache.cache_key(SYSTEM), chat.params[:prompt_cache_key]
+    assert_equal "refactor-#{Process.pid}", chat.params[:session_id]
+  end
+
+  def test_client_build_chat_skips_cache_off_openrouter_host
+    chat = cached_chat(model: 'gpt-5-nano', base_url: OTHER)
+    refute chat.params.key?(:cache_control)
+    refute chat.params.key?(:prompt_cache_key)
+    refute chat.params.key?(:session_id)
+    assert_equal SYSTEM, system_content(chat)
   end
 end
 

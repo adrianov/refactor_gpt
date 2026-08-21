@@ -57,7 +57,7 @@ When modifying LLM prompts or system instructions in AI-driven applications:
 
 ### Imports and Dependencies
 - Use `require_relative` for local files: `require_relative "lib/openrouter_client"`
-- External gems required: `httpx`, `oj`, `ruby-progressbar`, `colorize`, `shellwords`, `tty-box`, `tty-cursor` (superagent TUI)
+- External gems required: `ruby_llm`, `typhoeus`, `faraday-typhoeus`, `oj`, `ruby-progressbar`, `colorize`, `shellwords`, `tty-box`, `tty-cursor` (superagent TUI)
 - Use `rbconfig` for OS detection in cross-platform scripts
 - Use `reline` for interactive CLI input
 
@@ -85,7 +85,7 @@ When modifying LLM prompts or system instructions in AI-driven applications:
 - Check `$?.success?` after system commands
 - Use explicit exit codes (0 for success, 1 for failure)
 - Validate user input before processing
-- Gracefully handle network errors (HTTPX::Error)
+- Gracefully handle network errors (Faraday::ConnectionFailed, Faraday::TimeoutError, RubyLLM::ServerError)
 - Handle JSON parsing errors (Oj::ParseError)
 
 ### File Structure

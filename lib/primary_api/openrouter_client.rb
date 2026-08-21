@@ -1,183 +1,193 @@
 # frozen_string_literal: true
 
-require "httpx"
-require "oj"
-require "ruby-progressbar"
+require 'ruby_llm'
+require 'logger'
+require 'oj'
 
-# OpenRouter chat client with outbound proxy support, prompt cache markers, retries, and progress UI.
+# OpenRouter chat client built on ruby-llm: per-instance context (API key, base URL, SOCKS5
+# proxy, timeout, retries), prompt-cache markers, streamed progress UI, JSON mode, and
+# balance-exhaustion hard exit.
 class OpenrouterClient
   include AgentsFileHandler
-  include PrimaryApiClient
+  include PrimaryApiErrors
 
   attr_reader :model
-  DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-  DEFAULT_MODEL = "stealth/ox-alpha"
+  DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
+  DEFAULT_MODEL = 'stealth/ox-alpha'
   REQUEST_TIMEOUT = 600
-  DEFAULT_PROGRESS_SPEED = 300
-  PROGRESS_SPEED_FILE = File.join(Dir.home, ".refactor_gpt").freeze
 
-  # Resolves MODEL from the app .env (file wins over process env), falling back to the default model.
-  def self.default_model(env_vars = nil)
-    env = env_vars || ENV.to_h.merge(Utility.load_env_vars)
-    model = env["MODEL"].to_s.strip
-    model.empty? ? DEFAULT_MODEL : model
+  class << self
+    # Resolves MODEL from the app .env (file wins over process env), falling back to the default model.
+    def default_model(env_vars = nil)
+      env = env_vars || ENV.to_h.merge(Utility.load_env_vars)
+      model = env['MODEL'].to_s.strip
+      model.empty? ? DEFAULT_MODEL : model
+    end
   end
 
   def initialize(model: nil, debug: false, max_completion_tokens: nil,
     progress_title: nil, api_base_url: nil, api_key: nil, raise_on_server_error: false,
     reasoning: nil)
-    @api_base_url = api_base_url || fetch_env("OPENROUTER_BASE_URL", DEFAULT_BASE_URL)
-    @api_key = api_key || fetch_env("OPENROUTER_API_KEY")
-    @proxy_url = resolve_proxy_url
-    @model = model || fetch_env("MODEL", DEFAULT_MODEL)
+    @model = model || fetch_env('MODEL', DEFAULT_MODEL)
+    @api_base_url = api_base_url || fetch_env('OPENROUTER_BASE_URL', DEFAULT_BASE_URL)
+    @api_key = api_key || fetch_env('OPENROUTER_API_KEY')
     @debug = debug
     @max_completion_tokens = max_completion_tokens
     @reasoning = reasoning
-    @progress_title = progress_title
-    @env_vars = nil
-    @request_timeout = Integer(fetch_env("REQUEST_TIMEOUT", REQUEST_TIMEOUT))
-    @progress_mutex = Mutex.new
-    @progress_stop = false
     @raise_on_server_error = raise_on_server_error
+    @progress_title = progress_title
+    @context = build_ruby_llm_context
   end
 
   def ask(messages, json: false, title: nil)
-    title ||= @progress_title
-    title ? perform_progress_request(messages, json: json, title: title) : perform_request(messages, json: json)
-  end
-
-  def ask_with_progress(messages, json: false, title: nil)
-    perform_progress_request(messages, json: json, title: title)
+    run(messages, json: json, title: title || @progress_title)
   end
 
   private
 
-  def perform_request(messages, json: false)
-    execute_with_network_retry { make_request_with_debug(messages, json: json) }
-  rescue HTTPX::Error => e
-    raise NetworkResourceError, "Network/resource error: #{e.message}" if is_network_resource_error?(e.message.to_s)
-
-    handle_http_error(e)
-  end
-
-  def perform_progress_request(messages, json: false, title: nil)
-    execute_with_network_retry { setup_progress_tracking(messages, json: json, title: title) }
-  rescue HTTPX::Error => e
-    raise NetworkResourceError, "Network/resource error: #{e.message}" if is_network_resource_error?(e.message.to_s)
-
-    handle_http_error(e)
-  end
-
-  def is_network_resource_error?(error_message)
-    msg = error_message.to_s
-    msg.include?("resource_exhausted") || msg.match?(/connection\s+stalled/i) ||
-      msg.include?("CANCEL") || msg.include?("canceled") ||
-      msg.include?("stream closed") || msg.include?("closed with error") || msg.include?("0x8") ||
-      msg.include?("SSL_read: unexpected eof while reading")
-  end
-
-  def build_request_body(messages, json: false)
-    body = {model: @model, messages: messages}
-    body[:response_format] = {type: "json_object"} if json
-    body[:max_completion_tokens] = @max_completion_tokens if @max_completion_tokens
-    body[:reasoning] = @reasoning if @reasoning
-    PromptCache.apply!(body, model: @model, base_url: @api_base_url)
-    @last_payload_bytes = Oj.dump(body, mode: :compat).bytesize
-    body
-  end
-
-  def debug_request(body)
-    warn "--- OpenRouter request payload (Ruby hash) ---"
-    pretty_messages = body[:messages].map do |msg|
-      if msg[:content].is_a?(String)
-        {role: msg[:role], content_lines: msg[:content].split("\n")}
-      else
-        msg
+  def run(messages, json:, title:)
+    chat = build_chat(messages, json: json)
+    message = translate_api_errors do
+      complete_with_upstream_retries do
+        title ? complete_streamed(chat, messages, title) : chat.complete
       end
     end
-    warn Oj.dump(body.merge(messages: pretty_messages), mode: :compat, indent: 2)
-    warn "--- end payload ---"
+    answer = ensure_answer!(json_fallback(answer_from(message), json: json), message)
+    debug_response(answer) if @debug
+    answer
   end
 
-  def debug_response(answer)
-    warn "\n--- OpenRouter response content ---"
-    warn(answer ? (answer.is_a?(String) ? answer : Oj.dump(answer, mode: :compat, indent: 2)) : "(empty response)")
-    warn "--- end response ---\n"
-  end
-
-  def primary_api_error_endpoint
-    "#{@api_base_url}/chat/completions"
-  end
-
-  def make_api_request(body)
-    PrimaryApiHttp.build(timeout: @request_timeout, proxy_url: @proxy_url).post(
-      primary_api_error_endpoint,
-      headers: request_headers,
-      body: Oj.dump(body, mode: :compat)
-    )
-  end
-
-  def request_headers
-    {
-      'Content-Type' => 'application/json',
-      'Authorization' => "Bearer #{@api_key}"
-    }.merge(OpenrouterHeaders.for_base_url(@api_base_url))
-  end
-
-  def handle_response_errors(response)
-    return if response.status == 200
-    return handle_error_response_without_status(response) if response.status.nil?
-
-    handle_non_success_status(response)
-  rescue NoMethodError
-    handle_error_response_without_status(response)
-  rescue HTTPX::Error => e
-    if is_network_resource_error?(e.message.to_s)
-      raise NetworkResourceError.new("Network/resource error: #{e.message}")
+  def build_ruby_llm_context
+    proxy_url = PrimaryApiProxy.resolve(nil, load_env_vars)
+    socks = proxy_url.to_s.match?(%r{\Asocks5://}i)
+    if socks
+      require 'faraday/typhoeus'
+      require_relative 'streaming_compat'
+      TyphoeusStreamingCompat.apply
     end
-
-    raise e
+    RubyLLM.context { |config| apply_context_config(config, proxy_url, socks) }
   end
 
-  def extract_answer(response, json: false)
-    answer = CompletionAnswer.from_body(response&.body)
-    if json && answer && !OpenrouterJson.valid?(answer)
-      answer = OpenrouterJson.extract_from_text(answer) || answer
-    end
-    return answer unless answer.nil? || answer.empty?
+  # Per-instance isolation: key, base URL, timeout, proxy, and adapter apply to this client only.
+  def apply_context_config(config, proxy_url, socks)
+    config.openrouter_api_key = @api_key
+    config.openrouter_api_base = @api_base_url
+    config.openai_use_system_role = true
+    configure_timeouts(config)
+    configure_retries(config)
+    configure_transport(config, proxy_url, socks)
+    config.log_file = $stderr
+    config.log_level = Logger::DEBUG if @debug || ENV['RUBYLLM_DEBUG']
+  end
 
-    warn "No answer returned from OpenRouter API. Full response body:"
-    warn response.body
+  def configure_timeouts(config)
+    config.request_timeout = Integer(fetch_env('REQUEST_TIMEOUT', REQUEST_TIMEOUT))
+  end
+
+  # SOCKS5 proxies need typhoeus; Net::HTTP cannot speak socks5://.
+  def configure_transport(config, proxy_url, socks)
+    config.http_proxy = proxy_url unless proxy_url.to_s.strip.empty?
+    config.faraday_adapter = :typhoeus if socks
+  end
+
+  def configure_retries(config)
+    config.max_retries = PrimaryApiErrors::MAX_RETRIES
+    config.retry_interval = 5
+    config.retry_backoff_factor = 2
+  end
+
+  def build_chat(messages, json: false)
+    chat = @context.chat(model: @model, provider: :openrouter, assume_model_exists: true)
+    chat.with_headers(**OpenrouterHeaders.for_base_url(@api_base_url))
+    params = request_params(messages, json: json)
+    chat.with_params(**params) unless params.empty?
+    chat.with_thinking(**@reasoning) if @reasoning
+    seed_messages(chat, messages)
+    debug_request(messages, params) if @debug
+    chat
+  end
+
+  def request_params(messages, json:)
+    params = { response_format: { type: 'json_object' } } if json
+    params ||= {}
+    params[:max_completion_tokens] = @max_completion_tokens if @max_completion_tokens
+    params.merge!(PromptCache.request_params(messages, model: @model, base_url: @api_base_url))
+    params
+  end
+
+  def seed_messages(chat, messages)
+    PromptCache.cached_messages(messages, model: @model, base_url: @api_base_url).each do |message|
+      chat.add_message(role: message_role(message), content: message_content(message))
+    end
+  end
+
+  def complete_streamed(chat, messages, title)
+    bar = PrimaryApiProgress.create(title: title, estimate_bytes: messages.to_s.bytesize)
+    received = 0
+    chat.complete do |chunk|
+      delta = chunk.content.to_s
+      next if delta.empty?
+
+      received += delta.bytesize
+      PrimaryApiProgress.record(bar, received)
+    end
+  ensure
+    PrimaryApiProgress.finish(bar)
+  end
+
+  def message_role(message)
+    (message[:role] || message['role']).to_sym
+  end
+
+  def message_content(message)
+    content = message[:content] || message['content']
+    content.is_a?(RubyLLM::Content::Raw) ? content : content.to_s
+  end
+
+  # Some hosts put the reply in reasoning when content is null.
+  def answer_from(message)
+    text = message.content.is_a?(String) ? message.content : message.content.to_s
+    return text unless text.strip.empty?
+    return message.thinking.text.to_s if message.thinking&.text
+
+    text
+  end
+
+  def json_fallback(answer, json:)
+    return answer unless json && !OpenrouterJson.valid?(answer)
+
+    OpenrouterJson.extract_from_text(answer) || answer
+  end
+
+  def ensure_answer!(answer, message)
+    return answer unless answer.nil? || answer.strip.empty?
+
+    warn 'No answer returned from OpenRouter API. Full response body:'
+    warn format_body(error_body(message))
     exit 1
   end
 
   def fetch_env(key, default = nil)
-    @env_vars ||= load_env_vars
-    value = @env_vars.fetch(key, ENV[key] || default)
+    value = load_env_vars.fetch(key, ENV[key] || default)
     return value unless value.nil?
-    return default unless key == "OPENROUTER_API_KEY"
+    return default unless key == 'OPENROUTER_API_KEY'
 
-    env_path = File.join(script_directory, ".env")
-    warn("Missing required environment variable: #{key}. Add it to #{env_path}.")
+    warn("Missing required environment variable: #{key}. Add it to #{File.join(script_directory, '.env')}.")
     exit 1
   end
 
-  def make_request_with_debug(messages, json: false)
-    response = nil
-    retry_with_backoff do
-      body = build_request_body(messages, json: json)
-      debug_request(body) if @debug
-      response = make_api_request(body)
-      handle_response_errors(response)
-      answer = extract_answer(response, json: json)
-      debug_response(answer) if @debug
-      answer
+  def debug_request(messages, params)
+    warn "--- OpenRouter request payload (#{primary_api_error_endpoint}) ---"
+    summary = messages.map do |msg|
+      content = message_content(msg)
+      content.is_a?(String) ? { role: message_role(msg), content_lines: content.split("\n") } : msg
     end
-  rescue Oj::ParseError => e
-    handle_parse_error(e, response)
+    warn Oj.dump({ model: @model, params: params, messages: summary }, mode: :compat, indent: 2)
+    warn '--- end payload ---'
   end
-
-  def raise_on_server_error?
-    @raise_on_server_error
+  def debug_response(answer)
+    warn "\n--- OpenRouter response content ---"
+    warn answer
+    warn "--- end response ---\n"
   end
 end

@@ -1,12 +1,13 @@
 # frozen_string_literal: true
 
 require 'digest'
+require 'ruby_llm'
 
 # Applies prompt-cache markers when the provider supports them.
 # OpenRouter Anthropic/Qwen/Gemini and openrouter/auto: cache_control breakpoints + prompt_cache_key.
 # Auto also gets session_id (process-scoped by default) so the router pins model+provider.
 # Other OpenRouter models: prompt_cache_key for sticky routing only.
-# Direct OpenAI Chat Completions rejects prompt_cache_key — never send it there.
+# Non-OpenRouter base URLs get nothing — direct providers reject these params.
 # https://openrouter.ai/docs/guides/best-practices/prompt-caching
 module PromptCache
   KEY_PREFIX = 'refactor-sys-'
@@ -16,16 +17,26 @@ module PromptCache
 
   module_function
 
-  def apply!(body, model:, base_url: nil, session_id: nil)
-    return unless openrouter?(base_url)
-    return if system_text(body[:messages]).strip.empty?
+  # Top-level request params merged into the chat payload.
+  def request_params(messages, model:, base_url:, session_id: nil)
+    return {} unless openrouter?(base_url)
 
-    if explicit_breakpoints?(model) || auto?(model)
-      apply_explicit!(body)
-    else
-      assign_cache_key!(body)
-    end
-    stamp_session!(body, model: model, session_id: session_id)
+    text = system_text(messages)
+    return {} if text.strip.empty?
+
+    params = { prompt_cache_key: cache_key(text) }
+    explicit = explicit_breakpoints?(model) || auto?(model)
+    params[:cache_control] = EPHEMERAL if explicit
+    params[:session_id] = session_stamp(session_id) if auto?(model)
+    params
+  end
+
+  # Wraps system text in a raw content block carrying the ephemeral cache_control marker.
+  def cached_messages(messages, model:, base_url:)
+    return messages unless openrouter?(base_url)
+    return messages unless explicit_breakpoints?(model) || auto?(model)
+
+    messages.map { |message| system_with_cache(message) }
   end
 
   def cache_key(text)
@@ -40,38 +51,28 @@ module PromptCache
     wire_model(model).match?(EXPLICIT_MODEL)
   end
 
-  def apply_explicit!(body)
-    body[:cache_control] = EPHEMERAL
-    body[:messages] = Array(body[:messages]).map { |message| system_with_cache(message) }
-    assign_cache_key!(body)
-  end
-
-  def assign_cache_key!(body)
-    text = system_text(body[:messages])
-    body[:prompt_cache_key] = cache_key(text) unless text.strip.empty?
-  end
-
-  def stamp_session!(body, model:, session_id:)
-    return unless auto?(model)
-
+  def session_stamp(session_id)
     sid = session_id.to_s.strip
     sid = "refactor-#{Process.pid}" if sid.empty?
-    body[:session_id] = sid[0, SESSION_MAX]
+    sid[0, SESSION_MAX]
   end
 
   def system_with_cache(message)
     role = message[:role] || message['role']
     content = message[:content] || message['content']
-    return message unless role.to_s == 'system' && !content.is_a?(Array)
-    return message if content.to_s.strip.empty?
+    return message unless cacheable_system_text?(role, content)
 
-    message.merge(content: [{type: 'text', text: content.to_s, cache_control: EPHEMERAL}])
+    message.merge(content: RubyLLM::Content::Raw.new([{type: 'text', text: content.to_s, cache_control: EPHEMERAL}]))
+  end
+
+  def cacheable_system_text?(role, content)
+    role.to_s == 'system' && !content.is_a?(Array) && !content.is_a?(RubyLLM::Content::Raw) &&
+      !content.to_s.strip.empty?
   end
 
   def system_text(messages)
     Array(messages).filter_map do |message|
-      role = message[:role] || message['role']
-      next unless role.to_s == 'system'
+      next unless (message[:role] || message['role']).to_s == 'system'
 
       content_text(message[:content] || message['content'])
     end.join
