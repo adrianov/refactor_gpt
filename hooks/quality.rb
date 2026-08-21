@@ -1,7 +1,7 @@
-#!/usr/bin/ruby --disable-gems
+#!/usr/bin/env -S ruby --disable-gems
 # frozen_string_literal: true
 #
-# Cursor stop pipeline (system Ruby).
+# Cursor stop pipeline (rbenv/Homebrew/system Ruby via PATH).
 # Stages: formal → review → document → git_commit_gpt. One follow-up per stop.
 #
 # 1. Collect files edited after the last user message.

@@ -10,7 +10,15 @@ module Quality
     from_env = ENV['GIT_COMMIT_GPT'].to_s
     from_env.empty? ? File.expand_path('../../git_commit_gpt.rb', __dir__) : from_env
   end
-  RBENV_RUBY = File.join(ENV['HOME'].to_s, '.rbenv/shims/ruby')
+  RBENV_RUBY = begin
+    home = ENV['HOME'].to_s
+    [
+      File.join(home, '.rbenv/shims/ruby'),
+      '/opt/homebrew/opt/ruby/bin/ruby',
+      '/usr/local/opt/ruby/bin/ruby',
+      '/usr/bin/ruby'
+    ].find { |p| File.executable?(p) } || 'ruby'
+  end
   OWN_GITHUB = ENV['QUALITY_OWN_GITHUB'].to_s.strip
   MAX_LINES = 200
   SCATTER = 6

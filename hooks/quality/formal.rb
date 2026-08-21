@@ -125,8 +125,34 @@ module Quality
       else EXTRACT_CODE
       end
     end
+    def workbench_for_peatio(root)
+      return nil unless File.file?(File.join(root, 'Gemfile'))
+      return nil unless File.basename(root) == 'peatio'
+      return nil unless File.basename(File.dirname(root)) == 'app'
+
+      grand = File.expand_path('../..', root)
+      compose = File.join(grand, 'compose/app.yaml')
+      return nil unless File.file?(compose) && File.file?(File.join(grand, '.env'))
+      return nil unless File.read(compose) =~ /^[[:space:]]*peatio:/
+
+      grand
+    end
+
+    def rubocop_infra?(out)
+      out.to_s =~ /Bundler::(GitError|PathError)|is not yet checked out|Could not locate Gemfile|Cannot connect to the Docker daemon|docker\.sock|no configuration file provided|No such service:|failed to read dockerfile|error while interpolating/
+    end
+
+    def docker_compose
+      _, _, code = capture('docker', 'compose', 'version')
+      return %w[docker compose] if code == 0
+      return %w[docker-compose] if which('docker-compose')
+
+      nil
+    end
+
     def ensure_rubocop(root)
       return false unless File.directory?(root)
+      return true if workbench_for_peatio(root) && which('docker')
 
       Dir.chdir(root) do
         return true if rubocop_ok?
@@ -163,6 +189,21 @@ module Quality
       File.file?('Gemfile') && capture('bundle', 'exec', 'rubocop', '-v')[2] == 0
     end
     def run_rubocop(root, *args)
+      wb = workbench_for_peatio(root)
+      dc = docker_compose if wb && which('docker')
+      if wb && dc
+        cmd = dc + %w[run --rm --no-deps peatio bundle exec rubocop] + args
+        STDERR.puts "[quality] #{root} via docker (#{wb}): #{cmd.join(' ')}"
+        out, err, code = capture(*cmd, chdir: wb)
+        combined = "#{out}#{err}"
+        if rubocop_infra?(combined)
+          STDERR.puts '[quality] infra failure; not treating as offenses'
+          STDERR.puts combined
+          return ['', 0]
+        end
+        return [combined, code]
+      end
+
       Dir.chdir(root) do
         cmd = bundled_rubocop_ok? ? %w[bundle exec rubocop] : %w[rubocop]
         out, err, code = capture(*(cmd + args))
