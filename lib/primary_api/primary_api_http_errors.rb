@@ -24,7 +24,7 @@ module PrimaryApiHttpErrors
   end
 
   def handle_non_success_status(response)
-    raise_rate_limit_error(response) if response.status == 429
+    raise_rate_limit_error(response) if rate_limit_response?(response)
     raise_server_error(response) if response.status >= 500 && response.status < 600
     raise_access_denied_for_fallback(response) if response.status == 403
     raise_if_response_network_error(response)
@@ -127,8 +127,12 @@ module PrimaryApiHttpErrors
     error_message ? "Primary API balance exhausted: #{error_message}" : "Primary API balance exhausted"
   end
 
+  def rate_limit_response?(response, status = response.status)
+    status.to_i == 429 || ErrorResponseBody.upstream_rate_limited?(response)
+  end
+
   def raise_statusless_http_error(response, error_status)
-    return raise_statusless_rate_limit(response, error_status) if error_status == 429
+    return raise_statusless_rate_limit(response, error_status) if rate_limit_response?(response, error_status)
     return unless error_status >= 500
 
     raw = ErrorResponseBody.raw_body_from_http_response(response)

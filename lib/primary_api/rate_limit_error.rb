@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
-# Raised for recoverable HTTP 429 rate limits (not balance exhaustion — see BalanceError).
+# Raised for recoverable rate limits (HTTP 429, or OpenRouter 400 wrapping upstream 429).
+# Not for balance exhaustion — see BalanceError.
 class RateLimitError < StandardError
   attr_reader :retry_after, :raw_body
 

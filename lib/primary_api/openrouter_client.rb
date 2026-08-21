@@ -77,7 +77,8 @@ class OpenrouterClient
 
   def retryable?(response)
     status = response.status.to_i
-    status == 429 || (status >= 500 && status < 600)
+    status == 429 || (status >= 500 && status < 600) ||
+      ErrorResponseBody.upstream_rate_limited?(response)
   end
 
   def make_api_request(body)
