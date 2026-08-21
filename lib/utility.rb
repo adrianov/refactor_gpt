@@ -3,7 +3,7 @@
 # Argument parsing, .env loading, and display helpers shared by ask_gpt and superagent.
 module Utility
   PROJECT_ROOT = File.expand_path(File.join(__dir__, '..')).freeze
-  FLAG_MAPPING = {"--search" => :search_mode, "--eldritch" => :eldritch_mode, "--short" => :short_mode,
+  FLAG_MAPPING = {"--eldritch" => :eldritch_mode, "--short" => :short_mode,
                   "--debug" => :debug_mode}.freeze
 
   def self.parse_args(base_dir)
@@ -88,13 +88,6 @@ module Utility
     end
   end
 
-  def self.stream_with_md2term
-    IO.popen(ENV.to_h.merge({"CLICOLOR_FORCE" => "1"}),
-      ["md2term", "-"], "w") do |io|
-      yield io
-    end
-  end
-
   def self.extract_urls(answer)
     answer.scan(%r{\[.*?\]\(https?://[^)]+\)|https?://[^\s)]+})
   end
@@ -173,18 +166,4 @@ module Utility
     end
   end
 
-  def self.gemini_configured?
-    env_vars = load_env_vars
-    env_vars.key?("GEMINI_ACCESS_TOKEN") && !env_vars["GEMINI_ACCESS_TOKEN"].empty?
-  end
-
-  def self.openai_configured?
-    env_vars = load_env_vars
-    env_vars.key?("OPENAI_ACCESS_TOKEN") && !env_vars["OPENAI_ACCESS_TOKEN"].empty?
-  end
-
-  def self.display_model_info(provider, model_name = nil)
-    display_model = model_name || ((provider == :gemini) ? LlmRouter::DEFAULT_GEMINI_MODEL : "default")
-    puts "Using: #{provider.to_s.capitalize} (#{display_model})"
-  end
 end

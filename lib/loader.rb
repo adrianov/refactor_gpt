@@ -2,9 +2,8 @@
 
 # Zeitwerk autoloading for lib. lib/superagent and lib/superagent/prompt are collapsed
 # so those files define top-level constants.
-# Shared types (SystemInfo, Utility, OpenAiClient, GeminiClient, etc.)
-# live in lib; AskGptClient/AskGeminiClient are used by ask_gpt only.
-# openai_client.rb defines OpenAiClient (capital I); Zeitwerk infers OpenaiClient from the path.
+# Shared types (SystemInfo, Utility, OpenrouterClient, etc.)
+# live in lib; AskGptClient is used by ask_gpt only.
 REFACTOR_GPT_ROOT = File.expand_path('..', __dir__).freeze
 # Aliases follow cwd Ruby and Bundler; this process must use the project's interpreter and gems.
 wanted_ruby = File.read(File.join(REFACTOR_GPT_ROOT, '.ruby-version')).strip
@@ -26,8 +25,6 @@ loader.collapse(File.expand_path('superagent', __dir__))
 loader.collapse(File.expand_path('superagent/prompt', __dir__))
 loader.collapse(File.expand_path('git_commit', __dir__))
 loader.collapse(File.expand_path('git_explain', __dir__))
-loader.collapse(File.expand_path('gemini', __dir__))
 loader.collapse(File.expand_path('primary_api', __dir__))
-loader.inflector.inflect("openai_client" => "OpenAiClient")
 loader.inflector.inflect("openrouter_client" => "OpenrouterClient")
 loader.setup
