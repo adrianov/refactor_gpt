@@ -1,5 +1,5 @@
 ---
-description: When a touched source file was or became ≥200 LOC, extract or DRY ≥100 lines before finishing
+description: When a touched source file was or became ≥200 LOC, extract or DRY ≥100 lines before finishing — not by deleting blanks or densifying syntax
 alwaysApply: true
 ---
 
@@ -12,6 +12,18 @@ Applies to `.rb` files in the repo root and `lib/`. Skip generated outputs and v
 ## Line-count target
 
 Keep source files at **200 lines or fewer**. If a feature cannot fit without harm, split into the smallest reasonable modules and note why briefly.
+
+Line count measures **structure**, not how tightly the text is packed. A shorter file that is harder to read is a failed shrink.
+
+## What does not count
+
+These do **not** satisfy the rule, even if `wc -l` goes down:
+
+- Deleting blank lines, or squeezing methods/classes together so the file looks shorter
+- Rewriting clear multi-line code into denser one-liners, chained `;` statements, or packed conditionals that are harder to follow
+- Abbreviating names, stripping comments that still help, or other cosmetics that trade readability for a lower line count
+
+Shrink by **moving or removing real responsibility**, not by compressing syntax.
 
 ## Trigger
 
@@ -32,7 +44,8 @@ When you finish a coherent change (one task or one PR-worth of edits):
 2. For each triggered file, shrink it before you stop:
    - **Prefer extraction**: move **≥100 lines** of self-contained logic into another module, **or**
    - **Prefer cleanup when enough**: remove duplicate logic (DRY) and dead code until the file drops by **≥100 lines** or reaches **≤200 lines** — whichever comes first.
-3. If several files trigger, start with the **longest**; do **not** refactor other long files you did not touch unless asked.
+3. Keep normal formatting and readable control flow while you do it.
+4. If several files trigger, start with the **longest**; do **not** refactor other long files you did not touch unless asked.
 
 ## How to shrink (pick one or combine)
 
