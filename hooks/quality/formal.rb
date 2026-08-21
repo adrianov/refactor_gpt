@@ -125,15 +125,33 @@ module Quality
       else EXTRACT_CODE
       end
     end
-    def workbench_for_peatio(root)
+    def rubocop_docker_enabled?
+      ENV['QUALITY_RUBOCOP_DOCKER'].to_s.match?(/\A(1|true|yes)\z/i)
+    end
+
+    # Compose project root for Docker RuboCop when QUALITY_RUBOCOP_DOCKER is set.
+    # Private names come from env (no defaults that name a private app):
+    #   QUALITY_RUBOCOP_DOCKER_SERVICE  — compose service (required)
+    #   QUALITY_RUBOCOP_DOCKER_BASENAME — Gemfile root basename (default: service)
+    #   QUALITY_RUBOCOP_DOCKER_PARENT   — parent dir name (default: app)
+    #   QUALITY_RUBOCOP_DOCKER_COMPOSE  — compose file under grandparent (default: compose/app.yaml)
+    def rubocop_docker_root(root)
+      return nil unless rubocop_docker_enabled?
       return nil unless File.file?(File.join(root, 'Gemfile'))
-      return nil unless File.basename(root) == 'peatio'
-      return nil unless File.basename(File.dirname(root)) == 'app'
+
+      service = ENV['QUALITY_RUBOCOP_DOCKER_SERVICE'].to_s.strip
+      return nil if service.empty?
+
+      basename = ENV.fetch('QUALITY_RUBOCOP_DOCKER_BASENAME', service).to_s
+      parent = ENV.fetch('QUALITY_RUBOCOP_DOCKER_PARENT', 'app').to_s
+      compose_rel = ENV.fetch('QUALITY_RUBOCOP_DOCKER_COMPOSE', 'compose/app.yaml').to_s
+      return nil unless File.basename(root) == basename
+      return nil unless File.basename(File.dirname(root)) == parent
 
       grand = File.expand_path('../..', root)
-      compose = File.join(grand, 'compose/app.yaml')
+      compose = File.join(grand, compose_rel)
       return nil unless File.file?(compose) && File.file?(File.join(grand, '.env'))
-      return nil unless File.read(compose) =~ /^[[:space:]]*peatio:/
+      return nil unless File.read(compose) =~ /^[[:space:]]*#{Regexp.escape(service)}:/
 
       grand
     end
@@ -152,7 +170,7 @@ module Quality
 
     def ensure_rubocop(root)
       return false unless File.directory?(root)
-      return true if workbench_for_peatio(root) && which('docker')
+      return true if rubocop_docker_root(root) && which('docker')
 
       Dir.chdir(root) do
         return true if rubocop_ok?
@@ -189,10 +207,11 @@ module Quality
       File.file?('Gemfile') && capture('bundle', 'exec', 'rubocop', '-v')[2] == 0
     end
     def run_rubocop(root, *args)
-      wb = workbench_for_peatio(root)
-      dc = docker_compose if wb && which('docker')
+      wb = rubocop_docker_root(root)
+      service = ENV['QUALITY_RUBOCOP_DOCKER_SERVICE'].to_s.strip
+      dc = docker_compose if wb && which('docker') && !service.empty?
       if wb && dc
-        cmd = dc + %w[run --rm --no-deps peatio bundle exec rubocop] + args
+        cmd = dc + ['run', '--rm', '--no-deps', service, 'bundle', 'exec', 'rubocop'] + args
         STDERR.puts "[quality] #{root} via docker (#{wb}): #{cmd.join(' ')}"
         out, err, code = capture(*cmd, chdir: wb)
         combined = "#{out}#{err}"

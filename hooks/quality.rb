@@ -22,6 +22,14 @@
 #   GIT_COMMIT_GPT       — path to git_commit_gpt.rb (default: ../../git_commit_gpt.rb)
 #   QUALITY_OWN_GITHUB   — GitHub username/org; when set, owned remotes get
 #                          --push and stricter length checks
+#   QUALITY_RUBOCOP_DOCKER=1 — run RuboCop via docker compose for matching apps
+#   QUALITY_RUBOCOP_DOCKER_SERVICE  — compose service name (required when docker on)
+#   QUALITY_RUBOCOP_DOCKER_BASENAME — Gemfile-root basename (default: SERVICE)
+#   QUALITY_RUBOCOP_DOCKER_PARENT   — parent dir of that root (default: app)
+#   QUALITY_RUBOCOP_DOCKER_COMPOSE  — compose file under grandparent
+#                                     (default: compose/app.yaml)
+#   QUALITY_LOCAL        — optional extra Ruby file after public modules
+#                          (default: ~/.cursor/hooks/quality_local.rb if present)
 #
 # Implementation lives in hooks/quality/*.rb (Quality::* modules).
 
@@ -33,6 +41,10 @@ require_relative 'quality/support'
 require_relative 'quality/turn_files'
 require_relative 'quality/formal'
 require_relative 'quality/stages'
+
+local = ENV['QUALITY_LOCAL'].to_s
+local = File.join(ENV['HOME'].to_s, '.cursor/hooks/quality_local.rb') if local.empty?
+require local if File.file?(local)
 
 # Cursor stop-hook entry: wires Quality::* mixins and runs the pipeline.
 class QualityHook
