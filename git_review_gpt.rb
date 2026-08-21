@@ -109,7 +109,7 @@ CompletionNotifier.setup_exit_hook
 debug_mode, arg_branch, arg_base = parse_arguments(ARGV.dup)
 Dir.chdir(git_root)
 
-puts "Model: #{OpenAiClient.new(debug: debug_mode, progress_title: nil).model}".cyan
+puts "Model: #{OpenrouterClient.default_model}".cyan
 
 branches = local_branches
 cur = current_branch

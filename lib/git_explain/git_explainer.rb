@@ -5,7 +5,7 @@ class GitExplainer
   include AgentsFileHandler
 
   def initialize(model: nil, debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug,
+    @client = OpenrouterClient.new(model: model, debug: debug,
       progress_title: "Analyzing changes")
   end
 

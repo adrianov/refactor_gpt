@@ -15,7 +15,7 @@ class ConflictResolver
 
   def initialize(debug: false)
     @debug = debug
-    @client = OpenAiClient.new(debug: debug)
+    @client = OpenrouterClient.new(debug: debug)
   end
 
   def run

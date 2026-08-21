@@ -11,7 +11,7 @@ class MrReviewClient
   MAX_DIFF_SIZE_KB = 300
 
   def initialize(model: nil, debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug,
+    @client = OpenrouterClient.new(model: model, debug: debug,
       progress_title: "Reviewing MR".cyan)
   end
 

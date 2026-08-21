@@ -7,7 +7,7 @@ require 'shellwords'
 # Builds and runs an `ag` search from a natural-language request.
 class AgGpt
   def initialize
-    @client = OpenAiClient.new(progress_title: 'Searching code')
+    @client = OpenrouterClient.new(progress_title: 'Searching code')
   end
 
   def ask(prompts, json: false)

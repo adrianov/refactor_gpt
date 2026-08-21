@@ -10,7 +10,7 @@ class BashGpt
   include AgentsFileHandler
 
   def initialize(model: nil, debug: false)
-    @client = OpenAiClient.new(model: model, debug: debug, progress_title: 'Generating command')
+    @client = OpenrouterClient.new(model: model, debug: debug, progress_title: 'Generating command')
     @debug = debug
   end
 

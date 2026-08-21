@@ -9,6 +9,9 @@ class CommitPlanClient
   # Single ceiling for commit-plan user message (static sections + one unified diff body); MR uses numstat only.
   COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT = 200 * 1024
 
+  # Commit planning is a constrained JSON task; low reasoning keeps it fast.
+  REASONING = { effort: 'low' }.freeze
+
   USER_CONTENT_SECTIONS = [
     {
       type: :static,
@@ -91,7 +94,7 @@ class CommitPlanClient
 
   def initialize(model: nil, debug: false, progress: true)
     title = progress ? "Planning".cyan : nil
-    @client = OpenAiClient.new(model: model, debug: debug, progress_title: title)
+    @client = OpenrouterClient.new(model: model, debug: debug, progress_title: title, reasoning: REASONING)
   end
 
   def ask(prompts, json: false)

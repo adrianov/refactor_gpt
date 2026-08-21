@@ -15,11 +15,10 @@ end
 
 def run_with_question_or_loop(client, messages, question, args)
   if question
-    handle_mode_switch(client, question) if args[:question_parts].empty?
-    process_question(client, messages, question, use_streaming?(client), args) unless question == "--no-search"
+    process_question(client, messages, question, args)
     if $stdin.tty?
       clear_args_for_next_iteration(args)
-      run_interactive_loop(client, messages, args, use_streaming?(client))
+      run_interactive_loop(client, messages, args)
     end
   else
     run_conversation_loop(client, messages, args)
@@ -30,75 +29,37 @@ def show_interactive_prompt(args)
   return unless args[:question_parts].empty? && $stdin.tty?
 
   puts "Enter your questions (Ctrl+D to exit):"
-  puts "Available commands: --search, --no-search"
   puts "Use arrow keys for history, Tab for completion"
   puts "For multiline input, press Enter twice to submit"
   puts ""
-  puts "Note: Backend is chosen from MODEL in .env (claude-* / gemini-* / gpt-*)"
 end
 
 def create_client(args)
-  env = ENV.to_h.merge(Utility.load_env_vars)
-  model = args[:search_mode] ? AskGptClient::SEARCH_MODEL : LlmRouter.default_model(env)
-  config = LlmRouter.config_for_model(model, env)
-  if config.nil?
-    print_config_error
-    return
-  end
-  build_client_from_config(config, args)
-end
-
-def build_client_from_config(config, args)
-  use_streaming = Utility.md2term_available? && config[:backend] == :gemini && !args[:search_mode]
-  common = {
-    model: config[:model],
-    max_completion_tokens: args[:short_mode] ? 500 : nil,
-    debug: args[:debug_mode],
-    api_base_url: config[:base_url],
-    api_key: config[:access_token]
-  }
-  if config[:backend] == :gemini
-    AskGeminiClient.new(**common, progress: !use_streaming)
-  else
-    AskGptClient.new(**common, backend: config[:backend])
-  end
-end
-
-def print_config_error
-  warn "❌ No API configuration found. Set MODEL (or CLAUDE_/OPENAI_/GEMINI_ACCESS_TOKEN) in .env"
-  exit 1
+  AskGptClient.new(model: OpenrouterClient.default_model,
+    max_completion_tokens: args[:short_mode] ? 500 : nil, debug: args[:debug_mode])
 end
 
 def initialize_conversation(client, args)
-  Utility.display_model_info(client.backend, client.model)
+  puts "Using: OpenRouter (#{client.model})"
   [client.build_system_message(args[:eldritch_mode] ? :eldritch : nil,
     args[:short_mode] ? :short : nil)]
 end
 
-def use_streaming?(client)
-  Utility.md2term_available? && client.is_a?(AskGeminiClient)
-end
-
 def run_conversation_loop(client, messages, args)
-  streaming = use_streaming?(client)
-
   if $stdin.tty?
-    run_interactive_loop(client, messages, args, streaming)
+    run_interactive_loop(client, messages, args)
   else
     question = get_question(args)
-    process_question(client, messages, question, streaming, args) if question
+    process_question(client, messages, question, args) if question
   end
 end
 
-def run_interactive_loop(client, messages, args, streaming)
+def run_interactive_loop(client, messages, args)
   loop do
     question = get_question(args)
     break unless question
 
-    handle_mode_switch(client, question) if args[:question_parts].empty?
-    next if question == "--no-search"
-
-    process_question(client, messages, question, streaming, args)
+    process_question(client, messages, question, args)
     clear_args_for_next_iteration(args)
   end
 end
@@ -127,16 +88,8 @@ def get_piped_question
   input.strip
 end
 
-def handle_mode_switch(client, input)
-  if input == "--search"
-    client.enable_search_mode
-  elsif input == "--no-search"
-    client.disable_search_mode
-    puts "Switched to normal mode"
-  end
-end
 
-def process_question(client, messages, question, use_streaming, args)
+def process_question(client, messages, question, args)
   text_question = if args[:question_parts].empty?
     question
   else
@@ -149,75 +102,9 @@ def process_question(client, messages, question, use_streaming, args)
   full_corrected_question = Utility.build_question([corrected_question], args[:file_snippets] || [])
   messages << {role: "user", content: full_corrected_question}
 
-  if use_streaming
-    process_with_streaming(client, messages)
-  else
-    process_with_buffering(client, messages)
-  end
+  process_with_buffering(client, messages)
 
   puts
-end
-
-def process_with_streaming(client, messages)
-  full_text = ""
-  spinner, spinner_thread = start_thinking_spinner
-  first_chunk_received = false
-
-  Utility.stream_with_md2term do |io|
-    full_text, first_chunk_received = process_stream_chunks(client, messages, spinner,
-      spinner_thread, io, first_chunk_received)
-  end
-
-  stop_thinking_spinner(spinner, spinner_thread) unless first_chunk_received
-
-  messages << {role: "assistant", content: full_text}
-end
-
-def process_stream_chunks(client, messages, spinner, spinner_thread, io, first_chunk_received)
-  full_text = ""
-  chunk_received = first_chunk_received
-
-  client.stream_answer(messages) do |chunk|
-    if chunk && !chunk.to_s.empty? && !chunk_received
-      stop_thinking_spinner(spinner, spinner_thread)
-      chunk_received = true
-    end
-
-    text = chunk.to_s
-    full_text += text
-    io.write(text)
-    io.flush
-  end
-
-  [full_text, chunk_received]
-end
-
-def start_thinking_spinner
-  spinner = ProgressBar.create(
-    title: "Thinking",
-    total: 6000,
-    format: "%t: |%B| %p%% %e",
-    length: 100
-  )
-
-  thread = Thread.new do
-    loop do
-      break if spinner.finished?
-
-      spinner.increment
-      sleep 0.1
-    end
-  end
-
-  [spinner, thread]
-end
-
-def stop_thinking_spinner(spinner, thread)
-  return unless thread.alive?
-
-  thread.kill
-  spinner.finish unless spinner.finished?
-  print "\r\e[K" # Clear the spinner line
 end
 
 def process_with_buffering(client, messages)

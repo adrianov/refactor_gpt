@@ -13,11 +13,12 @@ class Verify
   end
 
   def ask(prompts)
-    client = OpenAiClient.new(model: @model, debug: @debug,
+    client = OpenrouterClient.new(model: @model, debug: @debug,
       progress_title: nil, raise_on_server_error: true)
     client.ask(prompts)
   rescue ServerError => e
-    handle_gemini_fallback(prompts, e)
+    warn "❌ Server error persisted after 3 retries: #{e.message}"
+    exit 1
   end
 
   def assess_feature(user_request, status_output, diff_output)
@@ -39,24 +40,6 @@ class Verify
       warn ''
     end
     warn '--- End full prompt ---'.light_black
-  end
-
-  def handle_gemini_fallback(prompts, error)
-    return handle_final_error(error) unless gemini_configured?
-
-    warn "⚠️  Server error persisted after 3 retries, falling back to Gemini..."
-    gemini_client = GeminiClient.new(model: @model, debug: @debug, progress_title: nil)
-    gemini_client.ask(prompts)
-  end
-
-  def handle_final_error(_error)
-    warn "❌ Server error persisted after 3 retries and Gemini is not available"
-    exit 1
-  end
-
-  def gemini_configured?
-    env_vars = load_env_vars(@project_root)
-    env_vars.key?("GEMINI_ACCESS_TOKEN") && !env_vars["GEMINI_ACCESS_TOKEN"].empty?
   end
 
   def build_user_content(user_request, status_output, diff_output)

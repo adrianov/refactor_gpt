@@ -45,7 +45,7 @@ class GitCommitSession
   end
 
   def model_name
-    OpenAiClient.new(debug: @options.debug, progress_title: nil).model
+    OpenrouterClient.default_model
   end
 
   def run_cmd(cmd)

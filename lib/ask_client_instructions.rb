@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Shared system-instruction text for AskGptClient and AskGeminiClient.
+# Shared system-instruction text for AskGptClient.
 # System text stays byte-stable for prompt caching; clock goes on the last user turn.
 module AskClientInstructions
   def build_style_instruction(style)

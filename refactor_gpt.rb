@@ -7,16 +7,17 @@ require "shellwords"
 require "oj"
 require "tempfile"
 
-# Multi-stage OpenAI-compatible refactor client with assessment and warning fixes.
-class OpenAi
+# OpenRouter refactor client with assessment and warning fixes.
+class RefactorLlm
   include AgentsFileHandler
   include RefactorAssessment
+  include RefactorPrompt
 
   def initialize(model: nil, debug: false)
     @debug = debug
-    @env_vars = load_env_vars
-    setup_config(model)
-    setup_clients
+    chosen = model || OpenrouterClient.default_model
+    @clients = [OpenrouterClient.new(model: chosen, debug: @debug,
+      progress_title: "Refactoring code (#{chosen})".cyan)]
   end
 
   def ask(prompts, json: false)
@@ -73,44 +74,6 @@ class OpenAi
     refactored_files
   end
 
-  def setup_config(model)
-    @base_url = fetch_config("REFACTOR_BASE_URL", "OPENAI_BASE_URL")
-    @api_key = fetch_config("REFACTOR_ACCESS_TOKEN", "OPENAI_ACCESS_TOKEN")
-    @models = load_models(model)
-  end
-
-  def load_models(model)
-    models = [
-      fetch_env_var("REFACTOR_MODEL_1"),
-      fetch_env_var("REFACTOR_MODEL_2"),
-      fetch_env_var("REFACTOR_MODEL_3")
-    ].compact
-
-    return models unless models.empty?
-
-    [model || fetch_env_var("DEFAULT_MODEL") || OpenAiClient::DEFAULT_MODEL]
-  end
-
-  def fetch_config(primary, secondary)
-    fetch_env_var(primary) || fetch_env_var(secondary)
-  end
-
-  def fetch_env_var(key)
-    @env_vars[key] || ENV[key]
-  end
-
-  def setup_clients
-    @clients = @models.map do |m|
-      OpenAiClient.new(
-        model: m,
-        debug: @debug,
-        progress_title: "Refactoring code (#{m})".cyan,
-        api_base_url: @base_url,
-        api_key: @api_key
-      )
-    end
-  end
-
   def display_stage_info(client, index)
     return unless @debug || @clients.size > 1
 
@@ -129,69 +92,6 @@ class OpenAi
     file_codes.map do |path, code|
       "<full_file_contents_to_replace filename=\"#{path}\">#{code}</full_file_contents_to_replace>"
     end.join("\n")
-  end
-
-  def build_system_instruction
-    [refactor_output_format_instruction, refactor_behavior_instruction].join("\n\n")
-  end
-
-  def refactor_output_format_instruction
-    (<<~HEREDOC
-      Return refactored files using this format:
-      <full_file_contents_to_replace filename="[REPLACE_WITH_ACTUAL_FILE_PATH]">complete file content</full_file_contents_to_replace>
-
-      The <full_file_contents_to_replace> tags and the complete file content between them must be
-      output on separate lines. The file content between the opening and
-      closing tags can span multiple lines and must include every line of the
-      file exactly as it should appear.
-
-      Files provided as context use this format in the prompt and must NOT be
-      returned:
-      <content filename="path/to/file.rb">
-      complete file content
-      </content>
-
-      Content between <full_file_contents_to_replace> and </full_file_contents_to_replace> tags MUST be the complete file
-      content from the first line to the last line. Never abbreviate, cut, or
-      use placeholders like "...". Always include all lines of the file.
-
-      Content between <content> and </content> tags in the prompt is provided as
-      reference only. Never return files that were marked with <content>. Only
-      return files you actually modify.
-
-      ALWAYS use <full_file_contents_to_replace> tags for ALL returned files, including single-file responses.
-      Never return raw text without tags. This is required for both single-file and multi-file responses.
-
-      CRITICAL: DO NOT create new files. Only refactor the files provided in the prompt.
-      If you think a new file is needed, refactor the existing code instead.
-    HEREDOC
-    ).strip
-  end
-
-  # Instruction for how to refactor (behavior only). Edit this when improving wording for humans/LLMs.
-  def refactor_behavior_instruction
-    (<<~HEREDOC
-      Apply changes that make code easier to edit and understand for both humans and LLMs:
-      improve structure and remove duplication; use clear, literal names; keep methods and
-      blocks small and focused; prefer explicit logic over clever or implicit code; keep
-      formatting and structure consistent so readers and tools can parse reliably.
-      Preserve all existing comments unless they describe code you change or you implement
-      a TODO. When making bug fixes or requested changes, keep the diff minimal. Never
-      suggest purely stylistic changes (quote style, alternative method names). Only make
-      necessary structural improvements.
-    HEREDOC
-    ).strip
-  end
-
-  def build_refactor_prompt(file_codes, user_instruction)
-    <<~HEREDOC
-      #{user_instruction || load_refactor_md}
-
-      Files are provided below using <content> tags. You may use some files only as
-      context and leave them unchanged. Only return files you actually modify.
-
-      #{file_codes.map { |path, code| "<content filename=\"#{path}\">\n#{code}\n</content>" }.join("\n\n")}
-    HEREDOC
   end
 end
 
@@ -215,7 +115,7 @@ class RefactorGptRunner
 
   def process_refactoring(file_codes)
     raw_response, elapsed_time = with_timing do
-      OpenAi.new(debug: @debug).refactor(file_codes, user_instruction).to_s
+      RefactorLlm.new(debug: @debug).refactor(file_codes, user_instruction).to_s
     end
 
     refactored_files = ResponseParser.parse_files_from_response(raw_response, @file_paths)
