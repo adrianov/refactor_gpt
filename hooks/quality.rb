@@ -5,9 +5,10 @@
 # Stages: formal → review → document → git_commit_gpt. One follow-up per stop.
 #
 # 1. Collect files edited after the last user message.
-# 2. Formal: RuboCop always; AbcSize, lizard CCN, and ≥200-line spec/module
-#    extraction only when origin matches QUALITY_OWN_GITHUB (same gate as
-#    --push). Failures retry this stage after the agent fixes them.
+# 2. Formal: RuboCop always; AbcSize (changed lines vs HEAD only), lizard CCN,
+#    and ≥200-line spec/module extraction only when origin matches
+#    QUALITY_OWN_GITHUB (same gate as --push). Failures retry this stage after
+#    the agent fixes them.
 # 3. Review: completion check and scatter (once per cycle; reset if formal
 #    or commit complains), plus schema.rb.
 # 4. Document: wording for new .md files only, once, right before commit.

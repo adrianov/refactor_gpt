@@ -51,13 +51,85 @@ module Quality
       rem = rubocop_remaining(files, rake: true, label: '-a --no-color', args: %w[-a --no-color])
       rem && "#{RUBOCOP_LEFT}\n\n#{truncate(rem)}"
     end
-    # AbcSize, lizard CCN, and ≥200-line extraction: QUALITY_OWN_GITHUB only (same as --push).
+    # AbcSize only for methods whose lines appear in the working-tree diff vs HEAD.
+    # Pre-existing complexity in an edited file is out of scope (matches project rule).
     def abcsize_report(files)
       rb = ruby_files(files).select { |f| owned_repo?(f) }
                             .reject { |f| f =~ %r{(^|/)db/migrate/}i || routing_file?(f) }
       rem = rubocop_remaining(rb, rake: false, label: '--only Metrics/AbcSize --format quiet',
                               args: %w[--only Metrics/AbcSize --format quiet])
-      rem && "#{ABC_LEFT}\n\n#{truncate(rem)}"
+      rem = filter_abcsize_to_changed_lines(rem) if rem
+      rem && !rem.strip.empty? && "#{ABC_LEFT}\n\n#{truncate(rem)}"
+    end
+
+    def filter_abcsize_to_changed_lines(out)
+      kept = +''
+      file = nil
+      header = nil
+      out.to_s.each_line do |line|
+        if (m = line.match(/\A== (.*) ==\s*\z/))
+          file = m[1]
+          header = line
+          next
+        end
+
+        path, lineno = abcsize_offense_loc(line, file)
+        if path.nil?
+          kept << line
+          next
+        end
+
+        abs = abs_path(path)
+        changed = git_changed_lines(abs)
+        next if changed && !changed.include?(lineno)
+
+        if header
+          kept << header
+          header = nil
+        end
+        kept << line
+      end
+      text = kept.strip
+      text.match?(/\AC:\d+:|:(\d+):\d+:/m) ? text : ''
+    end
+
+    def abcsize_offense_loc(line, current_file = nil)
+      if (m = line.match(/\A([^:]+):(\d+):\d+:\s/))
+        [m[1], m[2].to_i]
+      elsif (m = line.match(/\AC:(\d+):\s*\d+:\s*Metrics\/AbcSize/))
+        [current_file, m[1].to_i]
+      end
+    end
+
+    def git_changed_lines(abs_path)
+      root = git_toplevel(abs_path)
+      return nil unless root && File.file?(abs_path)
+
+      rel = abs_path.sub(%r{\A#{Regexp.escape(root)}/?}, '')
+      out, _, code = capture('git', 'diff', '-U0', 'HEAD', '--', rel, chdir: root)
+      return nil if code != 0
+
+      parse_diff_new_lines(out)
+    end
+
+    def git_toplevel(abs_path)
+      dir = File.directory?(abs_path) ? abs_path : File.dirname(abs_path)
+      out, _, code = capture('git', 'rev-parse', '--show-toplevel', chdir: dir)
+      code == 0 ? out.to_s.strip : nil
+    end
+
+    def parse_diff_new_lines(diff)
+      set = ::Set.new
+      diff.to_s.each_line do |line|
+        next unless (m = line.match(/\A@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/))
+
+        start = m[1].to_i
+        count = (m[2] || '1').to_i
+        next if count.zero?
+
+        count.times { |i| set << (start + i) }
+      end
+      set
     end
     def lizard_report(files)
       bin = which('lizard')

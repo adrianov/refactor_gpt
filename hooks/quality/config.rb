@@ -29,7 +29,8 @@ module Quality
   SCHEMA_MSG = 'db/schema.rb was edited. Make schema.rb changes minimal, covering only current task scope.'
   MD_MSG = 'Improve phrasing and synonym choice in these new .md files.'
   RUBOCOP_LEFT = 'RuboCop auto-correct left remaining offenses. Fix all of them in this pass without bloat.'
-  ABC_LEFT = 'RuboCop Metrics/AbcSize found methods that are too complex. Simplify them without bloat; ' \
+  ABC_LEFT = 'RuboCop Metrics/AbcSize found methods that are too complex ' \
+             '(only methods whose lines changed vs HEAD). Simplify them without bloat; ' \
              'extract helpers only when it clearly reduces complexity.'
   LIZARD_LEFT = 'lizard found functions above the cyclomatic complexity threshold (CCN > 15). ' \
                 'Simplify them without bloat; extract helpers only when it clearly reduces complexity.'
