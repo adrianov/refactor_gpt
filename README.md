@@ -232,6 +232,29 @@ Features:
 - Renders with `glow` when it is installed
 - Adds testing notes and developer remarks
 
+### hooks/quality.rb
+
+Cursor `stop` hook: after each completed agent turn, runs formal checks (RuboCop, AbcSize, lizard, long specs/modules), a short review, optional new-`.md` wording, then `git_commit_gpt --auto`. One follow-up message per stop; stages retry until clean. Logic lives in `hooks/quality/` (`config`, `support`, `turn_files`, `formal`, `stages`).
+
+Install as a user hook (from `~/.cursor/`):
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "/absolute/path/to/refactor_gpt/hooks/quality.rb",
+        "timeout": 600,
+        "loop_limit": 6
+      }
+    ]
+  }
+}
+```
+
+Or copy/symlink into `~/.cursor/hooks/` and point `hooks.json` at `./hooks/quality.rb`. When the hook does not live next to `git_commit_gpt.rb`, set `GIT_COMMIT_GPT` to that script. Optional `QUALITY_OWN_GITHUB=your-github-user` enables `--push` and stricter length checks on matching `github.com` remotes.
+
 ## Safety Features
 
 - Destructive actions ask for confirmation first

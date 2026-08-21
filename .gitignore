@@ -1,3 +1,6 @@
 .env
 .idea
 .vscode
+
+hooks/state/
+hooks/logs/
