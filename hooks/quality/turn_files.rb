@@ -8,9 +8,6 @@ module Quality
     def parent_messages
       @parent_messages ||= load_jsonl(@transcript_path)
     end
-    def all_messages
-      @all_messages ||= session_transcript_files.flat_map { |f| load_jsonl(f) }
-    end
     def load_jsonl(path)
       return [] if path.to_s.empty? || !File.file?(path)
 
@@ -25,13 +22,6 @@ module Quality
         end
         msgs << obj if obj.is_a?(Hash) && obj.key?('role')
       end
-    end
-    def session_transcript_files
-      files = []
-      files << @transcript_path if File.file?(@transcript_path.to_s)
-      dir = File.dirname(@transcript_path.to_s)
-      Dir.glob(File.join(dir, 'subagents', '*.jsonl')).each { |f| files << f if File.file?(f) }
-      files
     end
     def content_items(msg)
       c = msg.is_a?(Hash) ? (msg.dig('message', 'content') || []) : []
@@ -62,20 +52,6 @@ module Quality
     end
     def this_turn_files
       this_turn_tools.flat_map { |t| tool_paths(t) }.select { |p| keep_path?(p) }.map { |p| abs_path(p) }.uniq
-    end
-    def session_modifying_paths
-      paths = modifying_tool_paths(all_messages)
-      rec = session_files_record
-      File.foreach(rec) { |line| paths << line.chomp unless line.strip.empty? } if rec && File.file?(rec)
-      paths.uniq
-    end
-    def modifying_tool_paths(msgs)
-      msgs.flat_map { |m| content_items(m) }.flat_map do |c|
-        next [] unless c.is_a?(Hash) && c['type'] == 'tool_use'
-        next [] if READONLY.include?(c['name'].to_s)
-
-        tool_paths(c).select { |p| keep_path?(p) }.map { |p| abs_path(p) }
-      end
     end
     def tool_paths(tool)
       name = tool['name'].to_s

@@ -41,9 +41,6 @@ module Quality
     4. Keep coverage and normal readable formatting. Deleting blank lines or rewriting into denser one-liners does not count. Pre-existing size is not an excuse to skip.
     Skip only if splitting would make the specs worse — say what you tried. "Needs a bigger refactor" is not a skip.
   MSG
-  OTHER_SPEC = <<~MSG.chomp
-    Review each one for redundancy: examples covering a path that is already tested, setup copied from example to example instead of a shared let or before, unused lets, stubs and includes, fixtures the code under test never reads. Remove only what goes away without losing a check - keep the edge cases. Do not "fix" length by stripping blank lines or packing statements into harder-to-read one-liners. Run these files after editing. If there is nothing to cut, say so and leave the file alone.
-  MSG
   MODULE_SHRINK = <<~MSG.chomp
     Shrink that file only this turn by removing real weight, not by packing the text:
     1. Drop dead %<drop>s and duplication first.
@@ -55,7 +52,6 @@ module Quality
   MSG
   FOLLOWUP_RE = /
     Check\ if\ the\ issue\ is\ resolved\ fully\ and\ properly
-    |Spec\ files\ edited\ in\ this\ session\ are\ longer\ than
     |Edited\ spec\ files\ \(longest\ first\)
     |Improve\ phrasing\ and\ synonym\ choice
     |db\/schema\.rb\ was\ edited
@@ -111,6 +107,17 @@ module Quality
     |Could\ not\ locate\ Gemfile
     |Install\ missing\ gems
     |Bundler\ can.t\ satisfy
+  /ix
+  RUBOCOP_INFRA = /
+    Bundler::(GitError|PathError)
+    |is\ not\ yet\ checked\ out
+    |Could\ not\ locate\ Gemfile
+    |Cannot\ connect\ to\ the\ Docker\ daemon
+    |docker\.sock
+    |no\ configuration\ file\ provided
+    |No\ such\ service:
+    |failed\ to\ read\ dockerfile
+    |error\ while\ interpolating
   /ix
   LIZARD_READER = <<~PY
     from lizard_languages import get_reader_for

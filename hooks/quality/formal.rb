@@ -72,32 +72,17 @@ module Quality
       STDERR.puts combined
       code == 0 || combined.strip.empty? ? nil : "#{LIZARD_LEFT}\n\n#{truncate(combined)}"
     end
+    # ≥200-line extraction only for QUALITY_OWN_GITHUB remotes (same gate as --push).
     def spec_length_report(this_turn)
       own = long_specs(this_turn.select { |f| f =~ /_spec\.rb$/i && owned_repo?(f) })
-      other = other_long_specs
-      msgs = [own.empty? ? nil : own_spec_msg(own), other.empty? ? nil : other_spec_msg(other)].compact
-      msgs.empty? ? nil : msgs.join("\n\n")
-    end
-    def other_long_specs
-      return [] if File.file?(File.join(STATE, "spec-length-#{@session_key}"))
-
-      long_specs(session_spec_files.reject { |f| owned_repo?(f) })
+      own.empty? ? nil : own_spec_msg(own)
     end
     def long_specs(files)
       files.map { |f| [line_count(f), f] }.select { |n, f| n >= MAX_LINES && File.file?(f) }.sort_by { |n, _| -n }
     end
-    def session_spec_files
-      session_modifying_paths.select { |f| f =~ /_spec\.rb$/i }
-    end
     def own_spec_msg(own)
       report = own.map { |n, f| "- #{f} (#{n} lines)" }.join("\n")
       "Edited spec files (longest first):\n#{report}\n\n#{own[0][1]} is #{own[0][0]} lines (≥ 200). #{OWN_SPEC}"
-    end
-    def other_spec_msg(other)
-      FileUtils.mkdir_p(STATE)
-      File.write(File.join(STATE, "spec-length-#{@session_key}"), '')
-      report = other.map { |n, f| "- #{f} (#{n} lines)" }.join("\n")
-      "Spec files edited in this session are longer than 200 lines:\n#{report}\n\n#{OTHER_SPEC}"
     end
     def module_report(files)
       counted = counted_modules(files)
@@ -112,8 +97,7 @@ module Quality
     end
     def counted_modules(files)
       files.each_with_object([]) do |f, a|
-        next unless File.file?(f) && prod_module?(f)
-        next if f =~ /\.(ya?ml|css|scss|sass|slim|erb)$/i && !owned_repo?(f)
+        next unless File.file?(f) && prod_module?(f) && owned_repo?(f)
 
         a << [line_count(f), f]
       end.sort_by { |n, _| -n }
@@ -136,28 +120,32 @@ module Quality
     #   QUALITY_RUBOCOP_DOCKER_PARENT   — parent dir name (default: app)
     #   QUALITY_RUBOCOP_DOCKER_COMPOSE  — compose file under grandparent (default: compose/app.yaml)
     def rubocop_docker_root(root)
-      return nil unless rubocop_docker_enabled?
-      return nil unless File.file?(File.join(root, 'Gemfile'))
+      return nil unless rubocop_docker_candidate?(root)
 
       service = ENV['QUALITY_RUBOCOP_DOCKER_SERVICE'].to_s.strip
-      return nil if service.empty?
-
-      basename = ENV.fetch('QUALITY_RUBOCOP_DOCKER_BASENAME', service).to_s
-      parent = ENV.fetch('QUALITY_RUBOCOP_DOCKER_PARENT', 'app').to_s
-      compose_rel = ENV.fetch('QUALITY_RUBOCOP_DOCKER_COMPOSE', 'compose/app.yaml').to_s
-      return nil unless File.basename(root) == basename
-      return nil unless File.basename(File.dirname(root)) == parent
-
       grand = File.expand_path('../..', root)
-      compose = File.join(grand, compose_rel)
-      return nil unless File.file?(compose) && File.file?(File.join(grand, '.env'))
-      return nil unless File.read(compose) =~ /^[[:space:]]*#{Regexp.escape(service)}:/
+      compose = File.join(grand, ENV.fetch('QUALITY_RUBOCOP_DOCKER_COMPOSE', 'compose/app.yaml'))
+      return nil unless docker_compose_ready?(grand, compose, service)
 
       grand
     end
+    def rubocop_docker_candidate?(root)
+      rubocop_docker_enabled? && File.file?(File.join(root, 'Gemfile')) &&
+        (service = ENV['QUALITY_RUBOCOP_DOCKER_SERVICE'].to_s.strip) && !service.empty? &&
+        docker_root_layout?(root, service)
+    end
+    def docker_compose_ready?(grand, compose, service)
+      File.file?(compose) && File.file?(File.join(grand, '.env')) &&
+        File.read(compose) =~ /^[[:space:]]*#{Regexp.escape(service)}:/
+    end
+    def docker_root_layout?(root, service)
+      basename = ENV.fetch('QUALITY_RUBOCOP_DOCKER_BASENAME', service).to_s
+      parent = ENV.fetch('QUALITY_RUBOCOP_DOCKER_PARENT', 'app').to_s
+      File.basename(root) == basename && File.basename(File.dirname(root)) == parent
+    end
 
     def rubocop_infra?(out)
-      out.to_s =~ /Bundler::(GitError|PathError)|is not yet checked out|Could not locate Gemfile|Cannot connect to the Docker daemon|docker\.sock|no configuration file provided|No such service:|failed to read dockerfile|error while interpolating/
+      out.to_s =~ RUBOCOP_INFRA
     end
 
     def docker_compose
@@ -178,7 +166,8 @@ module Quality
         install_rubocop(root)
         return true if rubocop_ok?
 
-        STDERR.puts "[quality] still cannot run rubocop after install (ruby=#{which('ruby')}, bundle=#{which('bundle')})"
+        STDERR.puts "[quality] still cannot run rubocop after install " \
+                    "(ruby=#{which('ruby')}, bundle=#{which('bundle')})"
         false
       end
     rescue StandardError => e
@@ -207,27 +196,34 @@ module Quality
       File.file?('Gemfile') && capture('bundle', 'exec', 'rubocop', '-v')[2] == 0
     end
     def run_rubocop(root, *args)
+      cmd, chdir = rubocop_docker_cmd(root, args)
+      return run_docker_rubocop(root, cmd, chdir) if cmd
+
+      Dir.chdir(root) do
+        base = bundled_rubocop_ok? ? %w[bundle exec rubocop] : %w[rubocop]
+        out, err, code = capture(*(base + args))
+        ["#{out}#{err}", code]
+      end
+    end
+    def rubocop_docker_cmd(root, args)
       wb = rubocop_docker_root(root)
       service = ENV['QUALITY_RUBOCOP_DOCKER_SERVICE'].to_s.strip
       dc = docker_compose if wb && which('docker') && !service.empty?
-      if wb && dc
-        cmd = dc + ['run', '--rm', '--no-deps', service, 'bundle', 'exec', 'rubocop'] + args
-        STDERR.puts "[quality] #{root} via docker (#{wb}): #{cmd.join(' ')}"
-        out, err, code = capture(*cmd, chdir: wb)
-        combined = "#{out}#{err}"
-        if rubocop_infra?(combined)
-          STDERR.puts '[quality] infra failure; not treating as offenses'
-          STDERR.puts combined
-          return ['', 0]
-        end
-        return [combined, code]
+      return nil unless wb && dc
+
+      [dc + ['run', '--rm', '--no-deps', service, 'bundle', 'exec', 'rubocop'] + args, wb]
+    end
+    def run_docker_rubocop(root, cmd, wb)
+      STDERR.puts "[quality] #{root} via docker (#{wb}): #{cmd.join(' ')}"
+      out, err, code = capture(*cmd, chdir: wb)
+      combined = "#{out}#{err}"
+      if rubocop_infra?(combined)
+        STDERR.puts '[quality] infra failure; not treating as offenses'
+        STDERR.puts combined
+        return ['', 0]
       end
 
-      Dir.chdir(root) do
-        cmd = bundled_rubocop_ok? ? %w[bundle exec rubocop] : %w[rubocop]
-        out, err, code = capture(*(cmd + args))
-        ["#{out}#{err}", code]
-      end
+      [combined, code]
     end
     def lizard_python(bin)
       File.open(bin, 'r', &:readline).sub(/^#!/, '').split.first

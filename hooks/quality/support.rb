@@ -95,7 +95,6 @@ module Quality
       s = text.to_s
       s.bytesize <= LIMIT ? s : "#{s.byteslice(0, LIMIT)}\n... (truncated)"
     end
-    def session_files_record; @session_key.empty? ? nil : File.join(STATE, "session-files-#{@session_key}"); end
     def pending_file; File.join(STATE, "stop-pending-#{@session_key}"); end
     def review_flag_file(name); File.join(STATE, "stop-#{name}-#{@session_key}"); end
     def review_flag?(name); File.file?(review_flag_file(name)); end
@@ -131,7 +130,8 @@ module Quality
     def cleanup_state
       FileUtils.mkdir_p(STATE)
       cutoff = Time.now - 7 * 86_400
-      Dir.glob(File.join(STATE, '*')).each { |f| (File.delete(f) if File.file?(f) && File.mtime(f) < cutoff) rescue nil }
+      Dir.glob(File.join(STATE, '*')).each { |f|
+ (File.delete(f) if File.file?(f) && File.mtime(f) < cutoff) rescue nil }
     rescue StandardError
       nil
     end
