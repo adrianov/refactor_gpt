@@ -28,7 +28,7 @@ class OpenrouterClient
   def initialize(model: nil, debug: false, max_completion_tokens: nil,
     progress_title: nil, api_base_url: nil, api_key: nil, raise_on_server_error: false,
     reasoning: nil)
-    @model = model || fetch_env('MODEL', DEFAULT_MODEL)
+    @model = normalize_model(model || fetch_env('MODEL', DEFAULT_MODEL))
     @api_base_url = api_base_url || fetch_env('OPENROUTER_BASE_URL', DEFAULT_BASE_URL)
     @api_key = api_key || fetch_env('OPENROUTER_API_KEY')
     @debug = debug
@@ -44,6 +44,11 @@ class OpenrouterClient
   end
 
   private
+
+  # OpenRouter takes bare slugs; an "openrouter/" prefix is client-side routing only.
+  def normalize_model(id)
+    id.to_s.sub(%r{\Aopenrouter/}, '')
+  end
 
   def run(messages, json:, title:)
     chat = build_chat(messages, json: json)

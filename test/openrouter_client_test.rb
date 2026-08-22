@@ -90,6 +90,17 @@ client.send(:answer_from, assistant_message(content: nil, thinking_text: 'from t
     assert_equal 'low', thinking.effort
   end
 
+  def test_model_normalization_strips_openrouter_routing_prefix
+    assert_equal 'stealth/ox-alpha',
+      OpenrouterClient.new(model: 'openrouter/stealth/ox-alpha', api_key: 'test-key').model
+  end
+
+  def test_model_normalization_keeps_vendor_slugs_and_defaults
+    unprefixed = OpenrouterClient.new(model: 'google/gemini-3.7-flash', api_key: 'test-key')
+    assert_equal 'google/gemini-3.7-flash', unprefixed.model
+    assert_equal OpenrouterClient::DEFAULT_MODEL, client.model
+  end
+
   def env_with_status(status)
     Object.new.tap { |env| env.define_singleton_method(:status) { status } }
   end
