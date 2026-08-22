@@ -117,7 +117,13 @@ module Quality
       found
     end
     def schema_edited?
+      # Own repos commit schema.rb as generated; the minimal-change note is for other remotes.
+      return false if owned_workspace?
       return true if schema_tool_edit?
+
+      migration_dirtied_schema?
+    end
+    def migration_dirtied_schema?
       return false unless this_turn_shell_commands.any? { |c| c =~ SCHEMA_SHELL_RE }
 
       root = @roots[0]

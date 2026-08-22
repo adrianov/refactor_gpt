@@ -10,7 +10,7 @@
 #    QUALITY_OWN_GITHUB (same gate as --push). Failures retry this stage after
 #    the agent fixes them.
 # 3. Review: completion check and scatter (once per cycle; reset if formal
-#    or commit complains), plus schema.rb.
+#    or commit complains), plus schema.rb (own-repo remotes exempt).
 # 4. Document: wording for new .md files only, once, right before commit.
 #    Edits to existing .md skip this stage. Markdown-only edits continue to
 #    commit. A full cycle restart can reach this stage again.
@@ -24,7 +24,8 @@
 #   GIT_COMMIT_GPT       — path to git_commit_gpt.rb (default: ../../git_commit_gpt.rb)
 #   QUALITY_OWN_GITHUB   — GitHub username/org; when set, owned remotes get
 #                          --push, AbcSize, lizard CCN, and ≥200-line
-#                          spec/module extraction
+#                          spec/module extraction; the schema.rb
+#                          minimal-change note applies to other remotes only
 #   QUALITY_RUBOCOP_DOCKER=1 — run RuboCop via docker compose for matching apps
 #   QUALITY_RUBOCOP_DOCKER_SERVICE  — compose service name (required when docker on)
 #   QUALITY_RUBOCOP_DOCKER_BASENAME — Gemfile-root basename (default: SERVICE)

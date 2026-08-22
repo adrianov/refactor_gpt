@@ -43,6 +43,13 @@ module Quality
     def owned_repo?(path)
       (r = git_root(File.dirname(path))) && owned_remote?(git_remote(r))
     end
+    # True when the first workspace root's repo remote belongs to OWN_GITHUB.
+    def owned_workspace?
+      root = workspace_git_root
+      return false unless root
+
+      owned_remote?(git_remote(root))
+    end
     def owned_remote?(remote)
       !OWN_GITHUB.empty? && !remote.to_s.empty? && !!(remote =~ %r{github\.com[:/]#{Regexp.escape(OWN_GITHUB)}/}i)
     end
