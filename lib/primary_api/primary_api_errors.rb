@@ -2,9 +2,9 @@
 
 require 'oj'
 
-# Maps ruby-llm provider errors onto CLI semantics: balance exhaustion prints and exits,
-# OpenRouter 400-wrapped upstream failures get a bounded manual retry, and everything else
-# stops the process once the transport-level retries are exhausted. Also carries the
+# Maps ruby-llm provider errors onto CLI semantics: balance exhaustion and plain HTTP 400 rejections
+# print details and exit; OpenRouter 400-wrapped upstream failures get a bounded manual retry, and
+# everything else stops the process once the transport-level retries are exhausted. Also carries the
 # payload helpers that read and format those error bodies.
 module PrimaryApiErrors
   MAX_RETRIES = 3
@@ -25,8 +25,17 @@ module PrimaryApiErrors
   rescue RubyLLM::UnauthorizedError => e
     warn "❌ #{e.message}"
     exit 1
-  rescue Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ETIMEDOUT, Timeout::Error => e
+  rescue RubyLLM::BadRequestError => e
+    exit_bad_request(e)
+  rescue Faraday::Error, Errno::ETIMEDOUT, Errno::ECONNRESET, Errno::ECONNREFUSED, Errno::EPIPE,
+    Timeout::Error, SocketError => e
     exhaust("❌ Network/resource error persisted after #{MAX_RETRIES} retries: #{e.message}")
+  end
+
+  def exit_bad_request(error)
+    warn "❌ OpenRouter rejected the request: #{error.message}"
+    warn_if_present('Response body:', error_body(error))
+    exit 1
   end
 
   # 429s are retried by the transport; surfacing here means retries are exhausted.

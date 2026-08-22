@@ -68,4 +68,27 @@ class TestPrimaryApiErrors < Minitest::Test
     end
   end
 
+  def test_plain_400_exits_with_provider_body
+    _out, err = capture_io do
+      error = assert_raises(SystemExit) do
+        retrying_client.send(:translate_api_errors) do
+          raise fake_bad_request('{"error":{"message":"This models maximum context length is exceeded"}}')
+        end
+      end
+      assert_equal 1, error.status
+    end
+    assert_includes err, 'rejected the request'
+    assert_includes err, 'maximum context length'
+  end
+
+  def test_transport_errors_exit_with_network_message
+    _out, err = capture_io do
+      error = assert_raises(SystemExit) do
+        retrying_client.send(:translate_api_errors) { raise Errno::ECONNRESET }
+      end
+      assert_equal 1, error.status
+    end
+    assert_includes err, 'Network/resource error'
+  end
+
 end
