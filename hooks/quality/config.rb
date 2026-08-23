@@ -119,6 +119,8 @@ module Quality
     |No\ such\ service:
     |failed\ to\ read\ dockerfile
     |error\ while\ interpolating
+    |Cannot\ allocate\ memory
+    |fork\(2\)
   /ix
   LIZARD_READER = <<~PY
     from lizard_languages import get_reader_for

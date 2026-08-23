@@ -284,7 +284,10 @@ module Quality
       dc = docker_compose if wb && which('docker') && !service.empty?
       return nil unless wb && dc
 
-      [dc + ['run', '--rm', '--no-deps', service, 'bundle', 'exec', 'rubocop'] + args, wb]
+      # One process: parallel warm_cache forks OOMs on constrained CI/dev hosts
+      # and the stack was misreported as remaining RuboCop offenses.
+      env = %w[-e PARALLEL_PROCESSOR_COUNT=1]
+      [dc + ['run', '--rm', '--no-deps'] + env + [service, 'bundle', 'exec', 'rubocop'] + args, wb]
     end
     def run_docker_rubocop(root, cmd, wb)
       STDERR.puts "[quality] #{root} via docker (#{wb}): #{cmd.join(' ')}"
