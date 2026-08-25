@@ -5,22 +5,20 @@ require "colorize"
 # Post-processes LLM commit plans: schema normalization, path correction,
 # and reinclusion of wrongly excluded source files.
 module CommitPlanFinalize
-  NESTED_PLAN_KEYS = %w[commits warnings excluded_files].freeze
-  QA_FIELDS = %w[direction explanation].freeze
-
   module_function
 
   def finalize_or_reject(plan, status_output, raw_response: nil)
-    plan = normalize_plan(plan)
+    plan = CommitPlanNormalization.normalize_plan(plan)
     result = finalize(plan, status_output)
     return result if result
+    return announce_nothing_to_commit(plan) if all_paths_excluded?(plan, status_output)
 
     warn_rejection(plan, status_output, raw_response: raw_response)
     :plan_rejected
   end
 
   def finalize(plan, status_output)
-    plan = normalize_plan(plan)
+    plan = CommitPlanNormalization.normalize_plan(plan)
     return nil unless plan.is_a?(Hash)
 
     commits = plan["commits"] || []
@@ -34,41 +32,26 @@ module CommitPlanFinalize
     result["commits"].empty? ? nil : result
   end
 
-  # Unwrap array wrappers (e.g. [["PT-123"], {plan}]) and hoist nested QA fields.
-  def normalize_plan(plan)
-    plan = unwrap_plan_payload(plan)
-    return plan unless plan.is_a?(Hash)
+  # A zero-commit plan is legitimate when every changed path was deliberately excluded.
+  def all_paths_excluded?(plan, status_output)
+    return false unless plan.is_a?(Hash)
+    return false unless Array(plan["commits"]).empty?
 
-    qa = plan["quality_assessment"]
-    return plan unless qa.is_a?(Hash) && nested_fields_in_qa?(qa)
-
-    normalized = plan.dup
-    NESTED_PLAN_KEYS.each { |key| normalized[key] = pick_plan_array(plan[key], qa[key]) }
-    normalized["quality_assessment"] = qa.slice(*QA_FIELDS)
-    normalized
+    excluded = Array(plan["excluded_files"]).map { |entry| entry["path"].to_s }.to_set
+    GitStatusPaths.filenames(status_output).all? { |path| excluded.include?(path) }
   end
 
-  # Some models wrap the plan object in a JSON array (ticket id + plan, or lone [plan]).
-  def unwrap_plan_payload(plan)
-    return plan if plan.is_a?(Hash)
-    return plan unless plan.is_a?(Array)
-
-    hashes = plan.filter_map { |item| unwrap_plan_payload(item) }.select { |item| item.is_a?(Hash) }
-    hashes.find { |hash| plan_like?(hash) } || hashes.first || plan
+  def announce_nothing_to_commit(plan)
+    puts "Nothing to commit: every changed path is excluded.".yellow
+    display_plan_extras(plan)
+    hint_gitignore_for_finder_noise(Array(plan["excluded_files"]))
+    :nothing_to_commit
   end
 
-  def plan_like?(hash)
-    hash.key?("commits") || hash.key?("quality_assessment")
-  end
+  def hint_gitignore_for_finder_noise(excluded)
+    return unless excluded.any? { |entry| File.basename(entry["path"].to_s) == ".DS_Store" }
 
-  def pick_plan_array(top, nested)
-    top_arr = top.is_a?(Array) ? top : []
-    nested_arr = nested.is_a?(Array) ? nested : []
-    top_arr.any? ? top_arr : nested_arr
-  end
-
-  def nested_fields_in_qa?(qa)
-    NESTED_PLAN_KEYS.any? { |key| qa.key?(key) }
+    puts "Hint: add .DS_Store to .gitignore to keep it out of git status.".cyan
   end
 
   def warn_rejection(plan, status_output, raw_response: nil)
@@ -184,6 +167,6 @@ module CommitPlanFinalize
     :listed_plan_paths, :partition_truncation_excluded,
     :code_file_excluded?, :append_paths_to_last_commit, :warn_rejection,
     :warn_empty_commits,
-    :print_raw_response, :display_plan_extras, :pick_plan_array, :nested_fields_in_qa?,
-    :unwrap_plan_payload, :plan_like?
+    :print_raw_response, :display_plan_extras, :all_paths_excluded?,
+    :announce_nothing_to_commit, :hint_gitignore_for_finder_noise
 end

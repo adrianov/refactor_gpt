@@ -58,6 +58,7 @@ class GitCommitSession
 
   def apply_plan(plan)
     exit 1 if plan == :plan_rejected
+    exit 0 if plan == :nothing_to_commit
     return unless plan.is_a?(Hash)
 
     if @options.watch

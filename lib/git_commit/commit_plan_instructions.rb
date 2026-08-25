@@ -38,7 +38,7 @@ module CommitPlanInstructions
       - **Status coverage (critical)**: Every path on a non-## line in `git status` MUST appear in exactly one commit `files` entry OR in `excluded_files` with a valid exclusion reason. Omission is never allowed. Before returning JSON, verify the union of all `commits[].files` and `excluded_files[].path` equals the full set of paths from status (for renames, use the destination path). Common causes of wrongful omission — you MUST NOT do these:
         - Skipping a file because the hunk is small, trivial, whitespace-only, or a one-line simplification — if Git reports it in status, the user intends to commit it.
         - Listing only files named in the commit message while dropping other status paths.
-        - Returning `commits: []` while status has changed files — when status is non-empty, return at least one commit covering every eligible path.
+        - Returning `commits: []` while status has changed files — when status is non-empty, return at least one commit covering every eligible path. Sole exception: when EVERY changed path falls under File Exclusion Rules below, return `"commits": []` and list each path in `excluded_files`.
         - Treating section (2) numstat as the commit scope — paths only in section (2) are already committed; paths in status are not yet committed and MUST be included.
       - Analyze the status and **section (1) uncommitted diff** to infer logical groups of changes (by feature, bugfix, refactor, docs, tests, etc.). Files already staged (non-space first column in `git status`) are pre-selected by the user and should be grouped into an early commit. **Code-level assessment and line-specific warnings must be grounded in section (1)** where unified diff hunks exist; for paths listed at the end of (1) as **diff-omitted under limits**, ground assessment in numstat counts, file path, and status — section (2) is counts only for branch-vs-origin context.
       - **Commit message accuracy (critical)**: Every substantive word in each `message` and in `quality_assessment.explanation` MUST match a change reflected in section (1) for the files in that commit (unified hunk, numstat line for that path, or explicit diff-omitted path list + status). If section (1) does not support a topic (e.g. no hunk, no numstat row, path not in status), that topic MUST NOT appear — even if section (2) or recent commit titles suggest a story.
@@ -101,6 +101,7 @@ module CommitPlanInstructions
           - **Temporary and debug files**: Exclude from commits if changes are clearly temporary or debug-only, such as:
             - Files in `tmp/` directory
             - Files with `.log`, `.tmp`, `.temp`, `.bak`, `.swp`, `.swo` extensions
+            - OS metadata files such as `.DS_Store`, `Thumbs.db`, `desktop.ini`
             - Debug console output added with `puts`, `p`, `pp`, or `debugger` statements that are not part of actual functionality
             - Test stub files in `spec/stubs/`, `test/stubs/`, `test/fixtures/` when unrelated to test code changes
           - For each excluded file, provide a clear reason in the excluded_files section.

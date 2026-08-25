@@ -106,7 +106,7 @@ class GitCommitPlanner
     result = CommitPlanFinalize.finalize_or_reject(
       plan_result[:plan], status, raw_response: plan_result[:raw_response]
     )
-    return :plan_rejected if result == :plan_rejected
+    return result if result.is_a?(Symbol)
 
     result_with_status(result, status)
   end
