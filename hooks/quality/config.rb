@@ -5,7 +5,17 @@
 module Quality
   HOOKS = File.expand_path('..', __dir__)
   STATE = File.join(HOOKS, 'state')
-  LOGS = File.join(HOOKS, 'logs')
+  # Content digests of reviewed markdown files that live outside any git repo
+  # (Obsidian vaults): no HEAD to diff against, so fire once per content state.
+  MD_REVIEW_DIGESTS = File.join(STATE, 'md-review-digests.json')
+  # XDG console-app convention (same layout on macOS and Linux): all hook
+  # logs live under $XDG_DATA_HOME (fallback ~/.local/share)/quality-hook.
+  DATA_HOME = begin
+    xdg = ENV['XDG_DATA_HOME'].to_s.chomp('/')
+    base = xdg.empty? ? File.join(ENV['HOME'].to_s, '.local/share') : xdg
+    File.join(base, 'quality-hook')
+  end
+  LOGS = File.join(DATA_HOME, 'logs')
   COMMIT_GPT = begin
     from_env = ENV['GIT_COMMIT_GPT'].to_s
     from_env.empty? ? File.expand_path('../../git_commit_gpt.rb', __dir__) : from_env

@@ -7,6 +7,8 @@ module Quality
   # Pipeline sequencing plus review/document reports and git_commit_gpt.
   module Stages
     def stop_pipeline
+      root = workspace_git_root
+      log_action('start', status: @input['status'].to_s, dir: @roots[0].to_s, git: root ? 'yes' : 'no')
       return empty unless completed?
 
       files, chain, stage, saved = boot_cycle
@@ -20,11 +22,12 @@ module Quality
       files = this_turn_files
       chain = followup_chain?
       stage, saved = load_stage
-      STDERR.puts "[quality] chain=#{chain} stage=#{stage || 'formal'} files=#{files.size}"
+      log_action('boot', chain: chain, stage: stage || 'formal', files: files.size)
       chain ? [files, chain, stage, saved] : (unset_review_flags; [files, chain, 'formal', []])
     end
     def empty_files_path
-      (msg = run_commit) ? followup(msg) : finish_empty
+      log_action('stage', name: 'commit-empty-files')
+      (msg = timed('commit-empty-files') { run_commit }) ? followup(msg) : finish_empty
     end
     def advance_stage(stage, files, chain)
       return 'formal' if stage.nil? || stage.empty? || !chain
@@ -40,7 +43,8 @@ module Quality
       %w[formal review document].each do |name|
         next unless stage == name
 
-        msg = send(:"#{name}_stage", files, saved, *(name == 'formal' ? [chain] : []))
+        log_action('stage', name: name, files: files.size, list: files.first(3).join(','), saved: saved.size, chain: chain)
+        msg = timed(name) { send(:"#{name}_stage", files, saved, *(name == 'formal' ? [chain] : [])) }
         return msg if msg
 
         stage = { 'formal' => 'review', 'review' => 'document', 'document' => 'commit' }[name]
@@ -56,7 +60,8 @@ module Quality
       (msg = document_report(df)) && (save_stage('document', df); followup(msg))
     end
     def commit_followup(files)
-      if (msg = run_commit)
+      log_action('stage', name: 'commit', files: files.size)
+      if (msg = timed('commit') { run_commit })
         unset_review_flags
         save_stage('commit_fix', files)
         return followup(msg)
@@ -92,29 +97,55 @@ module Quality
         'Consider consolidating if that would make the intent clearer.'
     end
     def document_report(files)
-      md = Array(files).select { |f| new_md_file?(f) }
+      md = Array(files).select { |f| changed_md_file?(f) }
+      mark_md_reviewed(md)
       md.empty? ? nil : "#{MD_MSG}\n#{md.map { |f| "- #{f}" }.join("\n")}"
     end
-    def new_md_file?(abs)
+    def changed_md_file?(abs)
       return false if abs.to_s.empty? || abs !~ /\.md$/i || !File.file?(abs)
 
       abs = File.realpath(abs) rescue abs.to_s
       root = git_root(File.dirname(abs))
-      return false unless root
+      return tracked_new_md?(root, abs) if root
 
+      untracked_md_changed?(abs)
+    end
+    def tracked_new_md?(root, abs)
       root = File.realpath(root) rescue root
       (rel = rel_to(root, abs)) && capture('git', '-C', root, 'cat-file', '-e', "HEAD:#{rel}")[2] != 0
     end
+    # Markdown outside any git repo (Obsidian vault docs): there is no HEAD to
+    # compare with, so the wording pass fires when the content differs from the
+    # last state it was reviewed in, not on every stop.
+    def untracked_md_changed?(abs)
+      md_digests[abs] != Digest::SHA256.file(abs).hexdigest
+    end
+    def mark_md_reviewed(files)
+      return if files.empty?
+
+      store = md_digests
+      files.each do |abs|
+        real = File.realpath(abs) rescue abs.to_s
+        store[real] = Digest::SHA256.file(real).hexdigest
+      end
+      File.write(Quality::MD_REVIEW_DIGESTS, JSON.generate(store))
+    rescue StandardError
+      nil
+    end
+    def md_digests
+      JSON.parse(File.read(Quality::MD_REVIEW_DIGESTS))
+    rescue StandardError
+      {}
+    end
     def git_clean_files?(files)
-      found = false
       files.each do |abs|
         next if abs.to_s.empty? || !(root = git_root(File.dirname(abs)))
-
-        found = true
         next unless (rel = rel_to(root, abs))
+
         return false unless capture('git', '-C', root, 'status', '--porcelain', '--', rel)[0].to_s.empty?
       end
-      found
+      # Files outside any repo (or all-clean repo files) leave nothing pending.
+      true
     end
     def schema_edited?
       # Own repos commit schema.rb as generated; the minimal-change note is for other remotes.

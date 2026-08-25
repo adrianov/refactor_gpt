@@ -121,7 +121,13 @@ module Quality
       quoted && s.length > 1 ? s[1..-2] : s
     end
     def abs_path(p)
-      p.to_s.empty? || p.start_with?('/') ? p : (@roots.empty? ? p : "#{@roots[0]}/#{p}")
+      p = p.to_s
+      return p if p.empty? || p.start_with?('/')
+      # Tool paths may come home-relative ("~/Documents/..."): expanding here
+      # keeps them out of the root join, which would bury "~" mid-path.
+      return File.expand_path(p) if p.start_with?('~')
+
+      @roots.empty? ? p : "#{@roots[0]}/#{p}"
     end
     def hook_file?(p)
       a = abs_path(p)
