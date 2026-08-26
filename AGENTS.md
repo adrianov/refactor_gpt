@@ -14,14 +14,15 @@ RefactorGPT Tools provides command-line utilities for:
 ## Build/Lint/Test Commands
 
 ```bash
-# Lint and auto-correct Ruby code style (use bundle exec when the project has RuboCop in the Gemfile)
-bundle exec rubocop -a
+# Lint with abcop (fast ABC-size + variable-usage linter; no bundler needed)
+abcop --changed   # only functions whose lines changed vs HEAD
+abcop             # whole tree
 
 # Validate syntax
 ruby -c path/to/file.rb
 ```
 
-**RuboCop policy**: Fix all offenses in touched files; do not use `# rubocop:disable` or expand `.rubocop.yml` / todo excludes to hide violations (see `.cursor/rules/rubocop-no-suppress.mdc`).
+**abcop policy**: Fix all abcop offenses (ABC size above the threshold, used-once/never-used variables, module size ≥ 200 lines) in touched files; do not add `rubocop:disable`-style suppression comments to hide them.
 
 **Note**: This project does not have automated tests. Manual testing involves running the individual scripts.
 
@@ -129,13 +130,13 @@ When refactoring code, systematically identify and remove unused and dead code w
 - Use `File::NULL` for discarding command output when redirecting to /dev/null
 
 ### Linting and Code Quality
-- **Treat linter warnings seriously**: For any file or module you change, fix all Rubocop offenses reported in that file. Do not leave new or existing linter warnings in modified code.
-- Git commit flow best-effort runs `bundle exec rubocop -a` then plain `rubocop -a` on changed Ruby paths; if both fail, planning continues (Bundler 4 ignores the old `BUNDLE_DISABLE_RUBY_VERSION_CHECK` escape)
+- **Treat linter warnings seriously**: For any file or module you change, fix all abcop offenses reported in that file. Do not leave new or existing linter warnings in modified code.
+- Git commit flow shows a ready-to-copy `abcop --changed` hint when Ruby/Rust files changed; run it and fix findings before committing.
 - Ensure syntax is valid with `ruby -c` after modifications
 - Follow Ruby style guides and existing code conventions
 - Remove duplicate code and unused variables systematically
 - Read files completely when fixing errors or adding new functionality to ensure complete context is preserved
-- **Metric Violations**: When Rubocop detects Metric violations (e.g., `Metrics/AbcSize`, `Metrics/MethodLength`, `Metrics/ClassLength`, `Metrics/CyclomaticComplexity`, `Metrics/ModuleLength`), refactor by:
+- **Metric Violations**: When abcop detects complexity violations (`Metrics/AbcSize` above 17) or modules over 200 lines, refactor by:
   - Extracting complex logic into smaller, focused methods
   - Breaking down large methods into logical units
   - Using guard clauses to reduce nested conditions

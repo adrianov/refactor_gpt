@@ -217,7 +217,7 @@ Features:
 
 ### hooks/quality.rb
 
-Cursor `stop` hook: after each completed agent turn, runs formal checks (RuboCop, AbcSize, lizard, long specs/modules), a short review, optional new-`.md` wording, then `git_commit_gpt --auto`. One follow-up message per stop; stages retry until clean. Logic lives in `hooks/quality/` (`config`, `support`, `turn_files`, `formal`, `stages`).
+Cursor `stop` hook: after each completed agent turn, runs formal checks (abcop lint, long specs/modules), a short review, optional new-`.md` wording, then `git_commit_gpt --auto`. One follow-up message per stop; stages retry until clean. Logic lives in `hooks/quality/` (`config`, `support`, `state_store`, `turn_files`, `formal`, `stages`).
 
 Install as a user hook (from `~/.cursor/`):
 
