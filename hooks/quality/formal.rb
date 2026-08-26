@@ -44,12 +44,14 @@ module Quality
     end
 
     def abcop_targets(files)
-      files.select { |f| f =~ /\.(rb|rake|ru|rs)\z/i && File.file?(f) && owned_repo?(f) }
+      files.select { |f| f =~ /\.(rb|rake|ru|rs|js|jsx|mjs|cjs|ts|tsx|mts|cts|go|swift|java|kt|kts|cs|php|sol|c|cc|cpp|cxx|h|hpp|hh|hxx)\z/i && File.file?(f) && owned_repo?(f) }
            .reject { |f| f =~ %r{(^|/)db/migrate/}i || routing_file?(f) }
     end
 
-    # One run per repository: with --changed abcop resolves the file set
-    # itself from git, so only the repo root matters here.
+    # One run per repository: --mr makes abcop scan the MR scope itself
+    # (changes since branching from master/main plus uncommitted work), so
+    # only the repo root matters here. Result cache stays enabled — repeat
+    # scans over unchanged files are cheap.
     def abcop_by_root(bin, targets)
       # abcop reports paths resolved from the git root (/tmp -> /private/tmp
       # on macOS), so match diagnostics through realpath, not expand_path.
@@ -69,8 +71,8 @@ module Quality
       end.join
     end
     def abcop_root_output(bin, root, group, allowed)
-      STDERR.puts "[quality] #{root}: abcop --changed (#{group.size} files)"
-      out, err, code = capture(bin, '--changed', '--no-cache', '--format', 'json', chdir: root)
+      STDERR.puts "[quality] #{root}: abcop --mr (#{group.size} target files)"
+      out, err, code = capture(bin, '--mr', '--format', 'json', chdir: root)
       return scope_failure(err) if code == 2
 
       # Exit contract: 0 clean, 1 findings, 2 scope/infra failure. Parse on
