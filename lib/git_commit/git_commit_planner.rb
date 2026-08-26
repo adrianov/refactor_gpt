@@ -21,7 +21,7 @@ class GitCommitPlanner
     context = plan_context(status)
     diff = uncommitted_diff(context[:budgets])
     @capture.show_if_needed(show_diff)
-    show_rubocop_hint(status) if show_diff
+    show_lint_hint(status) if show_diff
     finalize_plan(request_plan(status, context, diff), status)
   end
 
@@ -117,11 +117,11 @@ class GitCommitPlanner
     result
   end
 
-  def show_rubocop_hint(status)
-    cmd = GitCommitRubocop.suggestion(status)
+  def show_lint_hint(status)
+    cmd = GitCommitAbcop.suggestion(status)
     return unless cmd
 
-    puts "Run RuboCop before committing:".yellow
+    puts "Run abcop before committing:".yellow
     puts cmd.cyan
     puts
   end
