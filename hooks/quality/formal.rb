@@ -55,7 +55,13 @@ module Quality
       # on macOS), so match diagnostics through realpath, not expand_path.
       # Small per-turn list; Array#include? keeps this file free of the
       # `set` dependency.
-      allowed = targets.map { |f| File.realpath(f) }
+      # A target deleted between turn-file collection and this scan would
+      # raise ENOENT and abort the whole stage; drop it instead.
+      allowed = targets.filter_map do |f|
+        File.realpath(f)
+      rescue Errno::ENOENT
+        nil
+      end
       targets.group_by { |f| git_root(File.dirname(f)) }.filter_map do |root, group|
         next if root.nil?
 
