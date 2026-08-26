@@ -36,6 +36,17 @@ module Quality
     rescue StandardError
       nil
     end
+    # Repeat marker ("digest\ncount"): consecutive deliveries of an identical
+    # followup message; quality.rb trips the no-progress breaker on it.
+    def repeat_file; File.join(STATE, "stop-repeat-#{@session_key}"); end
+    def load_repeat
+      return ['', 0] unless File.file?(repeat_file)
+
+      rows = File.readlines(repeat_file).map(&:chomp)
+      [rows[0].to_s, rows[1].to_i]
+    end
+    def save_repeat(digest, count); File.write(repeat_file, "#{digest}\n#{count}\n"); end
+    def clear_repeat; File.delete(repeat_file) if File.file?(repeat_file); rescue StandardError; nil; end
     def cleanup_state
       FileUtils.mkdir_p(STATE)
       cutoff = Time.now - 7 * 86_400

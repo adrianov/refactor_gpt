@@ -35,6 +35,7 @@
 
 require 'json'
 require 'fileutils'
+require 'digest'
 
 require_relative 'quality/config'
 require_relative 'quality/support'
@@ -117,6 +118,9 @@ class QualityHook
 
   def followup(msg)
     msg = rel_project_text(msg.to_s)
+    return stalled_followup(msg) if stalled_repeat?(msg)
+
+    bump_repeat(msg)
     FileUtils.mkdir_p(Quality::STATE)
     File.write(pending_file, msg)
     puts JSON.generate('followup_message' => msg)
@@ -124,6 +128,34 @@ class QualityHook
     # so a nil here used to keep the pipeline going and finish_empty overwrote
     # the followup with `{}` (verify / lint / etc. never reached the agent).
     msg
+  end
+
+  # Breaker against endless re-emission of an identical followup: when nothing
+  # progresses between deliveries (e.g. a rate-limited provider kills every
+  # turn before the agent can act), resending the same message loops forever.
+  # Trips mid-chain only; FOLLOWUP_REPEATS deliveries get through, then the
+  # cycle is dropped silently for the agent to resume with the next user input.
+  def stalled_repeat?(msg)
+    return false if @input['loop_count'].to_i.zero?
+
+    digest, count = load_repeat
+    digest == Digest::SHA256.hexdigest(msg) && count >= Quality::FOLLOWUP_REPEATS
+  end
+
+  def bump_repeat(msg)
+    digest = Digest::SHA256.hexdigest(msg)
+    prev, count = load_repeat
+    save_repeat(digest, prev == digest ? count + 1 : 1)
+  end
+
+  def stalled_followup(msg)
+    _, count = load_repeat
+    log_action('followup_stalled', repeats: count, head: msg[0, 80])
+    clear_stage
+    clear_repeat
+    release_active
+    empty
+    throw :stalled
   end
 
   def completed?

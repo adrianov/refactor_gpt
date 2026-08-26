@@ -93,16 +93,26 @@ module Quality
     def routing_file?(path)
       File.basename(path) =~ /^routes\.rb$/i || path =~ %r{(^|/)config/routes/}i
     end
+
+    # Vendored/generated material is never owned production code, whatever
+    # the diff touched: size findings there have no action you can take
+    # upstream. Mirrors abcop's scoped-run third-party prune.
+    def third_party?(path)
+      path =~ %r{(^|/)(vendor|node_modules|bower_components|Pods|Carthage|target|dist|build|out|third_party|third-party|3rdparty|external|coverage|DerivedData)/}i ||
+        path =~ %r{(^|/)db/migrate/}i
+    end
     def prod_module?(path)
       return false unless path =~ PROD_EXT
       return false if path =~ %r{(^|/)[^/]*lock\.ya?ml$}i || path =~ %r{(^|/)(docs|doc|translations|icons?|images?)/}i
       return false if (path =~ %r{(^|/)assets/}i && path !~ /\.(css|scss|sass)$/i) ||
                      path =~ %r{(^|/)db/schema\.rb$}i || routing_file?(path)
+      return false if third_party?(path)
 
       !spec_or_test?(path)
     end
     def main_module?(path)
-      path =~ MAIN_EXT && path !~ %r{(^|/)(docs|doc)/}i && !routing_file?(path) && !spec_or_test?(path)
+      path =~ MAIN_EXT && path !~ %r{(^|/)(docs|doc)/}i && !routing_file?(path) &&
+        !third_party?(path) && !spec_or_test?(path)
     end
     def md_only?(files)
       list = Array(files).reject { |f| f.to_s.empty? }

@@ -35,6 +35,7 @@ module Quality
   LOCK_AGE = 600
   ACTIVE_LOCK_AGE = 7200
   LIMIT = 6000
+  FOLLOWUP_REPEATS = 2
   VERIFY = 'Check if the issue is resolved fully and properly. Fix without bloat if needed.'
   SCHEMA_MSG = 'db/schema.rb was edited. Make schema.rb changes minimal, covering only current task scope.'
   MD_MSG = 'Improve phrasing and synonym choice in these new .md files.'

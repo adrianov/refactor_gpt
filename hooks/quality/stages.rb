@@ -6,15 +6,24 @@ require 'digest'
 module Quality
   # Pipeline sequencing plus review/document reports and git_commit_gpt.
   module Stages
+    # Next stage when a chain turn produced nothing actionable; anything that
+    # did produce edits always restarts formal.
+    STALLED_NEXT = {
+      'review' => 'document', 'document' => 'abcop', 'abcop' => 'commit'
+    }.freeze
+    # :stalled unwinds the whole pipeline when a repeat followup is suppressed;
+    # returning nil from a stage there would cascade into later stages instead.
     def stop_pipeline
-      root = workspace_git_root
-      log_action('start', status: @input['status'].to_s, dir: @roots[0].to_s, git: root ? 'yes' : 'no')
-      return empty unless completed?
+      catch(:stalled) do
+        root = workspace_git_root
+        log_action('start', status: @input['status'].to_s, dir: @roots[0].to_s, git: root ? 'yes' : 'no')
+        return empty unless completed?
 
-      files, chain, stage, saved = boot_cycle
-      return empty_files_path if !chain && files.empty?
+        files, chain, stage, saved = boot_cycle
+        return empty_files_path if !chain && files.empty?
 
-      run_stages(advance_stage(stage, files, chain), files, saved, chain)
+        run_stages(advance_stage(stage, files, chain), files, saved, chain)
+      end
     end
     def boot_cycle
       cleanup_state
@@ -27,17 +36,15 @@ module Quality
     end
     def empty_files_path
       log_action('stage', name: 'commit-empty-files')
+
       (msg = timed('commit-empty-files') { run_commit }) ? followup(msg) : finish_empty
     end
     def advance_stage(stage, files, chain)
       return 'formal' if stage.nil? || stage.empty? || !chain
 
       case stage
-      when 'review' then files.empty? || md_only?(files) ? 'document' : 'formal'
-      when 'document' then files.empty? || md_only?(files) ? 'abcop' : 'formal'
-      when 'abcop' then files.empty? || md_only?(files) ? 'commit' : 'formal'
       when 'commit_fix' then files.empty? ? 'commit' : 'formal'
-      else stage
+      else files.empty? || md_only?(files) ? STALLED_NEXT.fetch(stage, stage) : 'formal'
       end
     end
     def run_stages(stage, files, saved, chain)
