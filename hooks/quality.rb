@@ -5,10 +5,10 @@
 # Stages: formal → review → document → git_commit_gpt. One follow-up per stop.
 #
 # 1. Collect files edited after the last user message.
-# 2. Formal: RuboCop always; AbcSize (changed lines vs HEAD only), lizard CCN,
-#    and ≥200-line spec/module extraction only when origin matches
-#    QUALITY_OWN_GITHUB (same gate as --push). Failures retry this stage after
-#    the agent fixes them.
+# 2. Formal: abcop (ABC size, single-use variables; changed functions vs HEAD
+#    only), and ≥200-line spec/module extraction only when origin matches
+#    QUALITY_OWN_GITHUB (same gate as --push). Failures retry this stage
+#    after the agent fixes them.
 # 3. Review: completion check and scatter (once per cycle; reset if formal
 #    or commit complains), plus schema.rb (own-repo remotes exempt).
 # 4. Document: wording for new .md files only, once, right before commit.
@@ -23,15 +23,9 @@
 # Optional env:
 #   GIT_COMMIT_GPT       — path to git_commit_gpt.rb (default: ../../git_commit_gpt.rb)
 #   QUALITY_OWN_GITHUB   — GitHub username/org; when set, owned remotes get
-#                          --push, AbcSize, lizard CCN, and ≥200-line
-#                          spec/module extraction; the schema.rb
-#                          minimal-change note applies to other remotes only
-#   QUALITY_RUBOCOP_DOCKER=1 — run RuboCop via docker compose for matching apps
-#   QUALITY_RUBOCOP_DOCKER_SERVICE  — compose service name (required when docker on)
-#   QUALITY_RUBOCOP_DOCKER_BASENAME — Gemfile-root basename (default: SERVICE)
-#   QUALITY_RUBOCOP_DOCKER_PARENT   — parent dir of that root (default: app)
-#   QUALITY_RUBOCOP_DOCKER_COMPOSE  — compose file under grandparent
-#                                     (default: compose/app.yaml)
+#                          --push, AbcSize, and ≥200-line spec/module
+#                          extraction; the schema.rb minimal-change note
+#                          applies to other remotes only
 #   QUALITY_LOCAL        — optional extra Ruby file after public modules
 #                          (default: ~/.cursor/hooks/quality_local.rb if present)
 #
@@ -42,6 +36,7 @@ require 'fileutils'
 
 require_relative 'quality/config'
 require_relative 'quality/support'
+require_relative 'quality/state_store'
 require_relative 'quality/turn_files'
 require_relative 'quality/formal'
 require_relative 'quality/stages'
@@ -53,6 +48,7 @@ require local if File.file?(local)
 # Cursor stop-hook entry: wires Quality::* mixins and runs the pipeline.
 class QualityHook
   include Quality::Support
+  include Quality::StateStore
   include Quality::TurnFiles
   include Quality::Formal
   include Quality::Stages
@@ -68,14 +64,20 @@ class QualityHook
   end
 
   def run
-    if @input['status']
-      stop_pipeline
-    else
-      empty
-    end
+    t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    @input['status'] ? stop_pipeline : empty
   rescue StandardError => e
     STDERR.puts "[quality] #{e.class}: #{e.message}\n#{e.backtrace.first(6).join("\n")}"
     empty
+  ensure
+    log_pipeline_duration(t0)
+  end
+
+  def log_pipeline_duration(t0)
+    return unless @input['status']
+
+    ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round
+    log_action('pipeline_done', ms: ms)
   end
 
   private
@@ -96,7 +98,7 @@ class QualityHook
     # rbenv exec exports RBENV_VERSION and RBENV_DIR for its child; without
     # this every shim we spawn would run the hook interpreter's ruby resolved
     # from the launch dir instead of each root's .ruby-version pin (e.g.
-    # bundle exec rubocop breaking on a foreign lockfile).
+    # a spawned ruby script resolving against a foreign lockfile).
     %w[RBENV_VERSION RBENV_DIR].each { |k| ENV.delete(k) }
     ENV['PATH'] = (path_extras + [ENV['PATH'] || '/usr/bin:/bin']).join(':')
   end
@@ -118,7 +120,7 @@ class QualityHook
     puts JSON.generate('followup_message' => msg)
     # Must return truthy: run_stages does `return msg if msg`. puts returns nil,
     # so a nil here used to keep the pipeline going and finish_empty overwrote
-    # the followup with `{}` (verify / rubocop / etc. never reached the agent).
+    # the followup with `{}` (verify / lint / etc. never reached the agent).
     msg
   end
 

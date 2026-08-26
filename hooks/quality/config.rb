@@ -38,12 +38,10 @@ module Quality
   VERIFY = 'Check if the issue is resolved fully and properly. Fix without bloat if needed.'
   SCHEMA_MSG = 'db/schema.rb was edited. Make schema.rb changes minimal, covering only current task scope.'
   MD_MSG = 'Improve phrasing and synonym choice in these new .md files.'
-  RUBOCOP_LEFT = 'RuboCop auto-correct left remaining offenses. Fix all of them in this pass without bloat.'
-  ABC_LEFT = 'RuboCop Metrics/AbcSize found methods that are too complex ' \
-             '(only methods whose lines changed vs HEAD). Simplify them without bloat; ' \
-             'extract helpers only when it clearly reduces complexity.'
-  LIZARD_LEFT = 'lizard found functions above the cyclomatic complexity threshold (CCN > 15). ' \
-                'Simplify them without bloat; extract helpers only when it clearly reduces complexity.'
+  ABCOP_LEFT = 'abcop found issues in code changed this turn: methods above the ABC-size ' \
+               'threshold and variables assigned once or never used. Simplify complex methods ' \
+               '(extract helpers only when it clearly reduces complexity), inline single-use ' \
+               'variables, and remove dead assignments.'
   OWN_SPEC = <<~MSG.chomp
     Shrink that file only this turn by removing real weight, not by packing the text:
     1. Drop redundant examples and duplicated setup first.
@@ -68,9 +66,7 @@ module Quality
     |db\/schema\.rb\ was\ edited
     |Edited\ production\ modules
     |modules\ were\ edited\ during\ this\ feature\ implementation
-    |RuboCop\ auto-correct\ left\ remaining\ offenses
-    |RuboCop\ Metrics\/AbcSize\ found\ methods
-    |lizard\ found\ functions\ above\ the\ cyclomatic
+    |abcop\ found\ issues\ in\ code\ changed
     |Auto-commit\ skipped:
     |Warning\ in\ 
   /x
@@ -112,38 +108,4 @@ module Quality
                  'template', 'markup'].freeze
   EXTRACT_CODE = ['a class/type with its own state and responsibility (not a free-function dump or *Part2*). ' \
                   'Name it for the business concept.', 'code', 'code'].freeze
-  RUBOCOP_NOISE = /
-    rubocop:\ command\ not\ found
-    |Could\ not\ find.*(rubocop|gem)
-    |Could\ not\ locate\ Gemfile
-    |Install\ missing\ gems
-    |Bundler\ can.t\ satisfy
-  /ix
-  RUBOCOP_INFRA = /
-    Bundler::(GitError|PathError)
-    |is\ not\ yet\ checked\ out
-    |Could\ not\ locate\ Gemfile
-    |Cannot\ connect\ to\ the\ Docker\ daemon
-    |docker\.sock
-    |no\ configuration\ file\ provided
-    |No\ such\ service:
-    |failed\ to\ read\ dockerfile
-    |error\ while\ interpolating
-    |Cannot\ allocate\ memory
-    |fork\(2\)
-  /ix
-  LIZARD_READER = <<~PY
-    from lizard_languages import get_reader_for
-    import sys
-    for path in sys.stdin:
-        path = path.rstrip("\\n")
-        if not path:
-            continue
-        reader = get_reader_for(path)
-        if reader is None:
-            continue
-        if "ruby" in {n.lower() for n in reader.language_names}:
-            continue
-        print(path)
-  PY
 end

@@ -3,7 +3,7 @@
 require 'fileutils'
 
 module Quality
-  # Formal stage: RuboCop setup/run, AbcSize, lizard, long specs and modules.
+  # Formal stage: abcop lint, long specs and modules.
   module Formal
     def formal_stage(files, saved, chain)
       targets = formal_targets(files, saved, chain)
@@ -22,129 +22,77 @@ module Quality
     def formal_report(files)
       return nil if files.nil? || files.empty?
 
-      parts = [rubocop_report(files), abcsize_report(files), lizard_report(files),
+      parts = [abcop_report(files),
                spec_length_report(files), module_report(files)].compact
       parts.empty? ? nil : parts.join("\n\n")
     end
-    def ruby_files(files, rake: false)
-      re = rake ? /\.(rb|rake)$/i : /\.rb$/i
-      files.select { |f| f =~ re && File.file?(f) && f !~ %r{(^|/)db/schema\.rb$}i }
-    end
-    def rubocop_remaining(files, rake:, label:, args:)
-      by_root = group_by_ruby_root(ruby_files(files, rake: rake))
-      return nil if by_root.empty?
-
-      rem = +''
-      by_root.each do |root, rels|
-        rem << (ensure_rubocop(root) ? rubocop_root_output(root, rels, label, args)
-                                     : "[quality] could not install/run rubocop in #{root}\n")
-      end
-      rem.strip.empty? ? nil : rem
-    end
-    def rubocop_root_output(root, rels, label, args)
-      STDERR.puts "[quality] #{root}: rubocop #{label} -- #{rels.join(' ')}"
-      out, code = run_rubocop(root, *args, '--', *rels)
-      STDERR.puts out
-      code != 0 && !out.strip.empty? && out !~ RUBOCOP_NOISE ? "#{out}\n" : ''
-    end
-    def rubocop_report(files)
-      rem = rubocop_remaining(files, rake: true, label: '-a --no-color', args: %w[-a --no-color])
-      rem && "#{RUBOCOP_LEFT}\n\n#{truncate(rem)}"
-    end
-    # AbcSize only for methods whose lines appear in the working-tree diff vs HEAD.
-    # Pre-existing complexity in an edited file is out of scope (matches project rule).
-    def abcsize_report(files)
-      rb = ruby_files(files).select { |f| owned_repo?(f) }
-                            .reject { |f| f =~ %r{(^|/)db/migrate/}i || routing_file?(f) }
-      rem = rubocop_remaining(rb, rake: false, label: '--only Metrics/AbcSize --format quiet',
-                              args: %w[--only Metrics/AbcSize --format quiet])
-      rem = filter_abcsize_to_changed_lines(rem) if rem
-      rem && !rem.strip.empty? && "#{ABC_LEFT}\n\n#{truncate(rem)}"
-    end
-
-    def filter_abcsize_to_changed_lines(out)
-      kept = +''
-      file = nil
-      header = nil
-      out.to_s.each_line do |line|
-        if (m = line.match(/\A== (.*) ==\s*\z/))
-          file = m[1]
-          header = line
-          next
-        end
-
-        path, lineno = abcsize_offense_loc(line, file)
-        if path.nil?
-          kept << line
-          next
-        end
-
-        abs = abs_path(path)
-        changed = git_changed_lines(abs)
-        next if changed && !changed.include?(lineno)
-
-        if header
-          kept << header
-          header = nil
-        end
-        kept << line
-      end
-      text = kept.strip
-      text.match?(/\AC:\d+:|:(\d+):\d+:/m) ? text : ''
-    end
-
-    def abcsize_offense_loc(line, current_file = nil)
-      if (m = line.match(/\A([^:]+):(\d+):\d+:\s/))
-        [m[1], m[2].to_i]
-      elsif (m = line.match(/\AC:(\d+):\s*\d+:\s*Metrics\/AbcSize/))
-        [current_file, m[1].to_i]
-      end
-    end
-
-    def git_changed_lines(abs_path)
-      root = git_toplevel(abs_path)
-      return nil unless root && File.file?(abs_path)
-
-      rel = abs_path.sub(%r{\A#{Regexp.escape(root)}/?}, '')
-      out, _, code = capture('git', 'diff', '-U0', 'HEAD', '--', rel, chdir: root)
-      return nil if code != 0
-
-      parse_diff_new_lines(out)
-    end
-
-    def git_toplevel(abs_path)
-      dir = File.directory?(abs_path) ? abs_path : File.dirname(abs_path)
-      out, _, code = capture('git', 'rev-parse', '--show-toplevel', chdir: dir)
-      code == 0 ? out.to_s.strip : nil
-    end
-
-    def parse_diff_new_lines(diff)
-      set = ::Set.new
-      diff.to_s.each_line do |line|
-        next unless (m = line.match(/\A@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/))
-
-        start = m[1].to_i
-        count = (m[2] || '1').to_i
-        next if count.zero?
-
-        count.times { |i| set << (start + i) }
-      end
-      set
-    end
-    def lizard_report(files)
-      bin = which('lizard')
+    # abcop: ABC size plus used-once/never-used variables over the changed
+    # functions of each owned repo (untracked files count as fully changed).
+    # ModuleSize diagnostics are dropped: module_report owns size guidance.
+    def abcop_report(files)
+      bin = which('abcop')
       unless bin
-        STDERR.puts '[quality] lizard not found on PATH; skip'
+        STDERR.puts '[quality] abcop not found on PATH; skip'
         return nil
       end
-      keep = lizard_keep(lizard_python(bin), files.select { |f| owned_repo?(f) })
-      return nil if keep.empty?
 
-      STDERR.puts "[quality] lizard -C 15 -w -i 0 -Ecpre -- #{keep.join(' ')}"
-      out, err, code = capture('lizard', '-C', '15', '-w', '-i', '0', '-Ecpre', '--', *keep)
-      combined = "#{out}#{err}"
-      STDERR.puts combined
-      code == 0 || combined.strip.empty? ? nil : "#{LIZARD_LEFT}\n\n#{truncate(combined)}"
+      targets = abcop_targets(files)
+      return nil if targets.empty?
+
+      rem = abcop_by_root(bin, targets)
+      rem.strip.empty? ? nil : "#{ABCOP_LEFT}\n\n#{truncate(rem)}"
+    end
+
+    def abcop_targets(files)
+      files.select { |f| f =~ /\.(rb|rake|ru|rs)\z/i && File.file?(f) && owned_repo?(f) }
+           .reject { |f| f =~ %r{(^|/)db/migrate/}i || routing_file?(f) }
+    end
+
+    # One run per repository: with --changed abcop resolves the file set
+    # itself from git, so only the repo root matters here.
+    def abcop_by_root(bin, targets)
+      # abcop reports paths resolved from the git root (/tmp -> /private/tmp
+      # on macOS), so match diagnostics through realpath, not expand_path.
+      # Small per-turn list; Array#include? keeps this file free of the
+      # `set` dependency.
+      allowed = targets.map { |f| File.realpath(f) }
+      targets.group_by { |f| git_root(File.dirname(f)) }.filter_map do |root, group|
+        next if root.nil?
+
+        abcop_root_output(bin, root, group, allowed)
+      end.join
+    end
+    def abcop_root_output(bin, root, group, allowed)
+      STDERR.puts "[quality] #{root}: abcop --changed (#{group.size} files)"
+      out, err, code = capture(bin, '--changed', '--no-cache', '--format', 'json', chdir: root)
+      return scope_failure(err) if code == 2
+
+      # Exit contract: 0 clean, 1 findings, 2 scope/infra failure. Parse on
+      # every other exit so a future contract change can never hide findings.
+      lines = parse_abcop_json(out, err).filter_map { |d| abcop_diag_line(d, root, allowed) }
+      lines.empty? ? '' : "#{lines.join("\n")}\n"
+    end
+
+    # Scope failure (e.g. target vanished from git): no scan ran, nothing to
+    # report — surface the reason for observability.
+    def scope_failure(err)
+      STDERR.puts "[quality] abcop scope failed: #{err[0, 200]}"
+      ''
+    end
+
+    def parse_abcop_json(out, err)
+      JSON.parse(out)['diagnostics'] || []
+    rescue StandardError
+      STDERR.puts "[quality] abcop output unreadable: #{err[0, 200]}"
+      []
+    end
+
+    def abcop_diag_line(diag, root, allowed)
+      return if diag['rule'] == 'ModuleSize' || !allowed.include?(diag['file'])
+
+      rel = diag['file'].sub(%r{\A#{Regexp.escape(root)}/}, '')
+      "#{rel}:#{diag['line']}:#{diag['column']}: " \
+        "#{diag['severity']}: #{diag['rule']}: #{diag['message']}"
     end
     def spec_length_report(this_turn)
       own = long_specs(this_turn.select { |f| f =~ /_spec\.rb$/i && owned_repo?(f) })
@@ -181,143 +129,6 @@ module Quality
       elsif file =~ /\.(slim|erb)$/i then EXTRACT_TPL
       else EXTRACT_CODE
       end
-    end
-    def rubocop_docker_enabled?
-      ENV['QUALITY_RUBOCOP_DOCKER'].to_s.match?(/\A(1|true|yes)\z/i)
-    end
-
-    # Compose project root for Docker RuboCop when QUALITY_RUBOCOP_DOCKER is set.
-    # Private names come from env (no defaults that name a private app):
-    #   QUALITY_RUBOCOP_DOCKER_SERVICE  — compose service (required)
-    #   QUALITY_RUBOCOP_DOCKER_BASENAME — Gemfile root basename (default: service)
-    #   QUALITY_RUBOCOP_DOCKER_PARENT   — parent dir name (default: app)
-    #   QUALITY_RUBOCOP_DOCKER_COMPOSE  — compose file under grandparent (default: compose/app.yaml)
-    def rubocop_docker_root(root)
-      return nil unless rubocop_docker_candidate?(root)
-
-      service = ENV['QUALITY_RUBOCOP_DOCKER_SERVICE'].to_s.strip
-      grand = File.expand_path('../..', root)
-      compose = File.join(grand, ENV.fetch('QUALITY_RUBOCOP_DOCKER_COMPOSE', 'compose/app.yaml'))
-      return nil unless docker_compose_ready?(grand, compose, service)
-
-      grand
-    end
-    def rubocop_docker_candidate?(root)
-      rubocop_docker_enabled? && File.file?(File.join(root, 'Gemfile')) &&
-        (service = ENV['QUALITY_RUBOCOP_DOCKER_SERVICE'].to_s.strip) && !service.empty? &&
-        docker_root_layout?(root, service)
-    end
-    def docker_compose_ready?(grand, compose, service)
-      File.file?(compose) && File.file?(File.join(grand, '.env')) &&
-        File.read(compose) =~ /^[[:space:]]*#{Regexp.escape(service)}:/
-    end
-    def docker_root_layout?(root, service)
-      basename = ENV.fetch('QUALITY_RUBOCOP_DOCKER_BASENAME', service).to_s
-      parent = ENV.fetch('QUALITY_RUBOCOP_DOCKER_PARENT', 'app').to_s
-      File.basename(root) == basename && File.basename(File.dirname(root)) == parent
-    end
-
-    def rubocop_infra?(out)
-      out.to_s =~ RUBOCOP_INFRA
-    end
-
-    def docker_compose
-      _, _, code = capture('docker', 'compose', 'version')
-      return %w[docker compose] if code == 0
-      return %w[docker-compose] if which('docker-compose')
-
-      nil
-    end
-
-    def ensure_rubocop(root)
-      return false unless File.directory?(root)
-      return true if rubocop_docker_root(root) && which('docker')
-
-      Dir.chdir(root) do
-        return true if rubocop_ok?
-
-        install_rubocop(root)
-        return true if rubocop_ok?
-
-        STDERR.puts "[quality] still cannot run rubocop after install " \
-                    "(ruby=#{which('ruby')}, bundle=#{which('bundle')})"
-        false
-      end
-    rescue StandardError => e
-      STDERR.puts "[quality] ensure_rubocop: #{e.message}"
-      false
-    end
-    def install_rubocop(root)
-      STDERR.puts "[quality] rubocop missing for Ruby #{RUBY_VERSION} in #{root} — installing"
-      try_bundle_install_rubocop
-      return if rubocop_ok?
-
-      _, _, code = capture('gem', 'install', 'rubocop', '--no-document')
-      capture('gem', 'install', 'rubocop', '--no-document', '--user-install') if code != 0
-      capture('rbenv', 'rehash') if which('rbenv')
-    end
-    def try_bundle_install_rubocop
-      return unless File.file?('Gemfile') && File.read('Gemfile') =~ /gem ['"]rubocop['"]/
-
-      STDERR.puts '[quality] bundle install'
-      capture('bundle', 'install', '--quiet')
-    end
-    def rubocop_ok?
-      bundled_rubocop_ok? || (capture('rubocop', '-v')[2] == 0)
-    end
-    def bundled_rubocop_ok?
-      File.file?('Gemfile') && capture('bundle', 'exec', 'rubocop', '-v')[2] == 0
-    end
-    def run_rubocop(root, *args)
-      cmd, chdir = rubocop_docker_cmd(root, args)
-      return run_docker_rubocop(root, cmd, chdir) if cmd
-
-      Dir.chdir(root) do
-        base = bundled_rubocop_ok? ? %w[bundle exec rubocop] : %w[rubocop]
-        out, err, code = capture(*(base + args))
-        ["#{out}#{err}", code]
-      end
-    end
-    def rubocop_docker_cmd(root, args)
-      wb = rubocop_docker_root(root)
-      service = ENV['QUALITY_RUBOCOP_DOCKER_SERVICE'].to_s.strip
-      dc = docker_compose if wb && which('docker') && !service.empty?
-      return nil unless wb && dc
-
-      # One process: parallel warm_cache forks OOMs on constrained CI/dev hosts
-      # and the stack was misreported as remaining RuboCop offenses.
-      env = %w[-e PARALLEL_PROCESSOR_COUNT=1]
-      [dc + ['run', '--rm', '--no-deps'] + env + [service, 'bundle', 'exec', 'rubocop'] + args, wb]
-    end
-    def run_docker_rubocop(root, cmd, wb)
-      STDERR.puts "[quality] #{root} via docker (#{wb}): #{cmd.join(' ')}"
-      out, err, code = capture(*cmd, chdir: wb)
-      combined = "#{out}#{err}"
-      if rubocop_infra?(combined)
-        STDERR.puts '[quality] infra failure; not treating as offenses'
-        STDERR.puts combined
-        return ['', 0]
-      end
-
-      [combined, code]
-    end
-    def lizard_python(bin)
-      File.open(bin, 'r', &:readline).sub(/^#!/, '').split.first
-    rescue StandardError
-      nil
-    end
-    def lizard_keep(py, files)
-      return [] unless py && File.executable?(py)
-
-      out, err, code = capture(py, '-E', '-c', LIZARD_READER, stdin_data: "#{files.join("\n")}\n")
-      if code != 0
-        STDERR.puts "[quality] could not query lizard readers; skip #{err}"
-        return []
-      end
-      out.split("\n").map(&:strip).select { |f| !f.empty? && File.file?(f) }
-    rescue StandardError => e
-      STDERR.puts "[quality] could not query lizard readers; skip #{e.message}"
-      []
     end
   end
 end

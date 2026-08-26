@@ -16,6 +16,36 @@ module Quality
     rescue StandardError => e
       ['', e.message, 1]
     end
+    # One action line per pipeline event, appended to LOGS/quality.log and
+    # mirrored on STDERR so the driving agent's transcript captures it too.
+    # Logging must never raise: swallow every failure.
+    def log_action(event, **fields)
+      line = build_log_line(event, fields)
+      file = File.join(LOGS, 'quality.log')
+      FileUtils.mkdir_p(LOGS)
+      rotate_oversized_log(file)
+      File.open(file, 'a') { |f| f.puts line }
+      STDERR.puts line
+    rescue StandardError
+      nil
+    end
+
+    def build_log_line(event, fields)
+      parts = fields.reject { |_, v| v.nil? || v.to_s.empty? }.map { |k, v| "#{k}=#{v}" }
+      "[quality] #{Time.now.strftime('%F %T%z')} pid=#{$$} session=#{@session_key} " \
+        "#{event} #{parts.join(' ')}".rstrip
+    end
+
+    def rotate_oversized_log(file)
+      File.truncate(file, 0) if File.exist?(file) && File.size(file) > 5_000_000
+    end
+    # Times a block and logs its duration under the given stage name.
+    def timed(stage)
+      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      result = yield
+      log_action('done', stage: stage, ms: ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round)
+      result
+    end
     def which(name)
       ENV['PATH'].to_s.split(':').map { |d| File.join(d, name) }.find { |p| File.file?(p) && File.executable?(p) }
     end
@@ -57,19 +87,6 @@ module Quality
       w = @roots[0].to_s
       w.empty? || !File.directory?(w) ? nil : git_root(w)
     end
-    def ruby_project_root(file)
-      dir = File.dirname(file)
-      dir = File.dirname(dir) while dir != '/' && !File.file?(File.join(dir, 'Gemfile'))
-      dir == '/' ? (ENV['CURSOR_PROJECT_DIR'] || File.dirname(file)) : dir
-    end
-    def group_by_ruby_root(files)
-      files.each_with_object({}) do |abs, g|
-        next unless File.file?(abs)
-
-        root = ruby_project_root(abs)
-        (g[root] ||= []) << (rel_to(root, abs) || abs)
-      end
-    end
     def spec_or_test?(path)
       path =~ SPEC_RE || path =~ SPEC_FILE_RE || path =~ SPEC_SUFFIX_RE || path =~ TEST_PREFIX_RE
     end
@@ -101,105 +118,6 @@ module Quality
     def truncate(text)
       s = text.to_s
       s.bytesize <= LIMIT ? s : "#{s.byteslice(0, LIMIT)}\n... (truncated)"
-    end
-    def pending_file; File.join(STATE, "stop-pending-#{@session_key}"); end
-    def review_flag_file(name); File.join(STATE, "stop-#{name}-#{@session_key}"); end
-    def review_flag?(name); File.file?(review_flag_file(name)); end
-    def stage_file; File.join(STATE, "stop-stage-#{@session_key}"); end
-    def active_lock_path(k); File.join(STATE, "quality-active-#{k}-#{@session_key}"); end
-    def write_commit_marker(path, head, dirt, status); File.write(path, "#{head}\n#{dirt}\n#{status}\n"); end
-    def finish_empty; release_active; empty; end
-    def set_review_flag(name)
-      FileUtils.mkdir_p(STATE)
-      File.write(review_flag_file(name), '')
-    end
-    def unset_review_flags
-      %w[verify scatter].each { |n| f = review_flag_file(n); File.delete(f) if File.file?(f) }
-    rescue StandardError
-      nil
-    end
-    def load_stage
-      return [nil, []] unless File.file?(stage_file)
-
-      lines = File.readlines(stage_file).map(&:chomp)
-      [lines[0], lines[1..-1].to_a.reject(&:empty?)]
-    end
-    def save_stage(name, files = [])
-      FileUtils.mkdir_p(STATE)
-      File.write(stage_file, ([name] + Array(files)).join("\n") + "\n")
-    end
-    def clear_stage
-      [stage_file, pending_file].each { |f| File.delete(f) if File.file?(f) }
-      unset_review_flags
-    rescue StandardError
-      nil
-    end
-    def cleanup_state
-      FileUtils.mkdir_p(STATE)
-      cutoff = Time.now - 7 * 86_400
-      Dir.glob(File.join(STATE, '*')).each { |f|
- (File.delete(f) if File.file?(f) && File.mtime(f) < cutoff) rescue nil }
-    rescue StandardError
-      nil
-    end
-    def claim_active(root)
-      return if root.nil? || root.empty? || @session_key.empty?
-
-      FileUtils.mkdir_p(STATE)
-      @active_root_key = Digest::SHA256.hexdigest(root)
-      File.write(active_lock_path(@active_root_key), "#{Process.pid}\n#{Time.now.to_i}\n")
-    end
-    def release_active
-      path = active_lock_path(@active_root_key) if @active_root_key && !@session_key.empty?
-      File.delete(path) if path && File.file?(path)
-    rescue StandardError
-      nil
-    ensure
-      @active_root_key = nil
-    end
-    def last_active_runner?
-      key = @active_root_key
-      release_active
-      return true if key.nil? || @session_key.empty?
-
-      sweep_active_locks(key)
-      Dir.glob(File.join(STATE, "quality-active-#{key}-*")).empty?
-    end
-    def sweep_active_locks(root_key)
-      now = Time.now.to_i
-      Dir.glob(File.join(STATE, "quality-active-#{root_key}-*")).each do |path|
-        (File.delete(path) if File.file?(path) && now - File.mtime(path).to_i >= ACTIVE_LOCK_AGE) rescue nil
-      end
-    rescue StandardError
-      nil
-    end
-    def acquire_lock(dir)
-      true if Dir.mkdir(dir)
-    rescue Errno::EEXIST
-      mtime = File.mtime(dir).to_i rescue 0
-      return false if Time.now.to_i - mtime < LOCK_AGE
-
-      Dir.rmdir(dir) rescue nil
-      Dir.mkdir(dir)
-      true
-    rescue StandardError
-      false
-    end
-    def record_commit_marker(ctx, leftover, warnings, newhead)
-      own, marker, head = ctx[:own], ctx[:marker], ctx[:head]
-      if own
-        if !newhead.empty? && newhead != head
-          write_commit_marker(marker, newhead, leftover, 'ok')
-        elsif !warnings.strip.empty?
-          write_commit_marker(marker, head, leftover, 'warnings')
-        end
-      else
-        write_commit_marker(marker, head, leftover, warnings.strip.empty? ? 'ok' : 'warnings')
-      end
-    end
-    def fail_commit_msg(warnings, plain, args, code)
-      warnings = plain.lines.last(20).join if warnings.strip.empty?
-      warnings.strip.empty? ? "git_commit_gpt #{args.join(' ')} failed (exit #{code})." : warnings
     end
   end
 end
