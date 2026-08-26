@@ -135,14 +135,12 @@ class TestCommitPlanFinalize < Minitest::Test
   end
 
   def test_finalize_or_reject_accepts_fully_excluded_plan_as_nothing_to_commit
-    status = "?? .DS_Store\n"
-    plan = {
-      "commits" => [],
-      "warnings" => [],
-      "excluded_files" => [{ "path" => ".DS_Store", "reason" => "macOS Finder metadata file" }]
-    }
     out, err = capture_io do
-      assert_equal :nothing_to_commit, CommitPlanFinalize.finalize_or_reject(plan, status)
+      assert_equal :nothing_to_commit, CommitPlanFinalize.finalize_or_reject({
+        "commits" => [],
+        "warnings" => [],
+        "excluded_files" => [{ "path" => ".DS_Store", "reason" => "macOS Finder metadata file" }]
+      }, "?? .DS_Store\n")
     end
     assert_match(/Nothing to commit/, out)
     assert_match(/macOS Finder metadata/, out)
@@ -151,14 +149,12 @@ class TestCommitPlanFinalize < Minitest::Test
   end
 
   def test_finalize_or_reject_rejects_partially_covered_status_paths
-    status = " M app/models/user.rb\n?? .DS_Store\n"
-    plan = {
-      "commits" => [],
-      "warnings" => [],
-      "excluded_files" => [{ "path" => ".DS_Store", "reason" => "macOS Finder metadata file" }]
-    }
     _out, err = capture_io do
-      assert_equal :plan_rejected, CommitPlanFinalize.finalize_or_reject(plan, status)
+      assert_equal :plan_rejected, CommitPlanFinalize.finalize_or_reject({
+        "commits" => [],
+        "warnings" => [],
+        "excluded_files" => [{ "path" => ".DS_Store", "reason" => "macOS Finder metadata file" }]
+      }, " M app/models/user.rb\n?? .DS_Store\n")
     end
     assert_match(/no commits/i, err)
   end

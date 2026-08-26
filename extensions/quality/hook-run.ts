@@ -92,18 +92,17 @@ export function startHookRun(rubyBin: string, hookPath: string, payload: unknown
 			// stdin closed early (hook crashed) — nothing to feed anymore
 		}
 	})();
-	const done = Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-		stdinDone,
-	]).then(async ([stdout, stderr]) => {
-		await proc.exited;
-		clearTimeout(timer);
-		return { stdout, stderr, timedOut, exitCode: proc.exitCode };
-	});
 	return {
 		kill: killProc,
-		done,
+		done: Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			stdinDone,
+		]).then(async ([stdout, stderr]) => {
+			await proc.exited;
+			clearTimeout(timer);
+			return { stdout, stderr, timedOut, exitCode: proc.exitCode };
+		}),
 	};
 }
 
