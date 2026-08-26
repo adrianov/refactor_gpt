@@ -42,6 +42,7 @@ require_relative 'quality/support'
 require_relative 'quality/state_store'
 require_relative 'quality/turn_files'
 require_relative 'quality/formal'
+require_relative 'quality/commit'
 require_relative 'quality/stages'
 
 local = ENV['QUALITY_LOCAL'].to_s
@@ -54,6 +55,7 @@ class QualityHook
   include Quality::StateStore
   include Quality::TurnFiles
   include Quality::Formal
+  include Quality::CommitStage
   include Quality::Stages
 
   def initialize(input)
@@ -135,8 +137,12 @@ class QualityHook
   # turn before the agent can act), resending the same message loops forever.
   # Trips mid-chain only; FOLLOWUP_REPEATS deliveries get through, then the
   # cycle is dropped silently for the agent to resume with the next user input.
+  # Chain state comes from followup_chain? (loop_count flag, stored-pending
+  # match, or FOLLOWUP_RE): omp never sets Cursor's stop_hook_active, so
+  # gating on loop_count alone left this permanently disarmed under omp and
+  # an idle provider loop re-emitted one identical message 27 times.
   def stalled_repeat?(msg)
-    return false if @input['loop_count'].to_i.zero?
+    return false unless @input['loop_count'].to_i != 0 || followup_chain?
 
     digest, count = load_repeat
     digest == Digest::SHA256.hexdigest(msg) && count >= Quality::FOLLOWUP_REPEATS
