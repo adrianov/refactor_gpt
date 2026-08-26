@@ -19,16 +19,13 @@ const TOOL_NAME_MAP: Record<string, string> = {
 interface ToolUse {
 	type: "tool_use";
 	name: string;
-	input: Record<string, unknown>;
+	/** Object params for most tools; edit arrives as "*** Update File:" lines. */
+	input: Record<string, unknown> | string;
 }
 type ContentItem = { type: "text"; text: string } | ToolUse;
 export interface TranscriptMessage {
 	role: "user" | "assistant";
 	message: { content: ContentItem[] };
-}
-
-function asObject(value: unknown): Record<string, unknown> | null {
-	return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
 function normalizeToolUse(name: string, rawInput: unknown, cwd: string): ToolUse {
