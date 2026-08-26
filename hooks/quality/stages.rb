@@ -105,20 +105,23 @@ module Quality
       return false if abs.to_s.empty? || abs !~ /\.md$/i || !File.file?(abs)
 
       abs = File.realpath(abs) rescue abs.to_s
+      return false if md_reviewed?(abs)
+
       root = git_root(File.dirname(abs))
       return tracked_new_md?(root, abs) if root
 
-      untracked_md_changed?(abs)
+      true
     end
     def tracked_new_md?(root, abs)
       root = File.realpath(root) rescue root
       (rel = rel_to(root, abs)) && capture('git', '-C', root, 'cat-file', '-e', "HEAD:#{rel}")[2] != 0
     end
-    # Markdown outside any git repo (Obsidian vault docs): there is no HEAD to
-    # compare with, so the wording pass fires when the content differs from the
-    # last state it was reviewed in, not on every stop.
-    def untracked_md_changed?(abs)
-      md_digests[abs] != Digest::SHA256.file(abs).hexdigest
+    # Wording pass fires exactly once per file path: the digest recorded after a
+    # fire marks the file as reviewed, so later edits never re-arm the gate. The
+    # agent applies the suggestion right away, so a repeat would only echo the
+    # same message over an already-improved text.
+    def md_reviewed?(abs)
+      md_digests.key?(abs)
     end
     def mark_md_reviewed(files)
       return if files.empty?
