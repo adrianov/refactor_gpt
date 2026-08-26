@@ -34,20 +34,22 @@ module Quality
 
       case stage
       when 'review' then files.empty? || md_only?(files) ? 'document' : 'formal'
-      when 'document' then files.empty? || md_only?(files) ? 'commit' : 'formal'
+      when 'document' then files.empty? || md_only?(files) ? 'abcop' : 'formal'
+      when 'abcop' then files.empty? || md_only?(files) ? 'commit' : 'formal'
       when 'commit_fix' then files.empty? ? 'commit' : 'formal'
       else stage
       end
     end
     def run_stages(stage, files, saved, chain)
-      %w[formal review document].each do |name|
+      %w[formal review document abcop].each do |name|
         next unless stage == name
 
         log_action('stage', name: name, files: files.size, list: files.first(3).join(','), saved: saved.size, chain: chain)
         msg = timed(name) { send(:"#{name}_stage", files, saved, *(name == 'formal' ? [chain] : [])) }
         return msg if msg
 
-        stage = { 'formal' => 'review', 'review' => 'document', 'document' => 'commit' }[name]
+        stage = { 'formal' => 'review', 'review' => 'document', 'document' => 'abcop',
+                  'abcop' => 'commit' }[name]
       end
       commit_followup(files) if stage == 'commit'
     end
