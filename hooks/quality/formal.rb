@@ -36,8 +36,10 @@ module Quality
       save_stage('abcop', targets)
       followup(msg)
     end
-    # abcop: ABC size plus used-once/never-used variables over the changed
-    # functions of each owned repo (untracked files count as fully changed).
+    # abcop: ABC size plus used-once/never-used variables. Scoping is fully
+    # delegated: a plain `abcop` run with no PATHS scans the current-MR scope
+    # itself (changes since branching from master/main plus uncommitted work)
+    # across every language it supports.
     # ModuleSize diagnostics are dropped: module_report owns size guidance.
     def abcop_report(files)
       bin = which('abcop')
@@ -46,53 +48,36 @@ module Quality
         return nil
       end
 
-      targets = abcop_targets(files)
-      return nil if targets.empty?
-
-      rem = abcop_by_root(bin, targets)
+      rem = abcop_by_root(bin, files)
       rem.strip.empty? ? nil : "#{ABCOP_LEFT}\n\n#{truncate(rem)}"
     end
 
-    def abcop_targets(files)
-      files.select { |f| f =~ /\.(rb|rake|ru|rs|js|jsx|mjs|cjs|ts|tsx|mts|cts|go|swift|java|kt|kts|cs|php|sol|c|cc|cpp|cxx|h|hpp|hh|hxx)\z/i && File.file?(f) && owned_repo?(f) }
-           .reject { |f| f =~ %r{(^|/)db/migrate/}i || routing_file?(f) }
-    end
+    # One plain run per repository: with no path arguments abcop applies its
+    # own MR heuristics over every supported file type, so only the repo root
+    # matters here. Result cache stays enabled — repeat scans over unchanged
+    # files are cheap.
+    def abcop_by_root(bin, files)
+      roots = files.filter_map { |f| git_root(File.dirname(f)) }.uniq
+      roots.filter_map do |root|
+        next unless owned_remote?(git_remote(root))
 
-    # One run per repository: --mr makes abcop scan the MR scope itself
-    # (changes since branching from master/main plus uncommitted work), so
-    # only the repo root matters here. Result cache stays enabled — repeat
-    # scans over unchanged files are cheap.
-    def abcop_by_root(bin, targets)
-      # abcop reports paths resolved from the git root (/tmp -> /private/tmp
-      # on macOS), so match diagnostics through realpath, not expand_path.
-      # Small per-turn list; Array#include? keeps this file free of the
-      # `set` dependency.
-      # A target deleted between turn-file collection and this scan would
-      # raise ENOENT and abort the whole stage; drop it instead.
-      allowed = targets.filter_map do |f|
-        File.realpath(f)
-      rescue Errno::ENOENT
-        nil
-      end
-      targets.group_by { |f| git_root(File.dirname(f)) }.filter_map do |root, group|
-        next if root.nil?
-
-        abcop_root_output(bin, root, group, allowed)
+        abcop_root_output(bin, root)
       end.join
     end
-    def abcop_root_output(bin, root, group, allowed)
-      STDERR.puts "[quality] #{root}: abcop --mr (#{group.size} target files)"
-      out, err, code = capture(bin, '--mr', '--format', 'json', chdir: root)
+
+    def abcop_root_output(bin, root)
+      STDERR.puts "[quality] #{root}: abcop (current-MR scope)"
+      out, err, code = capture(bin, '--format', 'json', chdir: root)
       return scope_failure(err) if code == 2
 
-      # Exit contract: 0 clean, 1 findings, 2 scope/infra failure. Parse on
-      # every other exit so a future contract change can never hide findings.
-      lines = parse_abcop_json(out, err).filter_map { |d| abcop_diag_line(d, root, allowed) }
+      # Exit contract: 0 clean, 1 findings, 2 infra failure. Parse on every
+      # other exit so a future contract change can never hide findings.
+      lines = parse_abcop_json(out, err).filter_map { |d| abcop_diag_line(d, root) }
       lines.empty? ? '' : "#{lines.join("\n")}\n"
     end
 
-    # Scope failure (e.g. target vanished from git): no scan ran, nothing to
-    # report — surface the reason for observability.
+    # Scope failure (bad checkout/infra): no scan ran, nothing to report —
+    # surface the reason for observability.
     def scope_failure(err)
       STDERR.puts "[quality] abcop scope failed: #{err[0, 200]}"
       ''
@@ -105,8 +90,8 @@ module Quality
       []
     end
 
-    def abcop_diag_line(diag, root, allowed)
-      return if diag['rule'] == 'ModuleSize' || !allowed.include?(diag['file'])
+    def abcop_diag_line(diag, root)
+      return if diag['rule'] == 'ModuleSize'
 
       rel = diag['file'].sub(%r{\A#{Regexp.escape(root)}/}, '')
       "#{rel}:#{diag['line']}:#{diag['column']}: " \

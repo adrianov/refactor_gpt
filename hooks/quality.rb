@@ -5,8 +5,9 @@
 # Stages: formal → review → document → abcop → git_commit_gpt. One follow-up per stop.
 #
 # 1. Collect files edited after the last user message.
-# 2. Formal: abcop (ABC size, single-use variables; changed functions vs HEAD
-#    only), and ≥200-line spec/module extraction only when origin matches
+# 2. Formal: abcop (ABC size, single-use variables over the current-MR scope
+#    of each touched repo; runs plain `abcop`, which owns all heuristics), and
+#    ≥200-line spec/module extraction only when origin matches
 #    QUALITY_OWN_GITHUB (same gate as --push). Failures retry this stage
 #    after the agent fixes them.
 # 3. Review: completion check and scatter (once per cycle; reset if formal
@@ -14,8 +15,8 @@
 # 4. Document: wording for new .md files only, once, right before commit.
 #    Edits to existing .md skip this stage. Markdown-only edits continue to
 #    commit. A full cycle restart can reach this stage again.
-# 5. Abcop: final lint pass over every file touched this cycle right before the
-#    commit; failures retry this stage after the agent fixes them.
+# 5. Abcop: final lint pass (plain `abcop`, current-MR scope per touched repo)
+#    right before the commit; failures retry this stage after the agent fixes them.
 # 6. git_commit_gpt --auto on the whole repo (push when QUALITY_OWN_GITHUB
 #    matches the origin owner), only when this is the last active quality
 #    run for the git root. Concurrent agents leave an active lock for the
