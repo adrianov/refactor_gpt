@@ -6,7 +6,7 @@ module Quality
   # Read-only transcript/text helpers left after the snapshot switch: the
   # latest user message detects followup chains, and outgoing text is shown
   # relative to the workspace roots. Changed-file tracking moved to
-  # Quality::Snapshots, which never parses the transcript.
+  # Quality::GitChanges (git-diff based), which never parses the transcript.
   module Transcripts
     def parent_messages
       @parent_messages ||= load_jsonl(@transcript_path)

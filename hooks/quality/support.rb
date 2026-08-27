@@ -56,10 +56,12 @@ module Quality
       ENV['PATH'].to_s.split(':').map { |d| File.join(d, name) }.find { |p| File.file?(p) && File.executable?(p) }
     end
     def git_root(dir)
-      out, _, code = capture('git', '-C', dir.to_s, 'rev-parse', '--show-toplevel')
-      code == 0 ? out.to_s.strip : nil
-    rescue StandardError
-      nil
+      cache = (@git_tops ||= {})
+      key = dir.to_s
+      return cache[key] if cache.key?(key)
+
+      out, _, code = capture('git', '-C', key, 'rev-parse', '--show-toplevel')
+      cache[key] = code.zero? ? out.strip : nil
     end
     def git_head(root)
       out, _, code = capture('git', '-C', root, 'rev-parse', 'HEAD')

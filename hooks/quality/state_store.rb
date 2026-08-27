@@ -10,14 +10,9 @@ module Quality
     def stage_file; File.join(STATE, "stop-stage-#{@session_key}"); end
     def active_lock_path(k); File.join(STATE, "quality-active-#{k}-#{@session_key}"); end
     def write_commit_marker(path, head, dirt, status); File.write(path, "#{head}\n#{dirt}\n#{status}\n"); end
-    def workspace_snapshot_file
-      key = Digest::SHA256.hexdigest(Array(@roots).sort.join("\n"))[0, 20]
-      File.join(STATE, "stop-workspace-#{key}.json")
-    end
-    # Clean-cycle exit only: the single place the snapshot baseline advances,
-    # keeping idle stops cheap and finished cycles quiet.
+    # Clean-cycle exit: releases the active-runner lock and answers empty.
+    # Change detection is git-based; there is no baseline to advance.
     def finish_empty
-      mark_baseline!
       release_active
       empty
     end

@@ -4,8 +4,9 @@
 # Cursor stop pipeline (rbenv/Homebrew/system Ruby via PATH).
 # Stages: formal → review → document → git_commit_gpt. One follow-up per stop.
 #
-# 1. Diff each workspace root's (path, mtime) fingerprint table against the
-#    baseline saved at the last clean cycle end (.gitignore honored).
+# 1. Change detection: git is the source of truth. Every stop reports each
+#    workspace root's uncommitted work vs HEAD plus untracked files; roots
+#    outside any repo are skipped. No snapshots or state files involved.
 # 2. Formal: plain `abcop` per touched repo over the current-MR scope — it owns
 #    ABC size, variable hygiene, ModuleSize, and oversized-spec findings all by
 #    itself. Failures retry this stage after the agent fixes them.
@@ -37,7 +38,7 @@ require_relative 'quality/config'
 require_relative 'quality/support'
 require_relative 'quality/state_store'
 require_relative 'quality/transcripts'
-require_relative 'quality/snapshot'
+require_relative 'quality/git_changes'
 require_relative 'quality/formal'
 require_relative 'quality/commit'
 require_relative 'quality/stages'
@@ -51,7 +52,7 @@ class QualityHook
   include Quality::Support
   include Quality::StateStore
   include Quality::Transcripts
-  include Quality::Snapshots
+  include Quality::GitChanges
   include Quality::Formal
   include Quality::CommitStage
   include Quality::Stages
