@@ -18,7 +18,7 @@ Ruby CLI tools that use large language models for refactoring, code search, shel
    ```
    or:
    ```bash
-   gem install ruby_llm typhoeus faraday-typhoeus oj parser ruby-progressbar colorize tty-box tty-cursor tty-screen zeitwerk
+   gem install ruby_llm typhoeus faraday-typhoeus oj parser ruby-progressbar colorize zeitwerk
    ```
 3. Install The Silver Searcher (required for `ag_gpt.rb`):
    - macOS: `brew install the_silver_searcher`
@@ -72,20 +72,11 @@ To run the scripts from any directory, add aliases to `~/.zshrc`.
     echo "alias ask='$(pwd)/ask_gpt.rb'" >> ~/.zshrc
     echo "alias gcommit='$(pwd)/git_commit_gpt.rb'" >> ~/.zshrc
     echo "alias ge='$(pwd)/git_explain_gpt.rb'" >> ~/.zshrc
-    echo "alias superagent='$(pwd)/superagent.rb'" >> ~/.zshrc
    ```
 
 3. Reload the shell:
    - Restart the terminal, or
    - Run `source ~/.zshrc`
-
-## Terminal Title Updates
-
-`superagent.rb` updates the terminal tab title:
-- "✅ Done" after a successful run
-- "❌ Error" after every attempt fails
-
-The title is set before the program waits for Enter, so you can see the outcome at a glance.
 
 Examples from any directory:
 refactor file.rb "make it more readable"
@@ -95,29 +86,8 @@ ask "explain how Ruby blocks work"
 ask --short "quick answer, please"
 gcommit "plan and create structured git commits"
 ge "explain current git changes"
-superagent "refactor the whole project to use dry-rb"
 
 ## Available Scripts
-
-### superagent.rb
-
-A TUI agent that tries models in sequence, checks that the result matches the request, and retries with fix instructions when it does not.
-
-Usage:
-```bash
-./superagent.rb "Your request here"
-```
-
-Features:
-- **Automatic verification**: A separate agent pass checks that the changes satisfy the request.
-- **Out-of-scope handling**: If the request is outside the project, the agent may output `FAILED: OUT_OF_SCOPE`; verification is skipped and the run is treated as failed.
-- **Stdin job driver** (`--stdin-commands`): Read JSON job lines from stdin, run one agent step per job (implement/verification/refactor/ask), write `{"done":true,"code":N}` to stdout. A driver can keep one long-lived Ruby process and send several jobs.
-- **Session reuse**: After each run the agent asks for the next request (same directory). Type `/quit` to exit. The lock is held until exit so only one instance runs per project.
-- **Self-correction**: Retries with specific fix instructions if verification fails.
-- **Queue during a run**: Visible queue UI (hint at start, "Queue (N): type request, Enter twice to add" before each attempt); extra requests are sent together on the next run.
-- **Detailed logging**: Timestamped logs and git status throughout the run.
-- **Runtime**: Prints total elapsed time when finished.
-- **Interactive mode**: Prompts for a request when none is given on the command line.
 
 ### refactor_gpt.rb
 
@@ -217,7 +187,7 @@ Features:
 
 ### hooks/quality.rb
 
-Cursor `stop` hook: after each completed agent turn, runs formal checks (abcop lint, long specs/modules), a short review, optional new-`.md` wording, then `git_commit_gpt --auto`. One follow-up message per stop; stages retry until clean. Logic lives in `hooks/quality/` (`config`, `support`, `state_store`, `turn_files`, `formal`, `stages`).
+Cursor `stop` hook: after each completed agent turn, runs an abcop lint gate, a short review, optional new-`.md` wording, then `git_commit_gpt --auto`. One follow-up message per stop; stages retry until clean. Change detection snapshots each workspace root (`path => mtime`, `.gitignore` respected) and diffs against the baseline from the last clean cycle. Logic lives in `hooks/quality/` (`config`, `support`, `state_store`, `transcripts`, `snapshot`, `formal`, `stages`).
 
 Install as a user hook (from `~/.cursor/`):
 
@@ -236,7 +206,7 @@ Install as a user hook (from `~/.cursor/`):
 }
 ```
 
-Or copy/symlink into `~/.cursor/hooks/` and point `hooks.json` at `./hooks/quality.rb`. When the hook does not live next to `git_commit_gpt.rb`, set `GIT_COMMIT_GPT` to that script. Optional `QUALITY_OWN_GITHUB=your-github-user` enables `--push` and stricter length checks on matching `github.com` remotes.
+Or copy/symlink into `~/.cursor/hooks/` and point `hooks.json` at `./hooks/quality.rb`. When the hook does not live next to `git_commit_gpt.rb`, set `GIT_COMMIT_GPT` to that script. Optional `QUALITY_OWN_GITHUB=your-github-user` enables `--push` on matching `github.com` remotes.
 
 ## Safety Features
 

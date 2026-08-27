@@ -78,18 +78,6 @@ class TestSystemPromptStability < Minitest::Test
     assert_includes a[1][:content], 'user service'
   end
 
-  def test_agent_guidelines_stable_and_separate_from_git_state
-    builder = agent_builder_with_modified(%w[lib/changed.rb])
-    with_project_dir do
-      guidelines = builder.guidelines_section(always_include: true)
-      assert_equal guidelines, builder.guidelines_section(always_include: true)
-      assert_project_rules_in_system(guidelines)
-      refute_system_has_runtime_state(guidelines)
-      refute_includes guidelines, 'lib/changed.rb'
-      assert_includes builder.modified_files_section, 'lib/changed.rb'
-    end
-  end
-
   private
 
   def assert_stable_system(messages_a, messages_b, expected_system)
@@ -141,11 +129,5 @@ class TestSystemPromptStability < Minitest::Test
 
   def bash_host(pwd, listing)
     BashPrompt.host_context(pwd: pwd, listing: listing, system_info: 'OS: macOS')
-  end
-
-  def agent_builder_with_modified(files)
-    tracker = Object.new
-    tracker.define_singleton_method(:get_modified_files) { files }
-    AgentPromptBuilder.new(tracker)
   end
 end

@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-# Zeitwerk autoloading for lib. lib/superagent and lib/superagent/prompt are collapsed
-# so those files define top-level constants.
+# Zeitwerk autoloading for lib. Collapsed subdirs (git_commit, git_explain,
+# primary_api) define top-level constants.
 # Shared types (SystemInfo, Utility, OpenrouterClient, etc.)
 # live in lib; AskGptClient is used by ask_gpt only.
 REFACTOR_GPT_ROOT = File.expand_path('..', __dir__).freeze
@@ -21,8 +21,6 @@ end
 require 'zeitwerk'
 loader = Zeitwerk::Loader.new
 loader.push_dir(File.expand_path(__dir__))
-loader.collapse(File.expand_path('superagent', __dir__))
-loader.collapse(File.expand_path('superagent/prompt', __dir__))
 loader.collapse(File.expand_path('git_commit', __dir__))
 loader.collapse(File.expand_path('git_explain', __dir__))
 loader.collapse(File.expand_path('primary_api', __dir__))

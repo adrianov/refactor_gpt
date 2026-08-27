@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# OpenRouter client wrapper for ask_gpt and superagent.
+# OpenRouter client wrapper for ask_gpt.
 class AskGptClient
   include AskClientInstructions
 

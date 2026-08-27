@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Argument parsing, .env loading, and display helpers shared by ask_gpt and superagent.
+# Argument parsing, .env loading, and display helpers shared by the CLI tools.
 module Utility
   PROJECT_ROOT = File.expand_path(File.join(__dir__, '..')).freeze
   FLAG_MAPPING = {"--eldritch" => :eldritch_mode, "--short" => :short_mode,

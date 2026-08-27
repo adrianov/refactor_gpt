@@ -3,6 +3,7 @@
 require 'ruby_llm'
 require_relative '../lib/loader'
 
+require 'minitest/autorun'
 # Tests PrimaryApiErrors' error-payload helpers: body extraction, pretty formatting,
 # and OpenRouter 400-wrapped upstream 429 detection.
 class TestPrimaryApiErrors < Minitest::Test
