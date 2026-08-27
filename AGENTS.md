@@ -15,8 +15,8 @@ RefactorGPT Tools provides command-line utilities for:
 
 ```bash
 # Lint with abcop (fast ABC-size + variable-usage linter; no bundler needed)
-abcop --changed   # only functions whose lines changed vs HEAD
-abcop             # whole tree
+abcop           # current-MR scope: changed functions since branching + uncommitted work
+abcop --full    # whole production tree
 
 # Validate syntax
 ruby -c path/to/file.rb
@@ -131,7 +131,7 @@ When refactoring code, systematically identify and remove unused and dead code w
 
 ### Linting and Code Quality
 - **Treat linter warnings seriously**: For any file or module you change, fix all abcop offenses reported in that file. Do not leave new or existing linter warnings in modified code.
-- Git commit flow shows a ready-to-copy `abcop --changed` hint when Ruby/Rust files changed; run it and fix findings before committing.
+- Git commit flow shows a ready-to-copy `abcop` hint when Ruby/Rust files changed; run it and fix findings before committing.
 - Ensure syntax is valid with `ruby -c` after modifications
 - Follow Ruby style guides and existing code conventions
 - Remove duplicate code and unused variables systematically

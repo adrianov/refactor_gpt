@@ -13,7 +13,7 @@ module GitCommitAbcop
     return nil if repository_root.nil?
     return nil if changed_code_paths(status_output).empty?
 
-    'abcop --changed'
+    'abcop'
   end
 
   private_class_method def repository_root
