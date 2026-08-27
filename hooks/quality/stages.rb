@@ -9,8 +9,7 @@ module Quality
     # Next stage when a chain turn produced nothing actionable; anything that
     # did produce edits always restarts formal.
     STALLED_NEXT = {
-      'formal' => 'review',
-      'review' => 'document', 'document' => 'abcop', 'abcop' => 'commit'
+      'formal' => 'review', 'review' => 'document', 'document' => 'commit'
     }.freeze
     # :stalled unwinds the whole pipeline when a repeat followup is suppressed;
     # returning nil from a stage there would cascade into later stages instead.
@@ -45,19 +44,18 @@ module Quality
 
       case stage
       when 'commit_fix' then files.empty? ? 'commit' : 'formal'
-      else files.empty? || md_only?(files) ? STALLED_NEXT.fetch(stage, stage) : 'formal'
+      else files.empty? || md_only?(files) ? STALLED_NEXT.fetch(stage, 'commit') : 'formal'
       end
     end
     def run_stages(stage, files, saved, chain)
-      %w[formal review document abcop].each do |name|
+      %w[formal review document].each do |name|
         next unless stage == name
 
         log_action('stage', name: name, files: files.size, list: files.first(3).join(','), saved: saved.size, chain: chain)
         msg = timed(name) { send(:"#{name}_stage", files, saved, *(name == 'formal' ? [chain] : [])) }
         return msg if msg
 
-        stage = { 'formal' => 'review', 'review' => 'document', 'document' => 'abcop',
-                  'abcop' => 'commit' }[name]
+        stage = { 'formal' => 'review', 'review' => 'document', 'document' => 'commit' }[name]
       end
       commit_followup(files) if stage == 'commit'
     end

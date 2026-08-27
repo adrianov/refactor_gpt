@@ -3,7 +3,7 @@
 require 'fileutils'
 
 module Quality
-  # Formal stage machinery plus the pre-commit abcop gate.
+  # Formal stage machinery: the per-cycle abcop lint plus size-extraction reports.
   module Formal
     def formal_stage(files, saved, chain)
       targets = formal_targets(files, saved, chain)
@@ -25,16 +25,6 @@ module Quality
       parts = [abcop_report(files),
                spec_length_report(files), module_report(files)].compact
       parts.empty? ? nil : parts.join("\n\n")
-    end
-    # Pre-commit gate: rerun abcop over everything touched this cycle so fixes
-    # made during review/document cannot land with lint debt.
-    def abcop_stage(files, saved)
-      targets = (files + saved).uniq.select { |f| File.file?(f) }
-      msg = abcop_report(targets)
-      return nil unless msg
-
-      save_stage('abcop', targets)
-      followup(msg)
     end
     # abcop: ABC size plus used-once/never-used variables. Scoping is fully
     # delegated: a plain `abcop` run with no PATHS scans the current-MR scope

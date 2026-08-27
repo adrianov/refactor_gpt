@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 #
 # Cursor stop pipeline (rbenv/Homebrew/system Ruby via PATH).
-# Stages: formal → review → document → abcop → git_commit_gpt. One follow-up per stop.
+# Stages: formal → review → document → git_commit_gpt. One follow-up per stop.
 #
 # 1. Collect files edited after the last user message.
 # 2. Formal: abcop (ABC size, single-use variables over the current-MR scope
@@ -15,9 +15,7 @@
 # 4. Document: wording for new .md files only, once, right before commit.
 #    Edits to existing .md skip this stage. Markdown-only edits continue to
 #    commit. A full cycle restart can reach this stage again.
-# 5. Abcop: final lint pass (plain `abcop`, current-MR scope per touched repo)
-#    right before the commit; failures retry this stage after the agent fixes them.
-# 6. git_commit_gpt --auto on the whole repo (push when QUALITY_OWN_GITHUB
+# 5. git_commit_gpt --auto on the whole repo (push when QUALITY_OWN_GITHUB
 #    matches the origin owner), only when this is the last active quality
 #    run for the git root. Concurrent agents leave an active lock for the
 #    cycle; the last one out commits. Warnings go back to 1 after the fix;
