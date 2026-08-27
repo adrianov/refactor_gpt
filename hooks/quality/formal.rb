@@ -3,7 +3,11 @@
 require 'fileutils'
 
 module Quality
-  # Formal stage machinery: the per-cycle abcop lint plus size-extraction reports.
+  # Formal stage machinery: the per-cycle abcop lint over every supported
+  # language. Scoping is fully delegated: a plain `abcop` run with no PATHS
+  # scans the current-MR scope itself (changes since branching from
+  # master/main plus uncommitted work), including ModuleSize and oversized
+  # specs — no home-grown size reports here.
   module Formal
     def formal_stage(files, saved, chain)
       targets = formal_targets(files, saved, chain)
@@ -19,18 +23,18 @@ module Quality
       t = (t + saved).uniq if chain && !files.empty?
       t.select { |f| File.file?(f) }
     end
+
     def formal_report(files)
       return nil if files.nil? || files.empty?
 
-      parts = [abcop_report(files),
-               spec_length_report(files), module_report(files)].compact
+      parts = [abcop_report(files)].compact
       parts.empty? ? nil : parts.join("\n\n")
     end
-    # abcop: ABC size plus used-once/never-used variables. Scoping is fully
-    # delegated: a plain `abcop` run with no PATHS scans the current-MR scope
-    # itself (changes since branching from master/main plus uncommitted work)
-    # across every language it supports.
-    # ModuleSize diagnostics are dropped: module_report owns size guidance.
+
+    # One plain run per repository: with no path arguments abcop applies its
+    # own MR heuristics over every supported file type, so only the repo root
+    # matters here. Result cache stays enabled — repeat scans over unchanged
+    # files are cheap.
     def abcop_report(files)
       bin = which('abcop')
       unless bin
@@ -42,10 +46,6 @@ module Quality
       rem.strip.empty? ? nil : "#{ABCOP_LEFT}\n\n#{truncate(rem)}"
     end
 
-    # One plain run per repository: with no path arguments abcop applies its
-    # own MR heuristics over every supported file type, so only the repo root
-    # matters here. Result cache stays enabled — repeat scans over unchanged
-    # files are cheap.
     def abcop_by_root(bin, files)
       roots = files.filter_map { |f| git_root(File.dirname(f)) }.uniq
       roots.filter_map do |root|
@@ -81,47 +81,9 @@ module Quality
     end
 
     def abcop_diag_line(diag, root)
-      return if diag['rule'] == 'ModuleSize'
-
       rel = diag['file'].sub(%r{\A#{Regexp.escape(root)}/}, '')
       "#{rel}:#{diag['line']}:#{diag['column']}: " \
         "#{diag['severity']}: #{diag['rule']}: #{diag['message']}"
-    end
-    def spec_length_report(this_turn)
-      own = long_specs(this_turn.select { |f| f =~ /_spec\.rb$/i && owned_repo?(f) })
-      own.empty? ? nil : own_spec_msg(own)
-    end
-    def long_specs(files)
-      files.map { |f| [line_count(f), f] }.select { |n, f| n >= MAX_LINES && File.file?(f) }.sort_by { |n, _| -n }
-    end
-    def own_spec_msg(own)
-      report = own.map { |n, f| "- #{f} (#{n} lines)" }.join("\n")
-      "Edited spec files (longest first):\n#{report}\n\n#{own[0][1]} is #{own[0][0]} lines (≥ 200). #{OWN_SPEC}"
-    end
-    def module_report(files)
-      counted = counted_modules(files)
-      longest = counted.find { |n, _| n >= MAX_LINES }
-      return nil unless longest
-
-      lines, file = longest
-      report = counted.map { |n, f| "- #{f} (#{n} lines)" }.join("\n")
-      extract, kind, drop = extract_hint(file)
-      "Edited production modules (longest first):\n#{report}\n\n" \
-        "#{file} is #{lines} lines (≥ 200). #{format(MODULE_SHRINK, extract: extract, kind: kind, drop: drop)}"
-    end
-    def counted_modules(files)
-      files.each_with_object([]) do |f, a|
-        next unless File.file?(f) && prod_module?(f) && owned_repo?(f)
-
-        a << [line_count(f), f]
-      end.sort_by { |n, _| -n }
-    end
-    def extract_hint(file)
-      if file =~ /\.(ya?ml)$/i then EXTRACT_YAML
-      elsif file =~ /\.(css|scss|sass)$/i then EXTRACT_CSS
-      elsif file =~ /\.(slim|erb)$/i then EXTRACT_TPL
-      else EXTRACT_CODE
-      end
     end
   end
 end

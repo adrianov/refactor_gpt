@@ -28,7 +28,7 @@ module Quality
     def boot_cycle
       cleanup_state
       claim_active(workspace_git_root)
-      files = this_turn_files
+      files = changed_files
       chain = followup_chain?
       stage, saved = load_stage
       log_action('boot', chain: chain, stage: stage || 'formal', files: files.size)
@@ -158,23 +158,14 @@ module Quality
       # Files outside any repo (or all-clean repo files) leave nothing pending.
       true
     end
+
     def schema_edited?
-      # Own repos commit schema.rb as generated; the minimal-change note is for other remotes.
+      # Own repos commit schema.rb as generated; the minimal-change note is
+      # for other remotes. The snapshot diff covers direct edits and
+      # migration regenerations alike.
       return false if owned_workspace?
-      return true if schema_tool_edit?
 
-      migration_dirtied_schema?
-    end
-    def migration_dirtied_schema?
-      return false unless this_turn_shell_commands.any? { |c| c =~ SCHEMA_SHELL_RE }
-
-      root = @roots[0]
-      return false if root.nil? || !File.directory?(root) || !git_root(root)
-
-      !capture('git', '-C', root, 'status', '--porcelain', '--', 'db/schema.rb')[0].to_s.empty?
-    end
-    def schema_tool_edit?
-      this_turn_tools.any? { |t| t['name'] != 'Shell' && tool_paths(t).any? { |p| p =~ %r{(^|/)db/schema\.rb$}i } }
+      changed_files.any? { |p| p =~ %r{(^|/)db/schema\.rb$}i }
     end
   end
 end

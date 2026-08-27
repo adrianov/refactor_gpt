@@ -2,11 +2,16 @@
 
 require 'open3'
 require 'fileutils'
-require 'digest'
 
 module Quality
   # Shell/git helpers, path-kind predicates, stage/flags, and active locks.
   module Support
+    # Vendored/generated dirs mirror abcop's own third-party prune.
+    VENDORED_DIR_RE = %r{
+      (^|/)(vendor|node_modules|bower_components|Pods|Carthage|target|dist|
+      build|out|third_party|third-party|3rdparty|external|coverage|DerivedData)/
+    }ix
+
     def capture(*cmd, chdir: nil, stdin_data: nil)
       o = {}
       o[:chdir] = chdir if chdir
@@ -32,7 +37,8 @@ module Quality
 
     def build_log_line(event, fields)
       parts = fields.reject { |_, v| v.nil? || v.to_s.empty? }.map { |k, v| "#{k}=#{v}" }
-      "[quality] #{Time.now.strftime('%F %T%z')} pid=#{$$} session=#{@session_key} " \
+      head = Time.now.strftime('%Y-%m-%d %H:%M:%S%z')
+      "#{head} pid=#{Process.pid} session=#{@session_key} " \
         "#{event} #{parts.join(' ')}".rstrip
     end
 
@@ -98,17 +104,7 @@ module Quality
     # the diff touched: size findings there have no action you can take
     # upstream. Mirrors abcop's scoped-run third-party prune.
     def third_party?(path)
-      path =~ %r{(^|/)(vendor|node_modules|bower_components|Pods|Carthage|target|dist|build|out|third_party|third-party|3rdparty|external|coverage|DerivedData)/}i ||
-        path =~ %r{(^|/)db/migrate/}i
-    end
-    def prod_module?(path)
-      return false unless path =~ PROD_EXT
-      return false if path =~ %r{(^|/)[^/]*lock\.ya?ml$}i || path =~ %r{(^|/)(docs|doc|translations|icons?|images?)/}i
-      return false if (path =~ %r{(^|/)assets/}i && path !~ /\.(css|scss|sass)$/i) ||
-                     path =~ %r{(^|/)db/schema\.rb$}i || routing_file?(path)
-      return false if third_party?(path)
-
-      !spec_or_test?(path)
+      VENDORED_DIR_RE =~ path || path =~ %r{(^|/)db/migrate/}i
     end
     def main_module?(path)
       path =~ MAIN_EXT && path !~ %r{(^|/)(docs|doc)/}i && !routing_file?(path) &&
@@ -117,13 +113,6 @@ module Quality
     def md_only?(files)
       list = Array(files).reject { |f| f.to_s.empty? }
       !list.empty? && list.all? { |f| f =~ /\.md$/i }
-    end
-    def line_count(path)
-      n = 0
-      File.foreach(path) { n += 1 }
-      n
-    rescue StandardError
-      0
     end
     def truncate(text)
       s = text.to_s

@@ -4,12 +4,11 @@
 # Cursor stop pipeline (rbenv/Homebrew/system Ruby via PATH).
 # Stages: formal → review → document → git_commit_gpt. One follow-up per stop.
 #
-# 1. Collect files edited after the last user message.
-# 2. Formal: abcop (ABC size, single-use variables over the current-MR scope
-#    of each touched repo; runs plain `abcop`, which owns all heuristics), and
-#    ≥200-line spec/module extraction only when origin matches
-#    QUALITY_OWN_GITHUB (same gate as --push). Failures retry this stage
-#    after the agent fixes them.
+# 1. Diff each workspace root's (path, mtime) fingerprint table against the
+#    baseline saved at the last clean cycle end (.gitignore honored).
+# 2. Formal: plain `abcop` per touched repo over the current-MR scope — it owns
+#    ABC size, variable hygiene, ModuleSize, and oversized-spec findings all by
+#    itself. Failures retry this stage after the agent fixes them.
 # 3. Review: completion check and scatter (once per cycle; reset if formal
 #    or commit complains), plus schema.rb (own-repo remotes exempt).
 # 4. Document: wording for new .md files only, once, right before commit.
@@ -22,11 +21,9 @@
 #    a clean run stops.
 #
 # Optional env:
-#   GIT_COMMIT_GPT       — path to git_commit_gpt.rb (default: ../../git_commit_gpt.rb)
-#   QUALITY_OWN_GITHUB   — GitHub username/org; when set, owned remotes get
-#                          --push, AbcSize, and ≥200-line spec/module
-#                          extraction; the schema.rb minimal-change note
-#                          applies to other remotes only
+#   QUALITY_OWN_GITHUB   — GitHub username/org; owned remotes get --push, and
+#                          the schema.rb minimal-change note applies to other
+#                          remotes only
 #   QUALITY_LOCAL        — optional extra Ruby file after public modules
 #                          (default: ~/.cursor/hooks/quality_local.rb if present)
 #
@@ -39,7 +36,8 @@ require 'digest'
 require_relative 'quality/config'
 require_relative 'quality/support'
 require_relative 'quality/state_store'
-require_relative 'quality/turn_files'
+require_relative 'quality/transcripts'
+require_relative 'quality/snapshot'
 require_relative 'quality/formal'
 require_relative 'quality/commit'
 require_relative 'quality/stages'
@@ -52,7 +50,8 @@ require local if File.file?(local)
 class QualityHook
   include Quality::Support
   include Quality::StateStore
-  include Quality::TurnFiles
+  include Quality::Transcripts
+  include Quality::Snapshots
   include Quality::Formal
   include Quality::CommitStage
   include Quality::Stages
