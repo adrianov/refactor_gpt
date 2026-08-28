@@ -78,9 +78,6 @@ module Quality
       prefix = root.end_with?('/') ? root : "#{root}/"
       abs.start_with?(prefix) ? abs[prefix.length..-1] : nil
     end
-    def owned_repo?(path)
-      (r = git_root(File.dirname(path))) && owned_remote?(git_remote(r))
-    end
     # True when the first workspace root's repo remote belongs to OWN_GITHUB.
     def owned_workspace?
       root = workspace_git_root

@@ -48,11 +48,7 @@ module Quality
 
     def abcop_by_root(bin, files)
       roots = files.filter_map { |f| git_root(File.dirname(f)) }.uniq
-      roots.filter_map do |root|
-        next unless owned_remote?(git_remote(root))
-
-        abcop_root_output(bin, root)
-      end.join
+      roots.filter_map { |root| abcop_root_output(bin, root) }.join
     end
 
     def abcop_root_output(bin, root)
