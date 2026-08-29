@@ -21,7 +21,6 @@ class GitCommitPlanner
     context = plan_context(status)
     diff = uncommitted_diff(context[:budgets])
     @capture.show_if_needed(show_diff)
-    show_lint_hint(status) if show_diff
     finalize_plan(request_plan(status, context, diff), status)
   end
 
@@ -115,14 +114,5 @@ class GitCommitPlanner
     result["status_output"] = status
     result["status_snapshot"] = porcelain_status
     result
-  end
-
-  def show_lint_hint(status)
-    cmd = GitCommitAbcop.suggestion(status)
-    return unless cmd
-
-    puts "Run abcop before committing:".yellow
-    puts cmd.cyan
-    puts
   end
 end
