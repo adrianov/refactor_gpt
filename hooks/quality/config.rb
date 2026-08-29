@@ -32,8 +32,11 @@ module Quality
   OWN_GITHUB = ENV['QUALITY_OWN_GITHUB'].to_s.strip
   SCATTER = 6
   LOCK_AGE = 600
-  # Stale after 15 min: a stopped/killed run must not block the project lock for hours.
+  # Exclusive quality lock: stale after 15 min if a run is killed mid-flight.
   ACTIVE_LOCK_AGE = 900
+  # Presence marks: shorter TTL so a crashed mid-followup agent does not block
+  # last-one-out for the full lock lifetime. Refreshed on every stop.
+  AGENT_MARK_AGE = 300
   LIMIT = 6000
   FOLLOWUP_REPEATS = 2
   VERIFY = 'Check if the issue is resolved fully and properly. Fix without bloat if needed.'

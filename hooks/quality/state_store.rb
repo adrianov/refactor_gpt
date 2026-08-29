@@ -2,18 +2,18 @@
 
 module Quality
   # Stage-state files under STATE: pending/review markers, stage progress,
-  # per-git-root active locks, and commit-result markers.
+  # and commit-result markers. Concurrency gates live in Quality::RepoGates.
   module StateStore
     def pending_file; File.join(STATE, "stop-pending-#{@session_key}"); end
     def review_flag_file(name); File.join(STATE, "stop-#{name}-#{@session_key}"); end
     def review_flag?(name); File.file?(review_flag_file(name)); end
     def stage_file; File.join(STATE, "stop-stage-#{@session_key}"); end
-    def active_lock_path(k); File.join(STATE, "quality-active-#{k}"); end
     def write_commit_marker(path, head, dirt, status); File.write(path, "#{head}\n#{dirt}\n#{status}\n"); end
-    # Clean-cycle exit: releases the active-runner lock and answers empty.
+    # Clean-cycle exit: drops exclusive lock + agent presence, answers empty.
     # Change detection is git-based; there is no baseline to advance.
     def finish_empty
       release_active
+      release_agent
       empty
     end
     def set_review_flag(name)
@@ -59,59 +59,6 @@ module Quality
  (File.delete(f) if File.file?(f) && File.mtime(f) < cutoff) rescue nil }
     rescue StandardError
       nil
-    end
-    def claim_active(root)
-      return true if root.nil? || root.empty?
-
-      FileUtils.mkdir_p(STATE)
-      key = Digest::SHA256.hexdigest(root)
-      sweep_active_locks(key)
-      return false unless acquire_lock(active_lock_path(key), ACTIVE_LOCK_AGE)
-
-      @active_root_key = key
-      true
-    end
-    def release_active
-      path = active_lock_path(@active_root_key) if @active_root_key
-      if path
-        Dir.rmdir(path) if File.directory?(path)
-        File.delete(path) if File.file?(path)
-      end
-    rescue StandardError
-      nil
-    ensure
-      @active_root_key = nil
-    end
-    def sweep_active_locks(root_key)
-      path = active_lock_path(root_key)
-      drop_stale_dir_lock(path)
-      File.delete(path) if File.file?(path)
-      Dir.glob(File.join(STATE, "quality-active-#{root_key}-*")).each do |legacy|
-        (File.delete(legacy) if File.file?(legacy)) rescue nil
-      end
-    rescue StandardError
-      nil
-    end
-    def drop_stale_dir_lock(path)
-      return unless File.directory?(path)
-      return if Time.now.to_i - File.mtime(path).to_i < ACTIVE_LOCK_AGE
-
-      Dir.rmdir(path) rescue nil
-    end
-    def acquire_lock(dir, age = LOCK_AGE)
-      true if Dir.mkdir(dir)
-    rescue Errno::EEXIST
-      mtime = File.mtime(dir).to_i rescue 0
-      return false if Time.now.to_i - mtime < age
-
-      Dir.rmdir(dir) rescue nil
-      begin
-        true if Dir.mkdir(dir)
-      rescue Errno::EEXIST
-        false
-      end
-    rescue StandardError
-      false
     end
     def record_commit_marker(ctx, leftover, warnings, newhead)
       own, marker, head = ctx[:own], ctx[:marker], ctx[:head]

@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require 'fileutils'
-
 module Quality
   # Pipeline sequencing: formal → review → document → commit. One follow-up
   # per stop; review/document message bodies live in Quality::Review.
@@ -18,7 +16,7 @@ module Quality
         root = workspace_git_root
         log_action('start', status: @input['status'].to_s, dir: @roots[0].to_s, git: root ? 'yes' : 'no')
         return empty unless completed?
-        return skip_locked unless claim_active(root)
+        return empty unless claim_last_agent(root)
 
         run_locked_pipeline
       end
@@ -31,10 +29,30 @@ module Quality
     ensure
       release_active
     end
-    def skip_locked
+    # Many agents may work the same repo; quality runs only for the last one
+    # left. New cycles: mark, step out, proceed only if no sibling marks
+    # remain — then rematerialize and take the exclusive lock. Follow-up
+    # chains keep going so a mid-cycle sibling does not abort the pipeline.
+    def claim_last_agent(root)
+      chain = followup_chain?
+      mark_agent(root)
+      return take_project_lock(root) if chain
+      unless last_agent?
+        log_action('skip', reason: 'other_agents')
+        STDERR.puts '[quality] skip: waiting for last remaining agent on this repo'
+        return false
+      end
+
+      mark_agent(root)
+      take_project_lock(root)
+    end
+    def take_project_lock(root)
+      return true if claim_active(root)
+
+      release_agent
       log_action('skip', reason: 'project_lock')
       STDERR.puts '[quality] skip: project quality lock still held'
-      empty
+      false
     end
     def boot_cycle
       cleanup_state
