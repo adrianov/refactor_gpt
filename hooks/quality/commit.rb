@@ -28,10 +28,6 @@ module Quality
       return false unless root && !git_remote(root).empty?
       return false if capture('git', '-C', root, 'status', '--porcelain')[0].to_s.empty?
 
-      unless last_active_runner?
-        STDERR.puts '[quality] git_commit_gpt skip: other agents still active'
-        return false
-      end
       File.executable?(RBENV_RUBY) && File.file?(COMMIT_GPT)
     end
 
@@ -59,13 +55,12 @@ module Quality
       return success_commit_result(root, ctx, leftover, warnings) if code == 0
 
       write_commit_marker(ctx[:marker], ctx[:head], leftover, 'warnings')
-      claim_active(root)
       fail_commit_msg(warnings, plain, args, code)
     end
 
     def success_commit_result(root, ctx, leftover, warnings)
       record_commit_marker(ctx, leftover, warnings, git_head(root))
-      warnings.strip.empty? ? nil : (claim_active(root); warnings)
+      warnings.strip.empty? ? nil : warnings
     end
 
     def git_dirt_hash(root)

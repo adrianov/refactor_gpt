@@ -3,10 +3,9 @@
 require 'json'
 
 module Quality
-  # Read-only transcript/text helpers left after the snapshot switch: the
-  # latest user message detects followup chains, and outgoing text is shown
-  # relative to the workspace roots. Changed-file tracking moved to
-  # Quality::GitChanges (git-diff based), which never parses the transcript.
+  # Transcript helpers: recent user texts detect followup chains; outgoing
+  # text is shown relative to workspace roots. Changed files come from
+  # Quality::GitChanges (git-diff), which never parses the transcript.
   module Transcripts
     def parent_messages
       @parent_messages ||= load_jsonl(@transcript_path)
@@ -30,16 +29,16 @@ module Quality
       c = msg.is_a?(Hash) ? (msg.dig('message', 'content') || []) : []
       c.is_a?(Array) ? c : []
     end
-    def last_user_index(msgs)
-      idx = nil
-      msgs.each_with_index { |m, i| idx = i if m['role'] == 'user' }
-      idx
-    end
-    def last_user_text
-      i = last_user_index(parent_messages)
-      return '' if i.nil?
+    def recent_user_texts(limit = 3)
+      texts = []
+      parent_messages.reverse_each do |m|
+        next unless m['role'] == 'user'
 
-      content_items(parent_messages[i]).select { |c| c['type'] == 'text' }.map { |c| c['text'].to_s }.join("\n")
+        text = content_items(m).select { |c| c['type'] == 'text' }.map { |c| c['text'].to_s }.join("\n")
+        texts << text unless text.empty?
+        break if texts.size >= limit
+      end
+      texts
     end
     def rel_project_text(text)
       project_roots.each { |r| text = text.split("#{r}/").join('').split(r).join('.') unless r.empty? }

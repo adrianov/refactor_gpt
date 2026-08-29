@@ -16,10 +16,9 @@
 #    Edits to existing .md skip this stage. Markdown-only edits continue to
 #    commit. A full cycle restart can reach this stage again.
 # 5. git_commit_gpt --auto on the whole repo (push when QUALITY_OWN_GITHUB
-#    matches the origin owner), only when this is the last active quality
-#    run for the git root. Concurrent agents leave an active lock for the
-#    cycle; the last one out commits. Warnings go back to 1 after the fix;
-#    a clean run stops.
+#    matches the origin owner). An exclusive lock keyed by git-root path
+#    gates the whole stop-hook run (one agent per project at a time).
+#    Warnings go back to 1 after the fix; a clean run stops.
 #
 # Optional env:
 #   QUALITY_OWN_GITHUB   — GitHub username/org; owned remotes get --push, and

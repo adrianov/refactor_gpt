@@ -32,7 +32,8 @@ module Quality
   OWN_GITHUB = ENV['QUALITY_OWN_GITHUB'].to_s.strip
   SCATTER = 6
   LOCK_AGE = 600
-  ACTIVE_LOCK_AGE = 7200
+  # Stale after 15 min: a stopped/killed run must not block the project lock for hours.
+  ACTIVE_LOCK_AGE = 900
   LIMIT = 6000
   FOLLOWUP_REPEATS = 2
   VERIFY = 'Check if the issue is resolved fully and properly. Fix without bloat if needed.'

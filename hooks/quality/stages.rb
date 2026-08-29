@@ -18,16 +18,26 @@ module Quality
         root = workspace_git_root
         log_action('start', status: @input['status'].to_s, dir: @roots[0].to_s, git: root ? 'yes' : 'no')
         return empty unless completed?
+        return skip_locked unless claim_active(root)
 
-        files, chain, stage, saved = boot_cycle
-        return empty_files_path if !chain && files.empty?
-
-        run_stages(advance_stage(stage, files, chain), files, saved, chain)
+        run_locked_pipeline
       end
+    end
+    def run_locked_pipeline
+      files, chain, stage, saved = boot_cycle
+      return empty_files_path if !chain && files.empty?
+
+      run_stages(advance_stage(stage, files, chain), files, saved, chain)
+    ensure
+      release_active
+    end
+    def skip_locked
+      log_action('skip', reason: 'project_lock')
+      STDERR.puts '[quality] skip: project quality lock still held'
+      empty
     end
     def boot_cycle
       cleanup_state
-      claim_active(workspace_git_root)
       files = changed_files
       chain = followup_chain?
       stage, saved = load_stage
@@ -51,7 +61,8 @@ module Quality
       %w[formal review document].each do |name|
         next unless stage == name
 
-        log_action('stage', name: name, files: files.size, list: files.first(3).join(','), saved: saved.size, chain: chain)
+        log_action('stage', name: name, files: files.size, list: files.first(3).join(','), saved: saved.size,
+                   chain: chain)
         msg = timed(name) { send(:"#{name}_stage", files, saved, *(name == 'formal' ? [chain] : [])) }
         return msg if msg
 
@@ -80,11 +91,13 @@ module Quality
     def followup_chain?
       return true if @input['loop_count'].to_i != 0
 
-      text = last_user_text
-      return false if text.empty?
-
+      # Scan recent user texts, not just the last one: a mid-turn user interjection
+      # pushes the delivered followup out of last position, which used to reset the
+      # chain (unset review flags) and re-emit the same advisory every turn.
       pending = File.file?(pending_file) ? File.readlines(pending_file)[0].to_s[0, 120] : ''
-      (!pending.empty? && text.include?(pending)) || text.match?(FOLLOWUP_RE)
+      recent_user_texts.any? do |text|
+        (!pending.empty? && text.include?(pending)) || text.match?(FOLLOWUP_RE)
+      end
     end
     def review_report(files)
       files = Array(files).select { |f| File.file?(f) || f =~ %r{(^|/)db/schema\.rb$}i }
