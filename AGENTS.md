@@ -22,7 +22,7 @@ abcop --full    # whole production tree
 ruby -c path/to/file.rb
 ```
 
-**abcop policy**: Fix all abcop offenses (ABC size above the threshold, used-once/never-used variables, module size ≥ 200 lines) in touched files; do not add `rubocop:disable`-style suppression comments to hide them.
+**abcop policy**: Fix all abcop offenses (method ABC size, module ABC size, used-once/never-used variables) in touched files; do not add `rubocop:disable`-style suppression comments to hide them.
 
 **Note**: This project does not have automated tests. Manual testing involves running the individual scripts.
 
@@ -92,9 +92,8 @@ When modifying LLM prompts or system instructions in AI-driven applications:
 ### File Structure
 - Keep main scripts in root directory with `_gpt.rb` suffix
 - Place shared code in `lib/` directory
-- Extract helper modules into separate files when they exceed reasonable size
-- Maximum class/module length: 400 lines (extract to new classes/modules when approaching limit)
-- Maximum ABC complexity metric: 17
+- Extract helper modules into separate files when abcop reports module ABC too high
+- Maximum ABC complexity metric: 17 (methods); follow abcop's module ABC threshold for whole modules
 
 ### Comments
 - Preserve existing comments unless they refer to code that has been changed or removed
@@ -136,7 +135,7 @@ When refactoring code, systematically identify and remove unused and dead code w
 - Follow Ruby style guides and existing code conventions
 - Remove duplicate code and unused variables systematically
 - Read files completely when fixing errors or adding new functionality to ensure complete context is preserved
-- **Metric Violations**: When abcop detects complexity violations (`Metrics/AbcSize` above 17) or modules over 200 lines, refactor by:
+- **Metric Violations**: When abcop detects complexity violations (`Metrics/AbcSize` or `Metrics/ModuleAbcSize`), refactor by:
   - Extracting complex logic into smaller, focused methods
   - Breaking down large methods into logical units
   - Using guard clauses to reduce nested conditions
@@ -144,6 +143,6 @@ When refactoring code, systematically identify and remove unused and dead code w
   - Applying Single Responsibility Principle
   - Creating helper methods for repeated patterns
   - Ensure extracted methods have descriptive names that explain their purpose
-  - Splitting large files into smaller, focused modules/classes when approaching 400-line limit
+  - Splitting high-ABC modules into focused units (abcop module ABC, not line count)
   - **Never disable Metrics/AbcSize inline**; adjust code or configuration instead.
   - When complexity remains high after refactoring (e.g. ABC score near the limit), add business-logic comments per the **High ABC complexity** rule under Comments.

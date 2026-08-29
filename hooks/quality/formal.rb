@@ -6,8 +6,8 @@ module Quality
   # Formal stage machinery: the per-cycle abcop lint over every supported
   # language. Scoping is fully delegated: a plain `abcop` run with no PATHS
   # scans the current-MR scope itself (changes since branching from
-  # master/main plus uncommitted work), including ModuleSize and oversized
-  # specs — no home-grown size reports here.
+  # master/main plus uncommitted work) — method/module ABC and variable
+  # hygiene; no home-grown line-count reports here.
   module Formal
     def formal_stage(files, saved, chain)
       targets = formal_targets(files, saved, chain)
