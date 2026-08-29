@@ -187,7 +187,7 @@ Features:
 
 ### hooks/quality.rb
 
-Cursor `stop` hook: after each completed agent turn, runs an abcop lint gate, a short review, optional new-`.md` wording, then `git_commit_gpt --auto`. One follow-up message per stop; stages retry until clean. Change detection snapshots each workspace root (`path => mtime`, `.gitignore` respected) and diffs against the baseline from the last clean cycle. Logic lives in `hooks/quality/` (`config`, `support`, `state_store`, `transcripts`, `snapshot`, `formal`, `stages`).
+Cursor `stop` hook: after each completed agent turn, runs an abcop lint gate, a short review, optional new-`.md` wording, then `git_commit_gpt --auto`. One follow-up message per stop; stages retry until clean. Change detection is git-based (uncommitted work vs HEAD plus untracked files). Scatter/verify re-emit is skipped when the edited-module count is unchanged. Logic lives in `hooks/quality/` (`config`, `support`, `state_store`, `transcripts`, `git_changes`, `formal`, `review`, `stages`, `commit`).
 
 Install as a user hook (from `~/.cursor/`):
 

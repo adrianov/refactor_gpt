@@ -8,10 +8,11 @@
 #    workspace root's uncommitted work vs HEAD plus untracked files; roots
 #    outside any repo are skipped. No snapshots or state files involved.
 # 2. Formal: plain `abcop` per touched repo over the current-MR scope — it owns
-#    ABC size, variable hygiene, ModuleSize, and oversized-spec findings all by
-#    itself. Failures retry this stage after the agent fixes them.
+#    method/module ABC size and variable hygiene. Failures retry this stage
+#    after the agent fixes them.
 # 3. Review: completion check and scatter (once per cycle; reset if formal
-#    or commit complains), plus schema.rb (own-repo remotes exempt).
+#    or commit complains). Re-emit is skipped when the edited-module count
+#    is unchanged since the last scatter. schema.rb: own-repo remotes exempt.
 # 4. Document: wording for new .md files only, once, right before commit.
 #    Edits to existing .md skip this stage. Markdown-only edits continue to
 #    commit. A full cycle restart can reach this stage again.
@@ -40,6 +41,7 @@ require_relative 'quality/transcripts'
 require_relative 'quality/git_changes'
 require_relative 'quality/formal'
 require_relative 'quality/commit'
+require_relative 'quality/review'
 require_relative 'quality/stages'
 
 local = ENV['QUALITY_LOCAL'].to_s
@@ -54,6 +56,7 @@ class QualityHook
   include Quality::GitChanges
   include Quality::Formal
   include Quality::CommitStage
+  include Quality::Review
   include Quality::Stages
 
   def initialize(input)
