@@ -6,8 +6,10 @@ require 'fileutils'
 module Quality
   # Review and document follow-up text: verify, scatter, schema, new markdown.
   module Review
-    # Survives formal/commit flag resets so an unchanged module count does not
+    # Survives formal flag resets so an unchanged module count does not
     # re-loop the verify+scatter follow-up; cleared on a fresh user turn.
+    # Commit guideline warnings keep these flags so review can return nothing
+    # and fall through to a commit retry.
     def scatter_count_file; File.join(STATE, "stop-scatter-n-#{@session_key}"); end
     def last_scatter_count
       return nil unless File.file?(scatter_count_file)
@@ -53,7 +55,7 @@ module Quality
     def module_edit_count(files)
       files.count { |f| main_module?(f) }
     end
-    # Same scatter count as last emission: skip verify+scatter after formal/commit
+    # Same scatter count as last emission: skip verify+scatter after formal
     # flag resets so the agent is not looped on an unchanged footprint.
     def stable_scatter?(files)
       n = module_edit_count(files)
