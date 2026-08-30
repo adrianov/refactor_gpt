@@ -17,12 +17,10 @@
 #    Edits to existing .md skip this stage. Markdown-only edits continue to
 #    commit. A full cycle restart can reach this stage again.
 # 5. git_commit_gpt --auto on the whole repo (push when QUALITY_OWN_GITHUB
-#    matches the origin owner). Many agents may work the same project at once;
-#    quality.rb runs only for the last remaining agent (session presence marks,
-#    last-one-out). An exclusive mkdir lock still serializes two racers that
-#    both think they are last. Presence is held across follow-ups and cleared
-#    on a clean/stalled exit. Warnings go back to 1 after the fix; a clean run
-#    stops.
+#    matches the origin owner). Quality runs only when this is the last open
+#    Cursor/omp session on the project: sibling session logs must end with an
+#    end marker (Cursor turn_ended, omp session_exit). No presence/lock files.
+#    Warnings go back to 1 after the fix; a clean run stops.
 #
 # Optional env:
 #   QUALITY_OWN_GITHUB   — GitHub username/org; owned remotes get --push, and
@@ -165,8 +163,6 @@ class QualityHook
     log_action('followup_stalled', repeats: count, head: msg[0, 80])
     clear_stage
     clear_repeat
-    release_active
-    release_agent
     empty
     throw :stalled
   end

@@ -16,43 +16,20 @@ module Quality
         root = workspace_git_root
         log_action('start', status: @input['status'].to_s, dir: @roots[0].to_s, git: root ? 'yes' : 'no')
         return empty unless completed?
-        return empty unless claim_last_agent(root)
 
-        run_locked_pipeline
+        # Workspace cwd keys omp session dirs; fall back to git top when unset.
+        gate = @roots[0].to_s
+        gate = root if gate.empty?
+        return empty unless sole_session?(gate)
+
+        run_pipeline
       end
     end
-    def run_locked_pipeline
+    def run_pipeline
       files, chain, stage, saved = boot_cycle
       return empty_files_path if !chain && files.empty?
 
       run_stages(advance_stage(stage, files, chain), files, saved, chain)
-    ensure
-      release_active
-    end
-    # Many agents may work the same repo; quality runs only for the last one
-    # left. New cycles: mark, step out, proceed only if no sibling marks
-    # remain — then rematerialize and take the exclusive lock. Follow-up
-    # chains keep going so a mid-cycle sibling does not abort the pipeline.
-    def claim_last_agent(root)
-      chain = followup_chain?
-      mark_agent(root)
-      return take_project_lock(root) if chain
-      unless last_agent?
-        log_action('skip', reason: 'other_agents')
-        STDERR.puts '[quality] skip: waiting for last remaining agent on this repo'
-        return false
-      end
-
-      mark_agent(root)
-      take_project_lock(root)
-    end
-    def take_project_lock(root)
-      return true if claim_active(root)
-
-      release_agent
-      log_action('skip', reason: 'project_lock')
-      STDERR.puts '[quality] skip: project quality lock still held'
-      false
     end
     def boot_cycle
       cleanup_state

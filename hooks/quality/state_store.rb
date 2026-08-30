@@ -2,18 +2,14 @@
 
 module Quality
   # Stage-state files under STATE: pending/review markers, stage progress,
-  # and commit-result markers. Concurrency gates live in Quality::RepoGates.
+  # commit markers, and the short mkdir lock used by git_commit_gpt.
   module StateStore
     def pending_file; File.join(STATE, "stop-pending-#{@session_key}"); end
     def review_flag_file(name); File.join(STATE, "stop-#{name}-#{@session_key}"); end
     def review_flag?(name); File.file?(review_flag_file(name)); end
     def stage_file; File.join(STATE, "stop-stage-#{@session_key}"); end
     def write_commit_marker(path, head, dirt, status); File.write(path, "#{head}\n#{dirt}\n#{status}\n"); end
-    # Clean-cycle exit: drops exclusive lock + agent presence, answers empty.
-    # Change detection is git-based; there is no baseline to advance.
     def finish_empty
-      release_active
-      release_agent
       empty
     end
     def set_review_flag(name)
@@ -59,6 +55,21 @@ module Quality
  (File.delete(f) if File.file?(f) && File.mtime(f) < cutoff) rescue nil }
     rescue StandardError
       nil
+    end
+    def acquire_lock(dir, age = LOCK_AGE)
+      true if Dir.mkdir(dir)
+    rescue Errno::EEXIST
+      mtime = File.mtime(dir).to_i rescue 0
+      return false if Time.now.to_i - mtime < age
+
+      Dir.rmdir(dir) rescue nil
+      begin
+        true if Dir.mkdir(dir)
+      rescue Errno::EEXIST
+        false
+      end
+    rescue StandardError
+      false
     end
     def record_commit_marker(ctx, leftover, warnings, newhead)
       own, marker, head = ctx[:own], ctx[:marker], ctx[:head]
