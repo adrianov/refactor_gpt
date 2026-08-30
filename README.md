@@ -187,7 +187,7 @@ Features:
 
 ### hooks/quality.rb
 
-Cursor `stop` hook: after each completed agent turn, runs an abcop lint gate, a short review, optional new-`.md` wording, then `git_commit_gpt --auto`. One follow-up message per stop; stages retry until clean. Quality runs only when this is the last open Cursor/omp session on the project (sibling logs must end with `turn_ended` / `session_exit`, or exceed the open-session TTL; no presence lock files). Change detection is git-based (uncommitted work vs HEAD plus untracked files). Scatter/verify re-emit is skipped when the edited-module count is unchanged. Logic lives in `hooks/quality/` (`config`, `support`, `state_store`, `repo_gates`, `transcripts`, `git_changes`, `formal`, `review`, `stages`, `commit`).
+Cursor `stop` hook: after each completed agent turn, runs an abcop lint gate (plus a static RSpec no-def scan when `.cursor/rules/rspec-no-def.mdc` exists), a short review, optional new-`.md` wording, then `git_commit_gpt --auto`. One follow-up message per stop; stages retry until clean. Quality runs only when this is the last open Cursor/omp session on the project (sibling logs must end with `turn_ended` / `session_exit`, or exceed the open-session TTL; no presence lock files). Change detection is git-based (uncommitted work vs HEAD plus untracked files). Scatter/verify re-emit is skipped when the edited-module count is unchanged. Logic lives in `hooks/quality/` (`config`, `support`, `state_store`, `repo_gates`, `transcripts`, `git_changes`, `formal`, `rspec_def`, `review`, `stages`, `commit`).
 
 Install as a user hook (from `~/.cursor/`):
 

@@ -47,6 +47,8 @@ module Quality
                'threshold and variables assigned once or never used. Simplify complex methods ' \
                '(extract helpers only when it clearly reduces complexity), inline single-use ' \
                'variables, and remove dead assignments.'
+  RSPEC_DEF_LEFT = 'RSpec no-def: helpers defined with `def` in spec files. Replace each with a ' \
+                   'factory, `let`/`let!`, or inline setup (project rule rspec-no-def).'
   # Our own emitted messages re-enter through Cursor as the next user turn;
   # chain detection matches on them so follow-ups keep their stage position.
   FOLLOWUP_RE = /
@@ -55,6 +57,7 @@ module Quality
     |db\/schema\.rb\ was\ edited
     |modules\ were\ edited\ during\ this\ feature\ implementation
     |abcop\ found\ issues\ in\ code\ changed
+    |RSpec\ no-def:
     |Auto-commit\ skipped:
     |Warning\ in\
   /x

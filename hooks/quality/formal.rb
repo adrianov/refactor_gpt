@@ -1,14 +1,18 @@
 # frozen_string_literal: true
 
 require 'fileutils'
+require_relative 'rspec_def'
 
 module Quality
   # Formal stage machinery: the per-cycle abcop lint over every supported
-  # language. Scoping is fully delegated: a plain `abcop` run with no PATHS
-  # scans the current-MR scope itself (changes since branching from
-  # master/main plus uncommitted work) — method/module ABC and variable
-  # hygiene; no home-grown line-count reports here.
+  # language, plus static project gates (e.g. RSpec no-def). Scoping for
+  # abcop is fully delegated: a plain `abcop` run with no PATHS scans the
+  # current-MR scope itself (changes since branching from master/main plus
+  # uncommitted work) — method/module ABC and variable hygiene; no
+  # home-grown line-count reports here.
   module Formal
+    include RspecDef
+
     def formal_stage(files, saved, chain)
       targets = formal_targets(files, saved, chain)
       msg = formal_report(targets)
@@ -27,7 +31,7 @@ module Quality
     def formal_report(files)
       return nil if files.nil? || files.empty?
 
-      parts = [abcop_report(files)].compact
+      parts = [abcop_report(files), rspec_def_report(files)].compact
       parts.empty? ? nil : parts.join("\n\n")
     end
 

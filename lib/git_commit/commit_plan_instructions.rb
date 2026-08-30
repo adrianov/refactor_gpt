@@ -64,6 +64,8 @@ module CommitPlanInstructions
         - **Spec description quality**: RSpec `it`, `describe`, and `context` strings must express business intent — what the user or system gains or avoids — not implementation details. Flag descriptions that name HTTP headers, internal method names, library classes, or low-level protocol specifics (e.g. "does not send x-amz-checksum-crc32 from Active Storage client") when a behavior-level wording is possible (e.g. "uploads attachment without checksum validation errors"). Good descriptions answer "what outcome is guaranteed?" not "what code runs?".
         - **Cursor rules**: The guidelines above include `.cursor/rules/` from the project and from
           `~/.cursor/rules/` on this machine. Flag leftover breaches of those rules as `guideline` warnings.
+          Exception: do **not** flag RSpec helpers defined with `def` when the project has
+          `.cursor/rules/rspec-no-def.mdc` — the quality formal stage enforces that statically.
       - Respect user-provided hints when choosing commit messages or grouping files, unless they conflict with actual diffs.
       - **JIRA Issue Reference Consistency** (critical rule):
         - Check branch name and recent commits for JIRA task references (patterns like PT-4668, ABC-123, etc.).

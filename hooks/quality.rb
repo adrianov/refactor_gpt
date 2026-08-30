@@ -8,8 +8,9 @@
 #    workspace root's uncommitted work vs HEAD plus untracked files; roots
 #    outside any repo are skipped. No snapshots or state files involved.
 # 2. Formal: plain `abcop` per touched repo over the current-MR scope — it owns
-#    method/module ABC size and variable hygiene. Failures retry this stage
-#    after the agent fixes them.
+#    method/module ABC size and variable hygiene — plus a static RSpec no-def
+#    scan when `.cursor/rules/rspec-no-def.mdc` is present. Failures retry this
+#    stage after the agent fixes them.
 # 3. Review: completion check and scatter (once per cycle; reset if formal
 #    complains). Re-emit is skipped when the edited-module count is unchanged
 #    since the last scatter. schema.rb: own-repo remotes exempt.
