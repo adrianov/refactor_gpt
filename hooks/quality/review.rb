@@ -50,7 +50,8 @@ module Quality
       set_review_flag('scatter')
       save_scatter_count(n)
       "#{n} modules were edited during this feature implementation. " \
-        'Consider consolidating if that would make the intent clearer.'
+        'Consider consolidating if that would make the intent clearer. ' \
+        'Never revert, drop, or undo any existing change from this feature.'
     end
     def module_edit_count(files)
       files.count { |f| main_module?(f) }
