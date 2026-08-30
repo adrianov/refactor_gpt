@@ -4,6 +4,9 @@ module Quality
   # Histogram diff attachment for the VERIFY follow-up: main modules only
   # (same gate as scatter). Formatted like Cursor's @Uncommitted Changes entity.
   module VerifyDiff
+    # Always pass all four; never drop -w, -W, --histogram, or --no-prefix.
+    VERIFY_DIFF_OPTS = %w[-w -W --histogram --no-prefix].freeze
+
     # Same wrapper Cursor uses when the user attaches @Uncommitted Changes.
     GIT_DIFF_INTRO = "Relevant Diff: The following is the git diff of uncommitted " \
                      "changes in the working tree:\n\n"
@@ -18,13 +21,13 @@ module Quality
     end
 
     def file_histogram_diff(root, rel)
-      out, _, code = capture('git', '-C', root, 'diff', '-w', '-W', '--histogram', 'HEAD', '--', rel)
+      out, _, code = capture('git', '-C', root, 'diff', *VERIFY_DIFF_OPTS, 'HEAD', '--', rel)
       return out if code.zero? && !out.to_s.empty?
       return nil unless File.file?(File.join(root, rel))
 
       # Untracked paths are invisible to diff-against-HEAD; show as new-file diff.
       out, _, code = capture(
-        'git', '-C', root, 'diff', '-w', '-W', '--histogram', '--no-index', '--', File::NULL, rel
+        'git', '-C', root, 'diff', *VERIFY_DIFF_OPTS, '--no-index', '--', File::NULL, rel
       )
       out if !out.to_s.empty? && [0, 1].include?(code)
     end

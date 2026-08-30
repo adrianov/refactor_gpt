@@ -5,8 +5,10 @@ require 'json'
 module Quality
   # Last-remaining-agent gate by reading Cursor/omp session logs — no lock files.
   # A session is finished when its log ends with an end marker (Cursor: turn_ended;
-  # omp: customType session_exit). Gate opens when every other recent session for
-  # this project is finished; only the current session may still be open.
+  # omp: customType session_exit). Gate opens when every other session for this
+  # project is finished or older than SESSION_OPEN_AGE; only the current session
+  # may still be unfinished. Cursor may not refresh transcript mtime until the
+  # turn ends, so unfinished logs use SESSION_OPEN_AGE rather than a tiny idle cut.
   module RepoGates
     def sole_session?(root)
       siblings = open_sibling_sessions(root)
@@ -31,8 +33,7 @@ module Quality
         next if sid == @session_key || sid.start_with?('.')
 
         path = File.join(base, sid, "#{sid}.jsonl")
-        next unless recent_session_file?(path)
-        next if jsonl_ends_with?(path) { |o| o['type'] == 'turn_ended' }
+        next unless open_session_file?(path) { |o| o['type'] == 'turn_ended' }
 
         "cursor:#{sid}"
       end
@@ -52,11 +53,20 @@ module Quality
     def omp_open_label(path, root)
       sid = omp_session_id(path)
       return if sid.empty? || sid == @session_key || File.basename(path).start_with?('__')
-      return unless recent_session_file?(path)
       return unless omp_session_cwd?(path, root)
-      return if jsonl_ends_with?(path) { |o| o['type'] == 'custom' && o['customType'] == 'session_exit' }
+      return unless open_session_file?(path) { |o| o['type'] == 'custom' && o['customType'] == 'session_exit' }
 
       "omp:#{sid}"
+    end
+
+    # True when the log exists, is not past the open TTL, and does not end with
+    # the finished-session marker from the block.
+    def open_session_file?(path)
+      return false unless File.file?(path)
+      return false if Time.now.to_i - File.mtime(path).to_i >= SESSION_OPEN_AGE
+      return false if jsonl_ends_with?(path) { |o| yield o }
+
+      true
     end
 
     def cursor_transcripts_root
@@ -106,10 +116,6 @@ module Quality
         return cwd.empty? || omp_path_key(cwd) == want
       end
       false
-    end
-
-    def recent_session_file?(path)
-      File.file?(path) && Time.now.to_i - File.mtime(path).to_i < SESSION_RECENT_AGE
     end
 
     def jsonl_ends_with?(path)
