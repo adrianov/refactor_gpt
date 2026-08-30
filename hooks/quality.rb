@@ -45,6 +45,7 @@ require_relative 'quality/transcripts'
 require_relative 'quality/git_changes'
 require_relative 'quality/formal'
 require_relative 'quality/commit'
+require_relative 'quality/verify_diff'
 require_relative 'quality/review'
 require_relative 'quality/stages'
 
@@ -61,6 +62,7 @@ class QualityHook
   include Quality::GitChanges
   include Quality::Formal
   include Quality::CommitStage
+  include Quality::VerifyDiff
   include Quality::Review
   include Quality::Stages
 

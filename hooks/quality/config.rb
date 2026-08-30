@@ -35,8 +35,10 @@ module Quality
   # Session logs older than this are ignored (idle/abandoned — not “still running”).
   SESSION_RECENT_AGE = 300
   LIMIT = 6000
+  # Safety ceiling only: normal VERIFY diffs are attached in full.
+  VERIFY_DIFF_LIMIT = 1_000_000
   FOLLOWUP_REPEATS = 2
-  VERIFY = 'Check if the issue is resolved fully and properly. Fix without bloat if needed.'
+  VERIFY = 'Check if the issues are resolved fully and properly. Fix without bloat if needed.'
   SCHEMA_MSG = 'db/schema.rb was edited. Make schema.rb changes minimal, covering only current task scope.'
   MD_MSG = 'Improve phrasing and synonym choice in these new .md files.'
   ABCOP_LEFT = 'abcop found issues in code changed this turn: methods above the ABC-size ' \
@@ -46,7 +48,7 @@ module Quality
   # Our own emitted messages re-enter through Cursor as the next user turn;
   # chain detection matches on them so follow-ups keep their stage position.
   FOLLOWUP_RE = /
-    Check\ if\ the\ issue\ is\ resolved\ fully\ and\ properly
+    Check\ if\ the\ issues\ are\ resolved\ fully\ and\ properly
     |Improve\ phrasing\ and\ synonym\ choice
     |db\/schema\.rb\ was\ edited
     |modules\ were\ edited\ during\ this\ feature\ implementation
