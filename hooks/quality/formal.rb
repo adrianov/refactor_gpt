@@ -5,7 +5,6 @@ require_relative 'rspec_def'
 
 module Quality
   # Formal stage: abcop over the current-MR scope plus optional RSpec no-def.
-  # Owned remotes use `--size-gate specs`; others use `both` (≥100-line size gate).
   module Formal
     include RspecDef
 
@@ -31,9 +30,10 @@ module Quality
       parts.empty? ? nil : parts.join("\n\n")
     end
 
-    # One run per repository: with no path arguments abcop applies its MR
-    # heuristics; only the repo root matters. `--size-gate` is chosen per
-    # remote ownership. Result cache stays enabled.
+    # One plain run per repository: with no path arguments abcop applies its
+    # own MR heuristics over every supported file type, so only the repo root
+    # matters here. Result cache stays enabled — repeat scans over unchanged
+    # files are cheap.
     def abcop_report(files)
       bin = which('abcop')
       unless bin
@@ -51,9 +51,8 @@ module Quality
     end
 
     def abcop_root_output(bin, root)
-      gate = owned_remote?(git_remote(root)) ? 'specs' : 'both'
-      STDERR.puts "[quality] #{root}: abcop (current-MR scope, --size-gate #{gate})"
-      out, err, code = capture(bin, '--format', 'json', '--size-gate', gate, chdir: root)
+      STDERR.puts "[quality] #{root}: abcop (current-MR scope)"
+      out, err, code = capture(bin, '--format', 'json', chdir: root)
       return scope_failure(err) if code == 2
 
       # Exit contract: 0 clean, 1 findings, 2 infra failure. Parse on every
