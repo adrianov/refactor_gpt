@@ -21,7 +21,7 @@
 #    matches the origin owner). Quality runs only when this is the last open
 #    Cursor/omp session on the project: sibling logs must end with an end
 #    marker (Cursor turn_ended, omp session_exit) or exceed SESSION_OPEN_AGE.
-#    Unfinished siblings keep a 15-minute open TTL because Cursor may not refresh
+#    Unfinished siblings keep a 1-hour open TTL because Cursor may not refresh
 #    transcript mtime until turn_ended. No presence/lock files.
 #    Guideline warnings return as follow-ups; after the fix, formal→review→
 #    document still run, but VERIFY/scatter flags stay set so an empty review

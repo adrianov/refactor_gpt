@@ -35,7 +35,7 @@ module Quality
   # Unfinished session logs (no end marker) stay “open” this long. Cursor often
   # leaves mtime at turn start until turn_ended is flushed, so a very short TTL
   # treated long-running siblings as abandoned and let quality run too early.
-  SESSION_OPEN_AGE = 15 * 60
+  SESSION_OPEN_AGE = 60 * 60
   LIMIT = 6000
   # Safety ceiling only: normal VERIFY diffs are attached in full.
   VERIFY_DIFF_LIMIT = 1_000_000
