@@ -53,8 +53,8 @@ module Quality
 
       case stage
       # After a git_commit_gpt guideline warning fix: re-run formal when files
-      # changed (abcop), then review/document. VERIFY/scatter flags stay set
-      # from the earlier pass, so an empty review falls through to commit.
+      # changed (abcop), then review/document. VERIFY/scatter/schema flags stay
+      # set from the earlier pass, so an empty review falls through to commit.
       when 'commit_fix' then files.empty? || md_only?(files) ? 'commit' : 'formal'
       else files.empty? || md_only?(files) ? STALLED_NEXT.fetch(stage, 'commit') : 'formal'
       end
@@ -83,9 +83,9 @@ module Quality
     def commit_followup(files)
       log_action('stage', name: 'commit', files: files.size)
       if (msg = timed('commit') { run_commit })
-        # Keep VERIFY/scatter flags. Clearing them on a guideline warning made
-        # the next stop re-emit review follow-ups instead of reaching commit
-        # once review returned nothing.
+        # Keep VERIFY/scatter/schema flags. Clearing them on a guideline warning
+        # made the next stop re-emit review follow-ups instead of reaching
+        # commit once review returned nothing.
         save_stage('commit_fix', files)
         return followup(msg)
       end

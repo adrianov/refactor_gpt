@@ -13,7 +13,8 @@ module Quality
       msg = formal_report(targets)
       return nil unless msg
 
-      unset_review_flags
+      # Keep schema armed; re-arming it after lint re-loops SCHEMA_MSG.
+      unset_review_flags('verify', 'scatter')
       save_stage('formal', targets)
       followup(msg)
     end

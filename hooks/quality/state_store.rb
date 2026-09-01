@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 module Quality
-  # Stage-state files under STATE: pending/review markers, stage progress,
-  # commit markers, and the short mkdir lock used by git_commit_gpt.
+  # Stage-state files under STATE: pending/review markers (verify, scatter,
+  # schema), stage progress, commit markers, and git_commit_gpt's mkdir lock.
   module StateStore
     def pending_file; File.join(STATE, "stop-pending-#{@session_key}"); end
     def review_flag_file(name); File.join(STATE, "stop-#{name}-#{@session_key}"); end
@@ -16,8 +16,9 @@ module Quality
       FileUtils.mkdir_p(STATE)
       File.write(review_flag_file(name), '')
     end
-    def unset_review_flags
-      %w[verify scatter].each { |n| f = review_flag_file(n); File.delete(f) if File.file?(f) }
+    def unset_review_flags(*names)
+      names = %w[verify scatter schema] if names.empty?
+      names.each { |n| f = review_flag_file(n); File.delete(f) if File.file?(f) }
     rescue StandardError
       nil
     end

@@ -4,7 +4,7 @@ require 'digest'
 require 'fileutils'
 
 module Quality
-  # Review and document follow-up text: verify, scatter, schema, new markdown.
+  # Review and document follow-up text: verify, scatter, one-shot schema, new markdown.
   # Histogram diff body for VERIFY lives in Quality::VerifyDiff.
   module Review
     # Survives formal flag resets so an unchanged module count does not
@@ -34,7 +34,7 @@ module Quality
     end
     def review_report(files)
       files = Array(files).select { |f| File.file?(f) || f =~ %r{(^|/)db/schema\.rb$}i }
-      parts = [verify_part(files), scatter_part(files), (SCHEMA_MSG if schema_edited?)].compact
+      parts = [verify_part(files), scatter_part(files), schema_part].compact
       parts.empty? ? nil : parts.join("\n\n")
     end
     def verify_part(files)
@@ -119,13 +119,14 @@ module Quality
       true
     end
 
-    def schema_edited?
-      # Own repos commit schema.rb as generated; the minimal-change note is
-      # for other remotes. Git status covers direct edits and migration
-      # regenerations alike.
-      return false if owned_workspace?
+    # Once per cycle. Own repos commit schema.rb as generated; other remotes
+    # get one minimal-change note. A repeat made agents rewrite it from master.
+    def schema_part
+      return nil if review_flag?('schema') || owned_workspace?
+      return nil unless changed_files.any? { |p| p =~ %r{(^|/)db/schema\.rb$}i }
 
-      changed_files.any? { |p| p =~ %r{(^|/)db/schema\.rb$}i }
+      set_review_flag('schema')
+      SCHEMA_MSG
     end
   end
 end

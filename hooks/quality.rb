@@ -13,7 +13,7 @@
 #    stage after the agent fixes them.
 # 3. Review: completion check and scatter (once per cycle; reset if formal
 #    complains). Re-emit is skipped when the edited-module count is unchanged
-#    since the last scatter. schema.rb: own-repo remotes exempt.
+#    since the last scatter. schema.rb: once per cycle; own-repo remotes exempt.
 # 4. Document: wording for new .md files only, once, right before commit.
 #    Edits to existing .md skip this stage. Markdown-only edits continue to
 #    commit. A full cycle restart can reach this stage again.
@@ -24,8 +24,8 @@
 #    Unfinished siblings keep a 1-hour open TTL because Cursor may not refresh
 #    transcript mtime until turn_ended. No presence/lock files.
 #    Guideline warnings return as follow-ups; after the fix, formal→review→
-#    document still run, but VERIFY/scatter flags stay set so an empty review
-#    falls through to commit instead of re-arming those advisories.
+#    document still run, but VERIFY/scatter/schema flags stay set so an empty
+#    review falls through to commit instead of re-arming those advisories.
 #
 # Optional env:
 #   QUALITY_OWN_GITHUB   — GitHub username/org; owned remotes get --push, and
