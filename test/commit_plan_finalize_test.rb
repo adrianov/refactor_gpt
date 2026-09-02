@@ -17,6 +17,17 @@ class TestCommitPlanFinalize < Minitest::Test
     assert_includes files, "new.rb"
   end
 
+  def test_finalize_reincludes_omitted_deleted_file
+    result = CommitPlanFinalize.finalize({
+      "commits" => [{ "message" => "fix: keep", "files" => ["keep.rb"] }],
+      "warnings" => [],
+      "excluded_files" => []
+    }, " D gone.rb\n M keep.rb\n")
+    files = result["commits"].flat_map { |c| c["files"] }
+    assert_includes files, "gone.rb"
+    assert_includes files, "keep.rb"
+  end
+
   def test_finalize_reincludes_wrongly_excluded_source_file
     status = " M app/services/user/sync_attributes.rb\n"
     plan = {

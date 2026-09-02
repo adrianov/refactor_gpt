@@ -52,6 +52,80 @@ class TestGitCommitExecutor < Minitest::Test
     end
   end
 
+  def test_commits_rename_including_source_deletion
+    Dir.mktmpdir do |dir|
+      Dir.chdir(dir) do
+        init_repo
+        File.write("old.rb", "same\n")
+        system("git", "add", "old.rb", exception: true)
+        system("git", "commit", "-qm", "init", exception: true)
+        system("git", "mv", "old.rb", "new.rb", exception: true)
+
+        ok = nil
+        capture_io do
+          ok = GitCommitExecutor.execute_single_commit(
+            "message" => "refactor: rename old to new",
+            "files" => %w[old.rb new.rb]
+          )
+        end
+
+        assert ok
+        assert_empty `git status --porcelain`
+        assert_match(/R100\told\.rb\tnew\.rb/, `git log -1 --name-status`)
+      end
+    end
+  end
+
+  def test_commits_rename_when_plan_lists_only_destination
+    Dir.mktmpdir do |dir|
+      Dir.chdir(dir) do
+        init_repo
+        File.write("old.rb", "same\n")
+        system("git", "add", "old.rb", exception: true)
+        system("git", "commit", "-qm", "init", exception: true)
+        system("git", "mv", "old.rb", "new.rb", exception: true)
+
+        ok = nil
+        capture_io do
+          ok = GitCommitExecutor.execute_single_commit(
+            "message" => "refactor: rename old to new",
+            "files" => %w[new.rb]
+          )
+        end
+
+        assert ok
+        assert_empty `git status --porcelain`
+        assert_match(/R100\told\.rb\tnew\.rb/, `git log -1 --name-status`)
+      end
+    end
+  end
+
+  def test_commits_worktree_delete_and_add_as_rename
+    Dir.mktmpdir do |dir|
+      Dir.chdir(dir) do
+        init_repo
+        File.write("old.rb", "same\n")
+        system("git", "add", "old.rb", exception: true)
+        system("git", "commit", "-qm", "init", exception: true)
+        File.delete("old.rb")
+        File.write("new.rb", "same\n")
+
+        ok = nil
+        capture_io do
+          ok = GitCommitExecutor.execute_single_commit(
+            "message" => "refactor: rename old to new",
+            "files" => %w[old.rb new.rb]
+          )
+        end
+
+        assert ok
+        assert_empty `git status --porcelain`
+        log = `git log -1 --name-status`
+        assert(log.include?("old.rb") && log.include?("new.rb"))
+      end
+    end
+  end
+
   def test_skips_commit_when_no_planned_path_is_staged
     Dir.mktmpdir do |dir|
       Dir.chdir(dir) do
