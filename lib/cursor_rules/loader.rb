@@ -11,8 +11,8 @@ module CursorRules
     def from_dir(rules_dir)
       return [] unless File.directory?(rules_dir)
 
-      paths = EXTENSIONS.flat_map { |ext| Dir.glob(File.join(rules_dir, '**', "*.#{ext}")) }
-      paths.uniq.sort.filter_map { |path| read_cursor_file(path) }
+      EXTENSIONS.flat_map { |ext| Dir.glob(File.join(rules_dir, '**', "*.#{ext}")) }
+        .uniq.sort.filter_map { |path| read_cursor_file(path) }
     end
 
     def read_file(path)

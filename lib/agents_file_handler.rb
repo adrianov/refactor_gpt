@@ -53,8 +53,7 @@ module AgentsFileHandler
 
   def resolve_script_dir
     script_path = $PROGRAM_NAME
-    expanded_path = File.expand_path(script_path)
-    script_dir = File.dirname(expanded_path)
+    script_dir = File.dirname(File.expand_path(script_path))
     return script_dir if File.directory?(script_dir)
 
     which_path = `which #{script_path} 2>/dev/null`.strip

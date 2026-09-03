@@ -12,8 +12,7 @@ module CursorRules
     def parts(project_dir, user_dir: default_dir)
       return [] unless File.directory?(user_dir)
 
-      project_rules = File.join(project_dir, Loader::RULES_DIR)
-      return [] if File.expand_path(user_dir) == File.expand_path(project_rules)
+      return [] if File.expand_path(user_dir) == File.expand_path(File.join(project_dir, Loader::RULES_DIR))
 
       Loader.from_dir(user_dir)
     end
