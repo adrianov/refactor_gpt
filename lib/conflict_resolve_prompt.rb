@@ -29,8 +29,8 @@ module ConflictResolvePrompt
   end
 
   def user_prompt(path, content, all_contents, commit_context)
-    context = all_contents.reject { |p, _| p == path }
-    context_section = context.map { |p, c| "<context filename=\"#{p}\">\n#{c}\n</context>" }.join("\n\n")
+    context_section = all_contents.reject { |p, _| p == path }
+      .map { |p, c| "<context filename=\"#{p}\">\n#{c}\n</context>" }.join("\n\n")
 
     <<~TEXT
       Resolve all merge conflicts in this file: #{path}
