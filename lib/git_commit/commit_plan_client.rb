@@ -56,17 +56,16 @@ class CommitPlanClient
 
   # Single payload ceiling: uncommitted diff budget is what remains after all static sections (incl. MR numstat).
   def self.diff_body_budgets_chars(cli_hint:, status_output:, recent_commits:, recent_commands:, mr_numstat: "")
-    data = utf8_plan_data(
-      cli_hint: cli_hint,
-      status_output: status_output,
-      recent_commits: recent_commits,
-      recent_commands: recent_commands,
-      mr_numstat_output: mr_numstat
-    )
-    static_chars = sum_static_section_lengths(data)
-    header_chars = sum_diff_header_lengths
-    join_slack = [USER_CONTENT_SECTIONS.size - 1, 0].max
-    remaining = COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT - static_chars - header_chars - join_slack
+    remaining = COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT - sum_static_section_lengths(
+      utf8_plan_data(
+        cli_hint: cli_hint,
+        status_output: status_output,
+        recent_commits: recent_commits,
+        recent_commands: recent_commands,
+        mr_numstat_output: mr_numstat
+      )
+    ) - sum_diff_header_lengths -
+      [USER_CONTENT_SECTIONS.size - 1, 0].max
     remaining = remaining.positive? ? remaining : 0
     {uncommitted: remaining}
   end
@@ -146,8 +145,10 @@ class CommitPlanClient
     diff_output = Utility.utf8_safe(data.fetch(section[:key], ""))
     return current_size_chars if diff_output.strip.empty?
 
-    combined = Utility.utf8_join("\n\n", section[:label], diff_output)
-    append_section(parts, current_size_chars, max_size_chars, combined)
+    append_section(
+      parts, current_size_chars, max_size_chars,
+      Utility.utf8_join("\n\n", section[:label], diff_output)
+    )
   end
 
   def append_configured_section(parts, current_size_chars, max_size_chars, section, data)

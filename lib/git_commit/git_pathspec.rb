@@ -26,8 +26,7 @@ module GitPathspec
     return if raw.empty?
     return raw if glob?(raw)
 
-    abs = File.expand_path(raw, cwd)
-    rel = Pathname.new(abs).relative_path_from(Pathname.new(root)).to_s
+    rel = Pathname.new(File.expand_path(raw, cwd)).relative_path_from(Pathname.new(root)).to_s
     abort_outside(raw) if rel.start_with?("..")
     rel
   rescue ArgumentError

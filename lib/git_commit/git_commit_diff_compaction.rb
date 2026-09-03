@@ -40,8 +40,7 @@ class GitCommitDiffCompaction
     @paths = changed_paths(@ref_spec)
     @detail_budget = [@limit_chars - prefix.length - DETAIL_SEPARATOR_CHARS, 0].max
 
-    detailed = detailed_section_or_empty
-    body = join_prefix_and_detail(prefix, detailed)
+    body = join_prefix_and_detail(prefix, detailed_section_or_empty)
     body = whitespace_only_fallback_body if body.strip.empty? && !@paths.empty?
     Result.new(body: body, budget_omitted_paths: @budget_omitted_paths)
   end
@@ -109,8 +108,7 @@ class GitCommitDiffCompaction
       pool = @paths.select { |p| @tiers[p] == from_tier }
       break if pool.empty?
 
-      victim = pool.max_by { |p| victim_priority(p, from_tier, to_tier) }
-      @tiers[victim] = to_tier
+      @tiers[pool.max_by { |p| victim_priority(p, from_tier, to_tier) }] = to_tier
     end
   end
 
@@ -125,9 +123,7 @@ class GitCommitDiffCompaction
   # Prefer demoting paths where stepping to the next tier removes the most characters from
   # the assembled detail (full→light: saved = full minus light). Tie-break on larger chunk at current tier.
   def victim_priority(path, from_tier, to_tier)
-    shrink = chars_saved_demoting(path, from_tier, to_tier)
-    current = diff_chunk_chars(path, from_tier)
-    [shrink, current]
+    [chars_saved_demoting(path, from_tier, to_tier), diff_chunk_chars(path, from_tier)]
   end
 
   def chars_saved_demoting(path, from_tier, to_tier)
@@ -158,8 +154,7 @@ class GitCommitDiffCompaction
   end
 
   def capture_raw_diff(path, tier)
-    opts = tier_opts(tier)
-    out, _, st = Open3.capture3('git', 'diff', *opts, @ref_spec, '--', path)
+    out, _, st = Open3.capture3('git', 'diff', *tier_opts(tier), @ref_spec, '--', path)
     return '' unless st.success?
 
     utf8_safe(out)

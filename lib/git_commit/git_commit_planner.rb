@@ -78,14 +78,18 @@ class GitCommitPlanner
     mr_numstat = @capture.fetch_mr_numstat
     recent_commits = Utility.utf8_safe(`git log -10 --oneline 2>/dev/null`).strip
     recent_commands = RecentShellCommands.last_few(5)
-    budgets = CommitPlanClient.diff_body_budgets_chars(
-      cli_hint: @hint,
-      status_output: status,
+    {
+      mr_numstat: mr_numstat,
       recent_commits: recent_commits,
       recent_commands: recent_commands,
-      mr_numstat: mr_numstat
-    )
-    { mr_numstat: mr_numstat, recent_commits: recent_commits, recent_commands: recent_commands, budgets: budgets }
+      budgets: CommitPlanClient.diff_body_budgets_chars(
+        cli_hint: @hint,
+        status_output: status,
+        recent_commits: recent_commits,
+        recent_commands: recent_commands,
+        mr_numstat: mr_numstat
+      )
+    }
   end
 
   def uncommitted_diff(budgets)

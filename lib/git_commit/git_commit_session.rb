@@ -1,10 +1,11 @@
 # frozen_string_literal: true
 
-require "shellwords"
 require "colorize"
 
 # One git_commit_gpt run: plan, confirm or auto-commit, then push or watch.
 class GitCommitSession
+  include GitCommitGit
+
   WATCH_INTERVAL = 30
 
   def initialize(options)
@@ -17,8 +18,7 @@ class GitCommitSession
     setup_planner
     puts "Model: #{model_name}".cyan unless @options.auto
 
-    plan = @planner.build(show_diff: !@options.auto)
-    committed = apply_plan(plan)
+    committed = apply_plan(@planner.build(show_diff: !@options.auto))
     return if @options.watch
     return unless committed
 
@@ -36,24 +36,8 @@ class GitCommitSession
     )
   end
 
-  def git_root
-    root = Utility.utf8_safe(`git rev-parse --show-toplevel 2>/dev/null`).strip
-    return root if $?.success?
-
-    puts "Not in a git repository".red
-    exit 1
-  end
-
   def model_name
     OpenrouterClient.default_model
-  end
-
-  def run_cmd(cmd)
-    output = Utility.utf8_safe(`#{cmd}`)
-    return output if $?.success?
-
-    warn "Command failed: #{cmd}".red
-    exit 1
   end
 
   def apply_plan(plan)
@@ -115,19 +99,6 @@ class GitCommitSession
     )
   end
 
-  def porcelain_status
-    run_cmd(["git", "status", "--porcelain", "--branch", *GitPathspec.args(@pathspecs)].shelljoin)
-  end
-
-  def assert_status_unchanged(snapshot)
-    return if snapshot.nil? || snapshot.empty?
-    return if porcelain_status == snapshot
-
-    warn "Abort: working tree changed after planning.".red
-    warn "Re-run git_commit_gpt, or commit/stash the other changes first.".red
-    exit 1
-  end
-
   def start_watch(plan)
     announce_watch
     last_status = plan_status(plan) || plan["status_output"]
@@ -153,32 +124,4 @@ class GitCommitSession
     puts "Watching for changes every #{WATCH_INTERVAL}s. Ctrl+C to exit.".yellow
   end
 
-  def finish_with_push
-    remote = Utility.utf8_safe(`git remote 2>/dev/null`).strip
-    if remote.empty?
-      puts "Committed. No remote configured.".yellow
-      exit 0
-    end
-
-    return git_push if @options.push
-    return skip_push if @options.auto || !push_confirmed?
-
-    git_push
-  end
-
-  def push_confirmed?
-    puts "Push these commits? (y/N)".white
-    PromptReader.read_line("", downcase: true) == "y"
-  end
-
-  def skip_push
-    puts "Committed locally; push skipped.".yellow
-    exit 0
-  end
-
-  def git_push
-    puts "Running: git push".green
-    system("git push") || exit(1)
-    exit 0
-  end
 end
