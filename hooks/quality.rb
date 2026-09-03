@@ -45,6 +45,7 @@ require 'fileutils'
 require 'digest'
 
 require_relative 'quality/config'
+require_relative 'quality/logging'
 require_relative 'quality/support'
 require_relative 'quality/composer_mode'
 require_relative 'quality/state_store'
@@ -64,6 +65,7 @@ require local if File.file?(local)
 # Cursor stop-hook entry: wires Quality::* mixins and runs the pipeline.
 # sessionStart records composer_mode; Ask sessions skip the stop pipeline.
 class QualityHook
+  include Quality::Logging
   include Quality::Support
   include Quality::ComposerMode
   include Quality::StateStore
@@ -110,8 +112,7 @@ class QualityHook
   def log_pipeline_duration(t0)
     return unless @input['status']
 
-    ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round
-    log_action('pipeline_done', ms: ms)
+    log_action('pipeline_done', ms: ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round)
   end
 
   private

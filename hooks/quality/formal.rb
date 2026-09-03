@@ -47,8 +47,8 @@ module Quality
     end
 
     def abcop_by_root(bin, files)
-      roots = files.filter_map { |f| git_root(File.dirname(f)) }.uniq
-      roots.filter_map { |root| abcop_root_output(bin, root) }.join
+      files.filter_map { |f| git_root(File.dirname(f)) }.uniq
+        .filter_map { |root| abcop_root_output(bin, root) }.join
     end
 
     def abcop_root_output(bin, root)
@@ -77,8 +77,7 @@ module Quality
     end
 
     def abcop_diag_line(diag, root)
-      rel = diag['file'].sub(%r{\A#{Regexp.escape(root)}/}, '')
-      "#{rel}:#{diag['line']}:#{diag['column']}: " \
+      "#{diag['file'].sub(%r{\A#{Regexp.escape(root)}/}, '')}:#{diag['line']}:#{diag['column']}: " \
         "#{diag['severity']}: #{diag['rule']}: #{diag['message']}"
     end
   end

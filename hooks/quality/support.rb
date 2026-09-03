@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'open3'
-require 'fileutils'
 
 module Quality
   # Shell/git helpers, path-kind predicates, stage/flags, and active locks.
@@ -20,37 +19,6 @@ module Quality
       [out, err, st.exitstatus]
     rescue StandardError => e
       ['', e.message, 1]
-    end
-    # One action line per pipeline event, appended to LOGS/quality.log and
-    # mirrored on STDERR so the driving agent's transcript captures it too.
-    # Logging must never raise: swallow every failure.
-    def log_action(event, **fields)
-      line = build_log_line(event, fields)
-      file = File.join(LOGS, 'quality.log')
-      FileUtils.mkdir_p(LOGS)
-      rotate_oversized_log(file)
-      File.open(file, 'a') { |f| f.puts line }
-      STDERR.puts line
-    rescue StandardError
-      nil
-    end
-
-    def build_log_line(event, fields)
-      parts = fields.reject { |_, v| v.nil? || v.to_s.empty? }.map { |k, v| "#{k}=#{v}" }
-      head = Time.now.strftime('%Y-%m-%d %H:%M:%S%z')
-      "#{head} pid=#{Process.pid} session=#{@session_key} " \
-        "#{event} #{parts.join(' ')}".rstrip
-    end
-
-    def rotate_oversized_log(file)
-      File.truncate(file, 0) if File.exist?(file) && File.size(file) > 5_000_000
-    end
-    # Times a block and logs its duration under the given stage name.
-    def timed(stage)
-      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      result = yield
-      log_action('done', stage: stage, ms: ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round)
-      result
     end
     def which(name)
       ENV['PATH'].to_s.split(':').map { |d| File.join(d, name) }.find { |p| File.file?(p) && File.executable?(p) }

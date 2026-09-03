@@ -84,21 +84,20 @@ export function startHookRun(rubyBin: string, hookPath: string, payload: unknown
 		timedOut = true;
 		killProc();
 	}, RUN_TIMEOUT_MS);
-	const stdinDone = (async () => {
-		try {
-			proc.stdin.write(JSON.stringify(payload));
-			await proc.stdin.end();
-		} catch {
-			// stdin closed early (hook crashed) — nothing to feed anymore
-		}
-	})();
 	return {
 		kill: killProc,
 		done: Promise.all([
+			(async () => {
+				try {
+					proc.stdin.write(JSON.stringify(payload));
+					await proc.stdin.end();
+				} catch {
+					// stdin closed early (hook crashed) — nothing to feed anymore
+				}
+			})(),
 			new Response(proc.stdout).text(),
 			new Response(proc.stderr).text(),
-			stdinDone,
-		]).then(async ([stdout, stderr]) => {
+		]).then(async ([, stdout, stderr]) => {
 			await proc.exited;
 			clearTimeout(timer);
 			return { stdout, stderr, timedOut, exitCode: proc.exitCode };

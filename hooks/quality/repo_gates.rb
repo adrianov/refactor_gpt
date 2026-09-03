@@ -32,8 +32,7 @@ module Quality
       Dir.children(base).filter_map do |sid|
         next if sid == @session_key || sid.start_with?('.')
 
-        path = File.join(base, sid, "#{sid}.jsonl")
-        next unless open_session_file?(path) { |o| o['type'] == 'turn_ended' }
+        next unless open_session_file?(File.join(base, sid, "#{sid}.jsonl")) { |o| o['type'] == 'turn_ended' }
 
         "cursor:#{sid}"
       end
@@ -74,8 +73,7 @@ module Quality
       return nil if path.empty?
 
       # .../agent-transcripts/<id>/<id>.jsonl
-      parent = File.dirname(path)
-      root = File.dirname(parent)
+      root = File.dirname(File.dirname(path))
       File.basename(root) == 'agent-transcripts' ? root : nil
     end
 
@@ -129,8 +127,7 @@ module Quality
 
       File.open(path, 'rb') do |f|
         f.seek([size - 16_384, 0].max)
-        lines = f.read.to_s.split(/\n/)
-        lines.reverse_each do |line|
+        f.read.to_s.split(/\n/).reverse_each do |line|
           line = line.strip
           next if line.empty?
 
