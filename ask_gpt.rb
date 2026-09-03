@@ -9,8 +9,7 @@ def main
   show_interactive_prompt(args)
   question = get_question(args) if args[:question_parts].empty?
   client = create_client(args)
-  messages = initialize_conversation(client, args)
-  run_with_question_or_loop(client, messages, question, args)
+  run_with_question_or_loop(client, initialize_conversation(client, args), question, args)
 end
 
 def run_with_question_or_loop(client, messages, question, args)
@@ -99,8 +98,7 @@ def process_question(client, messages, question, args)
   corrected_question, reason = correct_grammar(client, text_question)
   display_corrected_question(text_question, corrected_question, reason)
 
-  full_corrected_question = Utility.build_question([corrected_question], args[:file_snippets] || [])
-  messages << {role: "user", content: full_corrected_question}
+  messages << {role: "user", content: Utility.build_question([corrected_question], args[:file_snippets] || [])}
 
   process_with_buffering(client, messages)
 
@@ -133,8 +131,7 @@ def correct_grammar(client, question)
 
   grammar_messages = [{role: "system", content: grammar_instruction}, {role: "user", content: question}]
 
-  response = client.ask(grammar_messages, title: "Reviewing grammar")
-  parse_correction_response(response, question)
+  parse_correction_response(client.ask(grammar_messages, title: "Reviewing grammar"), question)
 rescue StandardError
   [question, nil]
 end

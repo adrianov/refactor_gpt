@@ -13,9 +13,9 @@ class Verify
   end
 
   def ask(prompts)
-    client = OpenrouterClient.new(model: @model, debug: @debug,
-      progress_title: nil, raise_on_server_error: true)
-    client.ask(prompts)
+    OpenrouterClient.new(
+      model: @model, debug: @debug, progress_title: nil, raise_on_server_error: true
+    ).ask(prompts)
   rescue RubyLLM::ServerError => e
     warn "❌ Server error persisted after 3 retries: #{e.message}"
     exit 1

@@ -16,9 +16,8 @@ class GitExplainSession
     return no_changes if clean?(status)
 
     intend_untracked(spec)
-    diff = git_output("diff", "-U500", *spec)
     explanation = GitExplainer.new(debug: @debug).explain_changes(
-      status, diff, recent_commits, RecentShellCommands.last_few(5)
+      status, git_output("diff", "-U500", *spec), recent_commits, RecentShellCommands.last_few(5)
     )
     show(explanation)
     follow_up(explanation) if $stdin.tty?
@@ -28,8 +27,7 @@ class GitExplainSession
 
   def parse(args)
     debug = args.include?("--debug")
-    rest = args.reject { |arg| arg == "--debug" }
-    _hint, paths = CliPaths.partition(rest)
+    _hint, paths = CliPaths.partition(args.reject { |arg| arg == "--debug" })
     [debug, CliPaths.select_supported(paths, DiffProcessor::CODE_EXTENSIONS)]
   end
 
@@ -52,8 +50,8 @@ class GitExplainSession
   end
 
   def intend_untracked(spec)
-    listed = `git ls-files --others --exclude-standard --directory #{spec.shelljoin}`.split("\n")
-    files = listed.reject { |file| GitCommitExecutor.ephemeral_path?(file) }
+    files = `git ls-files --others --exclude-standard --directory #{spec.shelljoin}`.split("\n")
+      .reject { |file| GitCommitExecutor.ephemeral_path?(file) }
     return if files.empty?
 
     system(["git", "add", "-N", *files].map { |p| Shellwords.escape(p) }.join(" ") + " 2>/dev/null")

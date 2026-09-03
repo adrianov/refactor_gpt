@@ -27,8 +27,7 @@ end
 
 def parse_arguments(args)
   debug_mode = args.include?("--debug")
-  rest = args.reject { |arg| arg == "--debug" }
-  leftover, paths = CliPaths.partition(rest)
+  leftover, paths = CliPaths.partition(args.reject { |arg| arg == "--debug" })
   paths = CliPaths.select_supported(paths, DiffProcessor::CODE_EXTENSIONS)
   [debug_mode, leftover.join(" ").strip, paths]
 end
@@ -136,14 +135,15 @@ def prepare_untracked_files(project_root: PROJECT_ROOT, pathspecs: [])
   files_to_add = untracked_intent_paths(project_root, pathspecs)
   return if files_to_add.empty?
 
-  add_cmd = ["git", "-C", project_root, "add", "-N", *files_to_add].map { |p| Shellwords.escape(p) }.join(" ")
-  system("#{add_cmd} 2>/dev/null")
+  system(
+    "#{["git", "-C", project_root, "add", "-N", *files_to_add].map { |p| Shellwords.escape(p) }.join(" ")} " \
+    '2>/dev/null'
+  )
 end
 
 def untracked_intent_paths(project_root, pathspecs)
-  spec = GitPathspec.args(pathspecs)
-  cmd = ["git", "-C", project_root, "ls-files", "--others", "--exclude-standard", *spec].shelljoin
-  listed = `#{cmd}`.split("\n")
+  listed = `#{["git", "-C", project_root, "ls-files", "--others", "--exclude-standard",
+               *GitPathspec.args(pathspecs)].shelljoin}`.split("\n")
   unless $?.success?
     puts "NO: Failed to list untracked files"
     exit 1
@@ -153,8 +153,7 @@ def untracked_intent_paths(project_root, pathspecs)
 end
 
 def get_diff_output(project_root: PROJECT_ROOT, pathspecs: [])
-  spec = GitPathspec.args(pathspecs)
-  diff_output = `git -C #{Shellwords.escape(project_root)} diff -U500 #{spec.shelljoin}`
+  diff_output = `git -C #{Shellwords.escape(project_root)} diff -U500 #{GitPathspec.args(pathspecs).shelljoin}`
   unless $?.success?
     puts "NO: Failed to capture diff for analysis"
     exit 1
@@ -166,9 +165,7 @@ CompletionNotifier.setup_exit_hook
 
 debug_mode, cli_hint, paths = parse_arguments(ARGV)
 feature_request = get_feature_request(cli_hint)
-spec = GitPathspec.args(paths)
-
-status_output = run_cmd(["git", "status", "--porcelain", "--branch", *spec].shelljoin)
+status_output = run_cmd(["git", "status", "--porcelain", "--branch", *GitPathspec.args(paths)].shelljoin)
 
   if status_output.lines.count { |line| !line.start_with?("##") }.zero?
     puts "NO: No changes to assess."
@@ -176,13 +173,12 @@ status_output = run_cmd(["git", "status", "--porcelain", "--branch", *spec].shel
   end
 
   prepare_untracked_files(pathspecs: paths)
-  diff_output = get_diff_output(pathspecs: paths)
-
-  response = Verify.new(debug: debug_mode, project_root: PROJECT_ROOT).assess_feature(
-    feature_request,
-    status_output,
-    diff_output
+  display_result(
+    parse_response(
+      Verify.new(debug: debug_mode, project_root: PROJECT_ROOT).assess_feature(
+        feature_request,
+        status_output,
+        get_diff_output(pathspecs: paths)
+      )
+    )
   )
-
-  result = parse_response(response)
-  display_result(result)

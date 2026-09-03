@@ -51,9 +51,7 @@ module Utility
   end
 
   def self.display_answer(answer)
-    has_tables = contains_tables?(answer)
-
-    if has_tables && glow_available?
+    if contains_tables?(answer) && glow_available?
       return display_with_glow(format_answer(answer), calculate_width(extract_urls(answer)))
     end
 
@@ -133,8 +131,7 @@ module Utility
 
   # Normalize every part to UTF-8 first, then join — avoids CompatibilityError on concat.
   def self.utf8_join(separator, *parts)
-    sep = utf8_safe(separator)
-    parts.flatten.map { |part| utf8_safe(part) }.join(sep)
+    parts.flatten.map { |part| utf8_safe(part) }.join(utf8_safe(separator))
   end
 
   def self.trim(str)

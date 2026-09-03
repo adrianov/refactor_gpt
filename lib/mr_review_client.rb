@@ -21,8 +21,7 @@ class MrReviewClient
       {role: "user", content: build_user_content(diff, branch: branch, base_branch: base_branch,
         recent_commits: recent_commits)}
     ]
-    raw = @client.ask(messages, json: true)
-    parse_response(raw)
+    parse_response(@client.ask(messages, json: true))
   end
 
   private

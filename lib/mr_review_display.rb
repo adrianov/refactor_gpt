@@ -87,9 +87,10 @@ module MrReviewDisplay
   end
 
   def render_issue_body(parts, issue)
-    header = issue_header(parts[:label], parts[:color],
-      issue["file"].to_s, issue["start_line"], issue["end_line"], issue["title"].to_s)
-    puts header
+    puts issue_header(
+      parts[:label], parts[:color], issue["file"].to_s,
+      issue["start_line"], issue["end_line"], issue["title"].to_s
+    )
     puts "  #{parts[:description].gsub("\n", "\n  ")}" unless parts[:description].empty?
     puts
   end

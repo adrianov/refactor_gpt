@@ -74,8 +74,7 @@ module CompletionNotifier
 
   def self.spawn_sound(play_cmd, path)
     args = play_cmd.size > 1 ? play_cmd[1..] + [path] : [path]
-    pid = Process.spawn(play_cmd[0], *args, out: File::NULL, err: File::NULL)
-    Process.detach(pid)
+    Process.detach(Process.spawn(play_cmd[0], *args, out: File::NULL, err: File::NULL))
   end
 
   def self.command_exists?(command)
@@ -100,8 +99,7 @@ module CompletionNotifier
   def self.find_project_root
     return @script_dir if @script_dir && File.exist?(File.join(@script_dir, 'sounds'))
 
-    lib_dir = File.dirname(File.expand_path(__FILE__))
-    project_root = File.dirname(lib_dir)
+    project_root = File.dirname(File.dirname(File.expand_path(__FILE__)))
     return project_root if File.exist?(File.join(project_root, 'sounds'))
 
     script_dir = File.dirname(File.expand_path($PROGRAM_NAME))
@@ -167,8 +165,7 @@ module CompletionNotifier
 
     # Prepend terminal title with short pwd
     project_root = find_project_root || Dir.pwd
-    project_name = File.basename(project_root)
-    title = "#{project_name}: #{title}"
+    title = "#{File.basename(project_root)}: #{title}"
 
     # Use ANSI escape sequence to set terminal title
     # \033]0; sets both icon and window title

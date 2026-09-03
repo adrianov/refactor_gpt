@@ -36,9 +36,7 @@ end
 def parse_arguments(args)
   debug_mode = args.delete("--debug")
   remaining = args.reject { |a| a.start_with?("--") }
-  branch = remaining[0]
-  base = remaining[1]
-  [!!debug_mode, branch, base]
+  [!!debug_mode, remaining[0], remaining[1]]
 end
 
 def filter_branches(branches, filter)
@@ -111,9 +109,7 @@ Dir.chdir(git_root)
 
 puts "Model: #{OpenrouterClient.default_model}".cyan
 
-branches = local_branches
-cur = current_branch
-branch = resolve_branch(arg_branch, branches, cur)
+branch = resolve_branch(arg_branch, local_branches, current_branch)
 base = resolve_base(arg_base)
 
 puts
@@ -131,13 +127,11 @@ puts "Diff (git diff -w -W --histogram #{base}...#{branch}):".cyan
 puts diff
 puts
 
-recent_commits = recent_commits_on_branch(branch, base)
-
 result = MrReviewClient.new(debug: debug_mode).review(
   diff,
   branch: branch,
   base_branch: base,
-  recent_commits: recent_commits
+  recent_commits: recent_commits_on_branch(branch, base)
 )
 
 CompletionNotifier.notify_completion(success: true, title: "✓ MR Review Done")
