@@ -26,6 +26,8 @@
 #    Guideline warnings return as follow-ups; after the fix, formal→review→
 #    document still run, but VERIFY/scatter/schema flags stay set so an empty
 #    review falls through to commit instead of re-arming those advisories.
+#    Cursor Ask mode (`/ask`) is skipped: sessionStart stores composer_mode and
+#    later stops exit immediately when the mode is ask.
 #
 # Optional env:
 #   QUALITY_OWN_GITHUB   — GitHub username/org; owned remotes get --push, and
@@ -33,8 +35,10 @@
 #                          remotes only
 #   QUALITY_LOCAL        — optional extra Ruby file after public modules
 #                          (default: ~/.cursor/hooks/quality_local.rb if present)
+#   QUALITY_COMPOSER_MODE — set by sessionStart (`agent`/`ask`/`edit`); ask skips
 #
-# Implementation lives in hooks/quality/*.rb (Quality::* modules).
+# Implementation lives in hooks/quality/*.rb (Quality::* modules, including
+# composer_mode for Cursor Ask skip).
 
 require 'json'
 require 'fileutils'
@@ -42,6 +46,7 @@ require 'digest'
 
 require_relative 'quality/config'
 require_relative 'quality/support'
+require_relative 'quality/composer_mode'
 require_relative 'quality/state_store'
 require_relative 'quality/repo_gates'
 require_relative 'quality/transcripts'
@@ -57,8 +62,10 @@ local = File.join(ENV['HOME'].to_s, '.cursor/hooks/quality_local.rb') if local.e
 require local if File.file?(local)
 
 # Cursor stop-hook entry: wires Quality::* mixins and runs the pipeline.
+# sessionStart records composer_mode; Ask sessions skip the stop pipeline.
 class QualityHook
   include Quality::Support
+  include Quality::ComposerMode
   include Quality::StateStore
   include Quality::RepoGates
   include Quality::Transcripts
@@ -73,7 +80,7 @@ class QualityHook
     @input = input.is_a?(Hash) ? input : {}
     @roots = workspace_roots_from(@input)
     @tmpdir = (ENV['TMPDIR'] || '/tmp').chomp('/')
-    @conversation_id = @input['conversation_id'].to_s
+    @conversation_id = first_present(@input['conversation_id'], @input['session_id'])
     @transcript_path = @input['transcript_path'].to_s
     @session_key = session_key_from(@conversation_id, @transcript_path)
     bootstrap_path
@@ -81,12 +88,23 @@ class QualityHook
 
   def run
     t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    @input['status'] ? stop_pipeline : empty
+    dispatch
   rescue StandardError => e
     STDERR.puts "[quality] #{e.class}: #{e.message}\n#{e.backtrace.first(6).join("\n")}"
     empty
   ensure
     log_pipeline_duration(t0)
+  end
+
+  def dispatch
+    return remember_composer_mode if session_start?
+    return empty unless @input['status']
+    if composer_mode == 'ask'
+      log_action('skip', reason: 'ask_mode')
+      return empty
+    end
+
+    stop_pipeline
   end
 
   def log_pipeline_duration(t0)

@@ -2,9 +2,24 @@
 
 module Quality
   # Stage-state files under STATE: pending/review markers (verify, scatter,
-  # schema), stage progress, commit markers, and git_commit_gpt's mkdir lock.
+  # schema), composer mode, stage progress, commit markers, and git_commit_gpt's
+  # mkdir lock.
   module StateStore
     def pending_file; File.join(STATE, "stop-pending-#{@session_key}"); end
+    def mode_file; File.join(STATE, "stop-mode-#{@session_key}"); end
+    def save_session_mode(mode)
+      return if @session_key.empty?
+
+      FileUtils.mkdir_p(STATE)
+      File.write(mode_file, "#{mode}\n")
+    end
+    def load_session_mode
+      return '' if @session_key.empty? || !File.file?(mode_file)
+
+      File.read(mode_file).to_s.strip.downcase
+    rescue StandardError
+      ''
+    end
     def review_flag_file(name); File.join(STATE, "stop-#{name}-#{@session_key}"); end
     def review_flag?(name); File.file?(review_flag_file(name)); end
     def stage_file; File.join(STATE, "stop-stage-#{@session_key}"); end
