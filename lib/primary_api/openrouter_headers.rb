@@ -20,8 +20,7 @@ module OpenrouterHeaders
   end
 
   def openrouter_host?(base_url)
-    host = uri_host(base_url)
-    host&.end_with?('openrouter.ai')
+    uri_host(base_url)&.end_with?('openrouter.ai')
   end
 
   def uri_host(url)
