@@ -26,8 +26,9 @@ class RefactorLlm
 
   def refactor(file_codes, user_instruction = nil)
     current_file_codes = file_codes.dup
-    any_stage_successful = apply_client_stages(file_codes, current_file_codes, user_instruction)
-    warn 'Warning: All stages failed to produce output. Returning original files.' unless any_stage_successful
+    unless apply_client_stages(file_codes, current_file_codes, user_instruction)
+      warn 'Warning: All stages failed to produce output. Returning original files.'
+    end
     build_final_response(current_file_codes)
   end
 
@@ -40,8 +41,8 @@ class RefactorLlm
       any_success ||= changed.any?
       changed.each { |path, code| current_file_codes[path] = code }
 
-      assessment = assess_stage(client, index, original_codes, current_file_codes, user_instruction, changed)
-      break if satisfied?(assessment) || last_stage?(index)
+      break if satisfied?(assess_stage(client, index, original_codes, current_file_codes, user_instruction, changed)) ||
+        last_stage?(index)
 
       puts 'Proceeding to higher agent as task is not fully solved or critical warnings exist.'.yellow
     end
@@ -60,11 +61,14 @@ class RefactorLlm
 
   def process_stage(client, index, current_file_codes, user_instruction)
     display_stage_info(client, index)
-    model_name = client.instance_variable_get(:@model)
-    raw_response = client.ask(refactor_messages(current_file_codes, user_instruction),
-      title: "Refactoring with #{model_name}".cyan)
-    refactored_files = ResponseParser.parse_files_from_response(raw_response, current_file_codes.keys,
-      exit_on_error: false)
+    refactored_files = ResponseParser.parse_files_from_response(
+      client.ask(
+        refactor_messages(current_file_codes, user_instruction),
+        title: "Refactoring with #{client.instance_variable_get(:@model)}".cyan
+      ),
+      current_file_codes.keys,
+      exit_on_error: false
+    )
 
     if refactored_files.empty?
       model_name = client.instance_variable_get(:@model)
@@ -77,8 +81,10 @@ class RefactorLlm
   def display_stage_info(client, index)
     return unless @debug || @clients.size > 1
 
-    model_name = client.instance_variable_get(:@model)
-    puts "\n--- Stage #{index + 1}/#{@clients.size}: Refactoring with #{model_name} ---".blue
+    puts(
+      "\n--- Stage #{index + 1}/#{@clients.size}: " \
+      "Refactoring with #{client.instance_variable_get(:@model)} ---".blue
+    )
   end
 
   def refactor_messages(file_codes, user_instruction)
@@ -107,8 +113,7 @@ class RefactorGptRunner
     parse_arguments(args)
     validate_files
 
-    file_codes = read_files
-    process_refactoring(file_codes)
+    process_refactoring(read_files)
   end
 
   private
@@ -118,8 +123,10 @@ class RefactorGptRunner
       RefactorLlm.new(debug: @debug).refactor(file_codes, user_instruction).to_s
     end
 
-    refactored_files = ResponseParser.parse_files_from_response(raw_response, @file_paths)
-    FileProcessor.new(file_codes).process_refactored_files(refactored_files, elapsed_time)
+    FileProcessor.new(file_codes).process_refactored_files(
+      ResponseParser.parse_files_from_response(raw_response, @file_paths),
+      elapsed_time
+    )
   end
 
   def with_timing

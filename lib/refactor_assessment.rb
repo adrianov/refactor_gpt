@@ -23,20 +23,23 @@ module RefactorAssessment
   end
 
   def attempt_to_fix_warnings(client, current_file_codes, warnings, user_instruction)
-    model_name = client.instance_variable_get(:@model)
-    puts "Attempting to fix warnings with #{model_name}...".blue
+    puts "Attempting to fix warnings with #{client.instance_variable_get(:@model)}...".blue
 
-    fix_instruction = warning_fix_instruction(warnings, user_instruction)
-    raw_response = client.ask(refactor_messages(current_file_codes, fix_instruction), title: 'Fixing warnings'.cyan)
-    ResponseParser.parse_files_from_response(raw_response, current_file_codes.keys, exit_on_error: false)
+    ResponseParser.parse_files_from_response(
+      client.ask(
+        refactor_messages(current_file_codes, warning_fix_instruction(warnings, user_instruction)),
+        title: 'Fixing warnings'.cyan
+      ),
+      current_file_codes.keys,
+      exit_on_error: false
+    )
   end
 
   def warning_fix_instruction(warnings, user_instruction)
-    warning_text = warnings.map do |w|
+    text = "Fix these issues from the previous refactoring step:\n#{warnings.map do |w|
       critical = w['critical'] ? ' [CRITICAL]' : ''
       "- #{w['message']} (probability: #{w['probability']})#{critical}"
-    end.join("\n")
-    text = "Fix these issues from the previous refactoring step:\n#{warning_text}"
+    end.join("\n")}"
     user_instruction ? "#{text}\n\nOriginal instruction: #{user_instruction}" : text
   end
 
@@ -46,15 +49,15 @@ module RefactorAssessment
 
   def perform_assessment(original_file_codes, current_file_codes, user_instruction, client: nil)
     client ||= @clients.first
-    model_name = client.instance_variable_get(:@model)
-    puts "--- Assessing if instruction is fulfilled (#{model_name}) ---".blue
+    puts "--- Assessing if instruction is fulfilled (#{client.instance_variable_get(:@model)}) ---".blue
 
-    response = client.ask(
-      assessment_messages(build_assessment_prompt(original_file_codes, current_file_codes, user_instruction)),
-      json: true,
-      title: 'Assessing refactoring'.cyan
+    result = ResponseParser.extract_json(
+      client.ask(
+        assessment_messages(build_assessment_prompt(original_file_codes, current_file_codes, user_instruction)),
+        json: true,
+        title: 'Assessing refactoring'.cyan
+      )
     )
-    result = ResponseParser.extract_json(response)
     display_assessment_result(result)
     result
   rescue StandardError => e
