@@ -9,7 +9,17 @@ module Quality
   # project is finished or older than SESSION_OPEN_AGE; only the current session
   # may still be unfinished. Cursor may not refresh transcript mtime until the
   # turn ends, so unfinished logs use SESSION_OPEN_AGE rather than a tiny idle cut.
+  # Cursor sessions also need a Write/StrReplace/Delete/EditNotebook that targeted
+  # the repo (see Quality::Transcripts); omp still starts from git alone.
   module RepoGates
+    def cursor_write_gate?
+      return true if cursor_transcripts_root.nil?
+      return true if repo_write_tool?
+
+      log_action('skip', reason: 'no_write_tool')
+      false
+    end
+
     def sole_session?(root)
       siblings = open_sibling_sessions(root)
       return true if siblings.empty?
@@ -83,14 +93,13 @@ module Quality
       return nil if root.to_s.empty?
 
       home = ENV['HOME'].to_s
-      abs = omp_path_key(root)
-      slug =
-        if !home.empty? && abs.start_with?(home + '/')
-          abs[home.length..].gsub('/', '-')
-        else
-          "--private-#{abs.sub(%r{\A/}, '').gsub('/', '-')}--"
-        end
-      File.join(home, '.omp/agent/sessions', slug)
+      File.join(home, '.omp/agent/sessions', omp_session_slug(omp_path_key(root), home))
+    end
+
+    def omp_session_slug(abs, home)
+      return abs[home.length..].gsub('/', '-') if !home.empty? && abs.start_with?(home + '/')
+
+      "--private-#{abs.sub(%r{\A/}, '').gsub('/', '-')}--"
     end
 
     def omp_path_key(root)

@@ -7,6 +7,9 @@
 # 1. Change detection: git is the source of truth. Every stop reports each
 #    workspace root's uncommitted work vs HEAD plus untracked files; roots
 #    outside any repo are skipped. No snapshots or state files involved.
+#    Cursor sessions skip the pipeline unless a Write/StrReplace/Delete/
+#    EditNotebook in this session (including subagents) targeted the repo;
+#    leftover git dirt alone is not enough. omp is unchanged.
 # 2. Formal: plain `abcop` per touched repo over the current-MR scope — it owns
 #    method/module ABC size and variable hygiene — plus a static RSpec no-def
 #    scan when `.cursor/rules/rspec-no-def.mdc` is present. Failures retry this

@@ -4,8 +4,8 @@ require 'json'
 
 module Quality
   # Transcript helpers: recent user texts detect followup chains; outgoing
-  # text is shown relative to workspace roots. Changed files come from
-  # Quality::GitChanges (git-diff), which never parses the transcript.
+  # text is shown relative to workspace roots. Cursor write-tool presence is
+  # a boolean gate (no path list). Changed files still come from git-diff.
   module Transcripts
     def parent_messages
       @parent_messages ||= load_jsonl(@transcript_path)
@@ -47,6 +47,41 @@ module Quality
     def project_roots
       rs = @roots.reject(&:empty?).uniq.sort_by { |r| -r.length }
       rs.empty? && ENV['CURSOR_PROJECT_DIR'] ? [ENV['CURSOR_PROJECT_DIR'].to_s.sub(%r{/$}, '')] : rs
+    end
+
+    def repo_write_tool?
+      return true if messages_write_in_repo?(parent_messages)
+
+      dir = File.dirname(@transcript_path.to_s)
+      return false if dir.empty?
+
+      Dir.glob(File.join(dir, 'subagents', '*.jsonl')).any? { |path| messages_write_in_repo?(load_jsonl(path)) }
+    end
+
+    def messages_write_in_repo?(msgs)
+      msgs.any? { |m| content_items(m).any? { |c| write_tool_in_repo?(c) } }
+    end
+
+    def write_tool_in_repo?(item)
+      return false unless item.is_a?(Hash) && item['type'] == 'tool_use'
+      return false unless WRITE_TOOLS.include?(item['name'].to_s)
+
+      write_tool_paths(item['input']).any? { |p| repo_path?(p) }
+    end
+
+    def write_tool_paths(input)
+      return [] unless input.is_a?(Hash)
+
+      %w[path file_path target_notebook].filter_map do |k|
+        v = input[k]
+        v if v.is_a?(String) && !v.empty?
+      end
+    end
+
+    def repo_path?(p)
+      base = @roots[0].to_s
+      abs = base.empty? ? File.expand_path(p) : File.expand_path(p, base)
+      project_roots.any? { |r| abs == r || abs.start_with?("#{r}/") }
     end
   end
 end

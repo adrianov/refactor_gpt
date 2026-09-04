@@ -15,15 +15,19 @@ module Quality
       catch(:stalled) do
         root = workspace_git_root
         log_action('start', status: @input['status'].to_s, dir: @roots[0].to_s, git: root ? 'yes' : 'no')
-        return empty unless completed?
-
-        # Workspace cwd keys omp session dirs; fall back to git top when unset.
-        gate = @roots[0].to_s
-        gate = root if gate.empty?
-        return empty unless sole_session?(gate)
+        return empty unless pipeline_ready?(root)
 
         run_pipeline
       end
+    end
+
+    def pipeline_ready?(root)
+      return false unless completed?
+      return false unless cursor_write_gate?
+
+      # Workspace cwd keys omp session dirs; fall back to git top when unset.
+      gate = @roots[0].to_s
+      sole_session?(gate.empty? ? root : gate)
     end
     def run_pipeline
       files, chain, stage, saved = boot_cycle
