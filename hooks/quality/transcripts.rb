@@ -70,6 +70,9 @@ module Quality
     end
 
     def write_tool_paths(input)
+      if input.is_a?(String)
+        return input.scan(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/).flatten.map(&:strip).reject(&:empty?)
+      end
       return [] unless input.is_a?(Hash)
 
       %w[path file_path target_notebook].filter_map do |k|

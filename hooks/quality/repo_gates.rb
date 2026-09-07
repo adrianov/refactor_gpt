@@ -9,8 +9,8 @@ module Quality
   # project is finished or older than SESSION_OPEN_AGE; only the current session
   # may still be unfinished. Cursor may not refresh transcript mtime until the
   # turn ends, so unfinished logs use SESSION_OPEN_AGE rather than a tiny idle cut.
-  # Cursor sessions also need a Write/StrReplace/Delete/EditNotebook that targeted
-  # the repo (see Quality::Transcripts); omp still starts from git alone.
+  # Cursor sessions also need a Write/StrReplace/Delete/EditNotebook/ApplyPatch
+  # that targeted the repo (see Quality::Transcripts); omp still starts from git alone.
   module RepoGates
     def cursor_write_gate?
       return true if cursor_transcripts_root.nil?
@@ -151,16 +151,17 @@ module Quality
     end
 
     def each_jsonl_head(path, limit)
-      n = 0
       File.foreach(path) do |line|
         line = line.strip
         next if line.empty?
 
-        yield JSON.parse(line)
-        n += 1
-        break if n >= limit
-      rescue JSON::ParserError
-        next
+        begin
+          yield JSON.parse(line)
+        rescue JSON::ParserError
+          next
+        end
+        limit -= 1
+        break if limit <= 0
       end
     end
   end

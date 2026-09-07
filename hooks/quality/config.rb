@@ -42,7 +42,8 @@ module Quality
   FOLLOWUP_REPEATS = 2
   # Cursor file-mutation tools. Presence in this session (path under a
   # workspace root) is the stop-pipeline gate; leftover git dirt is not enough.
-  WRITE_TOOLS = %w[Write StrReplace Delete EditNotebook].freeze
+  # ApplyPatch uses a patch-string input (*** Update/Add/Delete File: paths).
+  WRITE_TOOLS = %w[Write StrReplace Delete EditNotebook ApplyPatch].freeze
   VERIFY = 'Check if the issues are resolved fully and properly. Fix without bloat if needed.'
   SCHEMA_MSG = 'db/schema.rb was edited. Make schema.rb changes minimal, covering only current task scope.'
   MD_MSG = 'Improve phrasing and synonym choice in these new .md files.'
