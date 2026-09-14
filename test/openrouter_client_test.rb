@@ -62,7 +62,8 @@ client.send(:answer_from, assistant_message(content: nil, thinking_text: 'from t
   end
 
   def test_request_headers_include_app_attribution
-    chat = client.send(:build_chat, [{role: 'user', content: 'hi'}])
+    chat = OpenrouterClient.new(api_key: 'test-key', api_base_url: 'https://openrouter.ai/api/v1')
+           .send(:build_chat, [{role: 'user', content: 'hi'}])
     assert_equal 'https://github.com/adrianov/refactor_gpt', chat.headers['HTTP-Referer']
     assert_equal 'RefactorGPT', chat.headers['X-Title']
   end
@@ -98,7 +99,8 @@ client.send(:answer_from, assistant_message(content: nil, thinking_text: 'from t
   def test_model_normalization_keeps_vendor_slugs_and_defaults
     unprefixed = OpenrouterClient.new(model: 'google/gemini-3.7-flash', api_key: 'test-key')
     assert_equal 'google/gemini-3.7-flash', unprefixed.model
-    assert_equal OpenrouterClient::DEFAULT_MODEL, client.model
+    assert_equal OpenrouterClient::DEFAULT_MODEL,
+      Class.new(OpenrouterClient) { def load_env_vars(*); {}; end }.new(api_key: 'test-key').model
   end
 
   def env_with_status(status)

@@ -115,10 +115,9 @@ raw_blocks(cached_system_content(model: 'anthropic/claude-sonnet-4', base_url: O
     assert_equal SYSTEM, original.first[:content]
   end
 
-  def cached_chat(model:, base_url: nil)
-    kwargs = { api_key: 'test-key', model: model }
-    kwargs[:api_base_url] = base_url if base_url
-    OpenrouterClient.new(**kwargs).send(:build_chat, messages)
+  def cached_chat(model:, base_url: OPENROUTER)
+    OpenrouterClient.new(api_key: 'test-key', model: model, api_base_url: base_url)
+    .send(:build_chat, messages)
   end
 
   def system_content(chat)
