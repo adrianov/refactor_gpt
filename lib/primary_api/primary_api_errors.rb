@@ -7,6 +7,8 @@ module PrimaryApiErrors
   MAX_RETRIES = 3
   UPSTREAM_RETRY_DELAYS = [5, 10, 30].freeze
 
+  RESET_AT_CLAUSE = /will reset at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/i
+
   private
 
   def translate_api_errors
@@ -45,26 +47,49 @@ module PrimaryApiErrors
     exhaust("❌ Rate limit exceeded after #{MAX_RETRIES} retries: #{error.message}")
   end
 
-  # Quota/usage-limit failures are unrecoverable within a run: the provider message already states
-  # when the window resets, so no retry happens and the message (with its reset time) is surfaced.
+  # Quota/usage-limit failures are unrecoverable within a run: no retry happens. The reset time
+  # shown is derived from the response's retry-after hint (now + header), because the timestamp
+  # embedded in the provider message can sit hours past when requests start succeeding again.
   def exit_usage_limit(error)
-    warn "❌ Unrecoverable provider usage limit: #{error.message}"
+    warn "❌ Unrecoverable provider usage limit: #{usage_limit_display_message(error)}"
     warn_if_present('Response body:', error_body(error))
     exit 1
+  end
+
+  def usage_limit_display_message(error)
+    message = error.message.to_s
+    seconds = error.retry_after_seconds
+    return message unless seconds
+
+    clause = "will reset at #{(Time.now + seconds).strftime('%Y-%m-%d %H:%M:%S')} " \
+             "(#{format_duration(seconds)} from now, per retry-after)"
+    message.match?(RESET_AT_CLAUSE) ? message.sub(RESET_AT_CLAUSE, clause) : "#{message} #{clause}"
+  end
+
+  # Renders a cooldown compactly for display next to the computed reset time (e.g. "10m", "8h").
+  def format_duration(seconds)
+    total = seconds.round
+    return "#{total}s" if total < 60
+    return "#{(total / 60.0).round}m" if total < 3600
+
+    "#{(total / 3600.0).round}h"
   end
 
   # OpenRouter wraps upstream 429s / transient provider outages as HTTP 400, which the
   # transport does not retry — so retry those bodies here.
   def complete_with_upstream_retries
-    attempt = 0
-    yield
-  rescue RubyLLM::BadRequestError => e
-    delay = UPSTREAM_RETRY_DELAYS[attempt]
-    raise unless delay && upstream_retryable?(e)
+    retries = 0
+    begin
+      yield
+    rescue RubyLLM::BadRequestError => e
+      delay = UPSTREAM_RETRY_DELAYS[retries]
+      raise unless delay && upstream_retryable?(e)
 
-    warn_upstream_retry(e, attempt += 1, delay)
-    sleep(delay)
-    retry
+      retries += 1
+      warn_upstream_retry(e, retries, delay)
+      sleep(delay)
+      retry
+    end
   end
 
   def upstream_retryable?(error)

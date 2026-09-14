@@ -18,8 +18,8 @@ class TestPrimaryApiErrors < Minitest::Test
 
   def test_error_body_reads_response_payload
     response = Object.new.tap { |resp| resp.define_singleton_method(:body) { UPSTREAM_429_BODY } }
-    error = Object.new.tap { |err| err.define_singleton_method(:response) { response } }
-    assert_equal UPSTREAM_429_BODY, errors.send(:error_body, error)
+    assert_equal UPSTREAM_429_BODY,
+                 errors.send(:error_body, Object.new.tap { |e| e.define_singleton_method(:response) { response } })
     assert_empty errors.send(:error_body, nil)
   end
 
@@ -30,15 +30,18 @@ class TestPrimaryApiErrors < Minitest::Test
   end
 
   def test_upstream_rate_limited_variants
-    positives = [UPSTREAM_429_BODY, PREVIOUS_ERRORS_429, 'temporarily rate-limited upstream']
-    negatives = ['{"error":{"message":"bad request","code":400}}', '', nil]
-    positives.each { |body| assert errors.send(:upstream_rate_limited?, body), body.to_s[0, 40] }
-    negatives.each { |body| refute errors.send(:upstream_rate_limited?, body), body.to_s[0, 40] }
+    [UPSTREAM_429_BODY, PREVIOUS_ERRORS_429, 'temporarily rate-limited upstream'].each do |body|
+      assert errors.send(:upstream_rate_limited?, body), body.to_s[0, 40]
+    end
+    ['{"error":{"message":"bad request","code":400}}', '', nil].each do |body|
+      refute errors.send(:upstream_rate_limited?, body), body.to_s[0, 40]
+    end
   end
 
   def fake_bad_request(body)
-    response = Object.new.tap { |resp| resp.define_singleton_method(:body) { body } }
-    RubyLLM::BadRequestError.new(response, 'Provider returned error')
+    RubyLLM::BadRequestError.new(
+      Object.new.tap { |resp| resp.define_singleton_method(:body) { body } }, 'Provider returned error'
+    )
   end
 
   def fake_response(status, body)
@@ -54,17 +57,25 @@ class TestPrimaryApiErrors < Minitest::Test
 
   def test_http_400_with_upstream_429_is_retried_manually
     attempts = 0
-    outcome = nil
     _out, _err = capture_io do
-      outcome = retrying_client.send(:complete_with_upstream_retries) do
+      assert_equal :done, retrying_client.send(:complete_with_upstream_retries) {
         attempts += 1
         raise fake_bad_request(UPSTREAM_429_BODY) if attempts < 3
 
         :done
-      end
+      }
     end
     assert_equal 3, attempts
-    assert_equal :done, outcome
+  end
+
+  def test_persistent_upstream_429_gives_up_after_three_retries
+    _out, err = capture_io do
+      assert_raises(RubyLLM::BadRequestError) do
+        retrying_client.send(:complete_with_upstream_retries) { raise fake_bad_request(UPSTREAM_429_BODY) }
+      end
+    end
+    assert_equal %w[1/3 2/3 3/3], err.scan(%r{\((\d/3)\)}).flatten
+    assert_includes err, 'retrying in 30s'
   end
 
   def test_plain_400_propagates_without_retry
@@ -77,12 +88,11 @@ class TestPrimaryApiErrors < Minitest::Test
 
   def test_plain_400_exits_with_provider_body
     _out, err = capture_io do
-      error = assert_raises(SystemExit) do
+      assert_equal 1, assert_raises(SystemExit) {
         retrying_client.send(:translate_api_errors) do
           raise fake_bad_request('{"error":{"message":"This models maximum context length is exceeded"}}')
         end
-      end
-      assert_equal 1, error.status
+      }.status
     end
     assert_includes err, 'rejected the request'
     assert_includes err, 'maximum context length'
@@ -113,7 +123,31 @@ class TestPrimaryApiErrors < Minitest::Test
     end
   end
 
-  def test_usage_limit_error_exits_with_provider_reset_time
+  def usage_limit_response
+    Struct.new(:status, :body, :headers).new(
+      429,
+      '{"error":{"message":"Usage limit reached for 5 hour. ' \
+        'Your limit will reset at 2026-09-15 04:29:17","code":429}}',
+      { 'retry-after-ms' => '600000' }
+    )
+  end
+
+  def test_usage_limit_error_displays_reset_from_retry_after
+    _out, err = capture_io do
+      assert_equal 1, assert_raises(SystemExit) {
+        retrying_client.send(:translate_api_errors) do
+          raise UsageLimitCompat::UsageLimitError.new(usage_limit_response,
+            'Usage limit reached for 5 hour. Your limit will reset at 2026-09-15 04:29:17')
+        end
+      }.status
+    end
+    headline = err.lines.first
+    assert_includes headline, 'Unrecoverable provider usage limit'
+    assert_match(/will reset at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \(10m from now, per retry-after\)/, headline)
+    refute_includes headline, '04:29:17'
+  end
+
+  def test_usage_limit_error_without_retry_after_keeps_provider_message
     _out, err = capture_io do
       assert_equal 1, assert_raises(SystemExit) {
         retrying_client.send(:translate_api_errors) do
@@ -122,16 +156,15 @@ class TestPrimaryApiErrors < Minitest::Test
         end
       }.status
     end
-    assert_includes err, 'Unrecoverable provider usage limit'
-    assert_includes err, 'will reset at 2026-09-14 23:16:44'
+    assert_includes err.lines.first, 'Unrecoverable provider usage limit'
+    assert_includes err.lines.first, 'will reset at 2026-09-14 23:16:44'
   end
 
   def test_transport_errors_exit_with_network_message
     _out, err = capture_io do
-      error = assert_raises(SystemExit) do
+      assert_equal 1, assert_raises(SystemExit) {
         retrying_client.send(:translate_api_errors) { raise Errno::ECONNRESET }
-      end
-      assert_equal 1, error.status
+      }.status
     end
     assert_includes err, 'Network/resource error'
   end

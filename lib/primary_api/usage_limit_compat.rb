@@ -6,11 +6,19 @@ require 'ruby_llm/error_middleware'
 # state a provider-side reset time far in the future, so retrying within seconds can never succeed.
 # ruby-llm's transport retries RateLimitError three times, so this shim re-raises matching error
 # bodies as a dedicated error class the transport retry list does not match, surfacing the failure
-# immediately with the provider's own message (which carries the authoritative reset time).
+# immediately; the reset time shown to the user derives from the response's retry-after hint
+# (when requests may actually resume), not the message's far-off window-reset timestamp.
 module UsageLimitCompat
   # Deliberately not a RubyLLM::RateLimitError subclass: the transport retry list matches by
   # ancestry, so staying outside it is what keeps this error unretried.
-  class UsageLimitError < RubyLLM::Error; end
+  class UsageLimitError < RubyLLM::Error
+    def retry_after_seconds
+      UsageLimitCompat.retry_after_seconds(response)
+    end
+  end
+
+  # Response header names that state a cooldown, with their unit in seconds.
+  RETRY_AFTER_HEADERS = [['retry-after-ms', 0.001], ['retry-after', 1]].freeze
 
   USAGE_LIMIT_PATTERNS = [
     /usage limit/i,
@@ -41,6 +49,19 @@ module UsageLimitCompat
   def self.message_from(provider, response)
     provider_message = provider&.parse_error(response).to_s.strip
     provider_message.empty? ? response.body.to_s : provider_message
+  end
+
+  # The retry-after hint beats the message's "will reset at" timestamp: the header tracks when
+  # requests may resume, while the embedded window-reset time can sit hours away.
+  def self.retry_after_seconds(response)
+    headers = response.respond_to?(:headers) ? response.headers : nil
+    return unless headers
+
+    RETRY_AFTER_HEADERS.each do |name, unit_seconds|
+      seconds = headers[name].to_f * unit_seconds
+      return seconds if seconds.positive?
+    end
+    nil
   end
 
   # Prepended onto RubyLLM::ErrorMiddleware; must stay a public instance method so explicit
