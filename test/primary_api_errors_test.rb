@@ -9,6 +9,8 @@ require 'minitest/autorun'
 class TestPrimaryApiErrors < Minitest::Test
   UPSTREAM_429_BODY = '{"error":{"message":"Rate limit exceeded","code":429}}'
   PREVIOUS_ERRORS_429 = '{"error":{"metadata":{"previous_errors":[{"code":429}]}}}'
+  USAGE_LIMIT_BODY = '{"error":{"message":"Usage limit reached for 5 hour. ' \
+    'Your limit will reset at 2026-09-14 23:16:44","code":429}}'
 
   def errors
     @errors ||= Object.new.extend(PrimaryApiErrors)
@@ -37,6 +39,10 @@ class TestPrimaryApiErrors < Minitest::Test
   def fake_bad_request(body)
     response = Object.new.tap { |resp| resp.define_singleton_method(:body) { body } }
     RubyLLM::BadRequestError.new(response, 'Provider returned error')
+  end
+
+  def fake_response(status, body)
+    Struct.new(:status, :body).new(status, body)
   end
 
   def retrying_client
@@ -80,6 +86,44 @@ class TestPrimaryApiErrors < Minitest::Test
     end
     assert_includes err, 'rejected the request'
     assert_includes err, 'maximum context length'
+  end
+
+  def test_usage_limit_429_surfaces_as_unretryable_error_class
+    UsageLimitCompat.apply
+    error = assert_raises(UsageLimitCompat::UsageLimitError) do
+      RubyLLM::ErrorMiddleware.parse_error(provider: nil, response: fake_response(429, USAGE_LIMIT_BODY))
+    end
+    assert_includes error.message, 'limit will reset at 2026-09-14 23:16:44'
+    # The transport retry list matches RubyLLM::RateLimitError by ancestry; staying outside it
+    # is what keeps usage-limit failures from being retried three times before surfacing.
+    refute_kind_of RubyLLM::RateLimitError, error
+  end
+
+  def test_usage_limit_wrapped_in_http_400_also_surfaces_unretried
+    UsageLimitCompat.apply
+    assert_raises(UsageLimitCompat::UsageLimitError) do
+      RubyLLM::ErrorMiddleware.parse_error(provider: nil, response: fake_response(400, USAGE_LIMIT_BODY))
+    end
+  end
+
+  def test_transient_rate_limit_still_maps_to_rate_limit_error
+    UsageLimitCompat.apply
+    assert_raises(RubyLLM::RateLimitError) do
+      RubyLLM::ErrorMiddleware.parse_error(provider: nil, response: fake_response(429, UPSTREAM_429_BODY))
+    end
+  end
+
+  def test_usage_limit_error_exits_with_provider_reset_time
+    _out, err = capture_io do
+      assert_equal 1, assert_raises(SystemExit) {
+        retrying_client.send(:translate_api_errors) do
+          raise UsageLimitCompat::UsageLimitError.new(nil,
+            'Usage limit reached for 5 hour. Your limit will reset at 2026-09-14 23:16:44')
+        end
+      }.status
+    end
+    assert_includes err, 'Unrecoverable provider usage limit'
+    assert_includes err, 'will reset at 2026-09-14 23:16:44'
   end
 
   def test_transport_errors_exit_with_network_message

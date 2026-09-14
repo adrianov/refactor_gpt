@@ -1,8 +1,6 @@
-# frozen_string_literal: true
-
-# Maps ruby-llm provider errors onto CLI semantics: balance exhaustion and plain HTTP 400 rejections
-# print details and exit; OpenRouter 400-wrapped upstream failures get a bounded manual retry, and
-# everything else stops the process once the transport-level retries are exhausted.
+# Maps ruby-llm provider errors onto CLI semantics: balance exhaustion and usage-limit rejections
+# print details and exit unretried; OpenRouter 400-wrapped upstream failures get a bounded manual
+# retry, and everything else stops the process once the transport-level retries are exhausted.
 module PrimaryApiErrors
   include PrimaryApiErrorBody
 
@@ -15,6 +13,8 @@ module PrimaryApiErrors
     yield
   rescue RubyLLM::PaymentRequiredError => e
     exit_balance_error(402, balance_message(e.message), error_body(e))
+  rescue UsageLimitCompat::UsageLimitError => e
+    exit_usage_limit(e)
   rescue RubyLLM::RateLimitError => e
     handle_rate_limit(e)
   rescue RubyLLM::ServerError, RubyLLM::ServiceUnavailableError, RubyLLM::OverloadedError
@@ -43,6 +43,14 @@ module PrimaryApiErrors
     return exit_balance_error(429, balance_message(error.message), raw) if balance_exhausted?(error.message, raw)
 
     exhaust("❌ Rate limit exceeded after #{MAX_RETRIES} retries: #{error.message}")
+  end
+
+  # Quota/usage-limit failures are unrecoverable within a run: the provider message already states
+  # when the window resets, so no retry happens and the message (with its reset time) is surfaced.
+  def exit_usage_limit(error)
+    warn "❌ Unrecoverable provider usage limit: #{error.message}"
+    warn_if_present('Response body:', error_body(error))
+    exit 1
   end
 
   # OpenRouter wraps upstream 429s / transient provider outages as HTTP 400, which the

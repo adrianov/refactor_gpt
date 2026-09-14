@@ -14,6 +14,8 @@ module OpenrouterRequest
       require_relative "streaming_compat"
       TyphoeusStreamingCompat.apply
     end
+    require_relative "usage_limit_compat"
+    UsageLimitCompat.apply
     RubyLLM.context { |config| apply_context_config(config, proxy_url, socks) }
   end
 
