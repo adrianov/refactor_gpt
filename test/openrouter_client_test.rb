@@ -125,4 +125,43 @@ client.send(:answer_from, assistant_message(content: nil, thinking_text: 'from t
     assert_equal ['a'], ok
     assert_equal ['b'], failed
   end
+
+  def streaming_handler(&on_chunk)
+    UsageLimitCompat.apply
+    TyphoeusStreamingCompat.apply
+    streamer = Object.new.extend(RubyLLM::Streaming)
+    streamer.define_singleton_method(:parse_error) { |response| response.body.to_s }
+    streamer.send(:build_on_data_handler, &on_chunk)
+  end
+  def test_streaming_two_arg_error_chunk_classifies_usage_limit
+    seen = []
+    assert_includes assert_raises(UsageLimitCompat::UsageLimitError) {
+      streaming_handler { |chunk| seen << chunk }
+        .call('{"error":{"message":"Usage limit reached for 5 hour. Your limit will reset at 2026-09-15 18:00:07"}}')
+    }.message, 'Usage limit reached'
+    assert_empty seen
+  end
+
+  def test_streaming_two_arg_success_chunks_still_parse
+    seen = []
+    streaming_handler { |chunk| seen << chunk }.call("data: {\"id\":1}\n\n", 0)
+    assert_equal({ 'id' => 1 }, seen.first)
+  end
+
+  def test_fallback_connection_loads_from_env
+    fallback = Class.new(OpenrouterClient) do
+      def load_env_vars(*)
+        { 'API_KEY_2' => 'k2', 'BASE_URL_2' => 'https://x.example/v1', 'MODEL_2' => 'vendor/m2' }
+      end
+    end.new(api_key: 'test-key').instance_variable_get(:@fallback)
+    assert_equal 'k2', fallback[:api_key]
+    assert_equal 'https://x.example/v1', fallback[:api_base_url]
+    assert_equal 'vendor/m2', fallback[:model]
+  end
+
+  def test_fallback_connection_absent_without_api_key_2
+    assert_nil Class.new(OpenrouterClient) { def load_env_vars(*); {}; end }
+      .new(api_key: 'test-key').instance_variable_get(:@fallback)
+  end
+
 end

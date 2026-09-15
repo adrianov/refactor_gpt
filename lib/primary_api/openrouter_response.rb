@@ -7,9 +7,9 @@ module OpenrouterResponse
   private
 
   def run(messages, json:, title:)
-    chat = build_chat(messages, json: json)
     message = translate_api_errors do
       complete_with_upstream_retries do
+        chat = build_chat(messages, json: json)
         title ? complete_streamed(chat, messages, title) : chat.complete
       end
     end
@@ -20,13 +20,11 @@ module OpenrouterResponse
 
   def complete_streamed(chat, messages, title)
     bar = PrimaryApiProgress.create(title: title, estimate_bytes: messages.to_s.bytesize)
-    received = 0
     chat.complete do |chunk|
       delta = chunk.content.to_s
       next if delta.empty?
 
-      received += delta.bytesize
-      PrimaryApiProgress.record(bar, received)
+      PrimaryApiProgress.record(bar, bar.progress + delta.bytesize)
     end
   ensure
     PrimaryApiProgress.finish(bar)

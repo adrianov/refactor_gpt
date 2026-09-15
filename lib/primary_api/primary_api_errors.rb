@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 # Maps ruby-llm provider errors onto CLI semantics: balance exhaustion and usage-limit rejections
 # print details and exit unretried; OpenRouter 400-wrapped upstream failures get a bounded manual
 # retry, and everything else stops the process once the transport-level retries are exhausted.
@@ -11,21 +13,16 @@ module PrimaryApiErrors
 
   private
 
-  def translate_api_errors
-    yield
-  rescue RubyLLM::PaymentRequiredError => e
-    exit_balance_error(402, balance_message(e.message), error_body(e))
-  rescue UsageLimitCompat::UsageLimitError => e
-    exit_usage_limit(e)
+  def translate_api_errors(&call)
+    call.call
+  rescue RubyLLM::PaymentRequiredError, UsageLimitCompat::UsageLimitError, RubyLLM::UnauthorizedError => e
+    unrecoverable_outcome(e, &call)
   rescue RubyLLM::RateLimitError => e
     handle_rate_limit(e)
   rescue RubyLLM::ServerError, RubyLLM::ServiceUnavailableError, RubyLLM::OverloadedError
     raise if @raise_on_server_error
 
     exhaust("❌ Server error persisted after #{MAX_RETRIES} retries")
-  rescue RubyLLM::UnauthorizedError => e
-    warn "❌ #{e.message}"
-    exit 1
   rescue RubyLLM::BadRequestError => e
     exit_bad_request(e)
   rescue Faraday::Error, Errno::ETIMEDOUT, Errno::ECONNRESET, Errno::ECONNREFUSED, Errno::EPIPE,
@@ -45,6 +42,38 @@ module PrimaryApiErrors
     return exit_balance_error(429, balance_message(error.message), raw) if balance_exhausted?(error.message, raw)
 
     exhaust("❌ Rate limit exceeded after #{MAX_RETRIES} retries: #{error.message}")
+  end
+
+  # Unrecoverable failures retry once through the secondary connection (API_KEY_2/BASE_URL_2/
+  # MODEL_2). Returns false when no fallback is configured or it was already used, so the
+  # original unrecoverable exit runs. Re-entry re-invokes translate_api_errors with the same
+  # request block; build_chat sits inside it, so the swapped connection rebuilds the chat.
+  def activate_fallback
+    return false unless @fallback && !@fell_back
+
+    @fell_back = true
+    @api_key = @fallback[:api_key]
+    @api_base_url = @fallback[:api_base_url]
+    @model = @fallback[:model]
+    @context = build_ruby_llm_context
+    warn "⚠️ Primary connection failed unrecoverably; retrying via #{primary_api_error_endpoint}"
+    true
+  end
+
+  # Unrecoverable failures get one retry through the secondary connection; without a fallback
+  # (or after it failed too) the class-specific unrecoverable exit runs.
+  def unrecoverable_outcome(error, &call)
+    return translate_api_errors(&call) if activate_fallback
+
+    case error
+    when RubyLLM::PaymentRequiredError
+      exit_balance_error(402, balance_message(error.message), error_body(error))
+    when UsageLimitCompat::UsageLimitError
+      exit_usage_limit(error)
+    else
+      warn "❌ #{error.message}"
+      exit 1
+    end
   end
 
   # Quota/usage-limit failures are unrecoverable within a run: no retry happens. The reset time

@@ -36,13 +36,15 @@ Ruby CLI tools that use large language models for refactoring, code search, shel
    cp .env.example .env
    ```
 
-2. Edit `.env` and set `OPENROUTER_API_KEY` (required). All tools call OpenRouter with the model
+2. Edit `.env` and set `API_KEY` (required). All tools call OpenRouter with the model
    `stealth/ox-alpha` by default.
 
    Optional overrides:
-   - `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api/v1`)
+   - `BASE_URL` (default `https://openrouter.ai/api/v1`)
    - `MODEL` (default `stealth/ox-alpha`)
    - `REQUEST_TIMEOUT` (default `600` seconds)
+   - `API_KEY_2` / `BASE_URL_2` / `MODEL_2` (optional fallback connection, retried once when the
+     primary fails unrecoverably: usage limit, exhausted balance, or unauthorized key)
 
    A stable system prompt (instructions and project rules) is cached on OpenRouter via `cache_control`.
    Working-tree state such as git status, diffs, and directory listings goes in the user message so

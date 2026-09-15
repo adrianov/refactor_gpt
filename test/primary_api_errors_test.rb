@@ -169,4 +169,80 @@ class TestPrimaryApiErrors < Minitest::Test
     assert_includes err, 'Network/resource error'
   end
 
+  def fallback_client
+    client = retrying_client
+    client.instance_variable_set(:@fallback, api_key: 'sk-or-v1-fallback',
+      api_base_url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-5.6-sol')
+    client.instance_variable_set(:@fell_back, false)
+    client.define_singleton_method(:build_ruby_llm_context) { :swapped }
+    client
+  end
+
+  def test_fallback_swaps_connection_and_retries_on_usage_limit
+    client = fallback_client
+    attempts = 0
+    _out, err = capture_io do
+      assert_equal :done, client.send(:translate_api_errors) {
+        attempts += 1
+        raise UsageLimitCompat::UsageLimitError.new(nil,
+          'Usage limit reached for 5 hour. Your limit will reset at 2026-09-14 23:16:44') if attempts == 1
+
+        :done
+      }
+    end
+    assert_equal 2, attempts
+    assert_equal 'sk-or-v1-fallback', client.instance_variable_get(:@api_key)
+    assert_equal 'https://openrouter.ai/api/v1', client.instance_variable_get(:@api_base_url)
+    assert_equal 'openai/gpt-5.6-sol', client.instance_variable_get(:@model)
+    assert_equal :swapped, client.instance_variable_get(:@context)
+    assert_includes err, 'retrying via'
+  end
+
+  def test_fallback_runs_once_then_exits_unrecoverably
+    client = fallback_client
+    attempts = 0
+    _out, err = capture_io do
+      assert_equal 1, assert_raises(SystemExit) {
+        client.send(:translate_api_errors) do
+          attempts += 1
+          raise RubyLLM::UnauthorizedError.new(nil, 'Invalid API key') if attempts == 1
+
+          raise UsageLimitCompat::UsageLimitError.new(nil,
+            'Usage limit reached for 5 hour. Your limit will reset at 2026-09-14 23:16:44')
+        end
+      }.status
+    end
+    assert_equal 2, attempts
+    assert_includes err, 'Unrecoverable provider usage limit'
+  end
+
+  def test_usage_limit_without_fallback_exits_without_retry
+    client = retrying_client
+    calls = []
+    _out, _err = capture_io do
+      assert_raises(SystemExit) {
+        client.send(:translate_api_errors) do
+          calls << :run
+          raise UsageLimitCompat::UsageLimitError.new(nil, 'usage limit reached')
+        end
+      }
+    end
+    assert_equal 1, calls.size
+  end
+
+  def test_fallback_covers_balance_exhaustion
+    client = fallback_client
+    attempts = 0
+    _out, err = capture_io do
+      assert_equal :done, client.send(:translate_api_errors) {
+        attempts += 1
+        raise RubyLLM::PaymentRequiredError.new(nil, 'Insufficient credits') if attempts == 1
+
+        :done
+      }
+    end
+    assert_equal 2, attempts
+    assert_includes err, 'retrying via'
+  end
+
 end
