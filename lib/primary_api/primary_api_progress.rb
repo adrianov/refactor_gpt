@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
+require 'oj'
 require 'ruby-progressbar'
 
 # Non-streaming requests give no byte feedback, so the bar advances at an estimated
-# speed of prompt bytes per second. The speed self-calibrates from each request's
-# duration (70% stored estimate, 30% measured) and persists across runs, keeping the
-# bar's 100% near the real completion time.
+# speed of prompt bytes per second. Generation speed differs per model, so each model
+# slug keeps its own calibrated speed: every request blends the stored estimate with
+# its measured pace (70% stored, 30% measured) and persists the result, keeping the
+# bar's 100% near the real completion time for whichever model runs.
 module PrimaryApiProgress
   MIN_ESTIMATE_BYTES = 6000
   DEFAULT_PROGRESS_SPEED = 300.0
@@ -14,18 +16,18 @@ module PrimaryApiProgress
   TICK_SECONDS = 0.1
 
   # Bundles the bar with its ticker thread so finish can stop the thread before
-  # completing the bar and recording the measured speed.
-  EstimatedBar = Struct.new(:bar, :thread, :started_at, :total_size, :speed) do
+  # completing the bar and recording the measured speed for this model.
+  EstimatedBar = Struct.new(:bar, :thread, :started_at, :total_size, :model, :speed) do
     def finish
       thread&.kill
       thread&.join
-      PrimaryApiProgress.stop_ticker(bar, started_at, total_size, speed)
+      PrimaryApiProgress.stop_ticker(bar, started_at, total_size, model, speed)
     end
   end
 
   module_function
 
-  def create(title:, estimate_bytes:)
+  def create(title:, estimate_bytes:, model:)
     bar = ProgressBar.create(
       title: title.to_s,
       total: [estimate_bytes.to_i, MIN_ESTIMATE_BYTES].max,
@@ -33,7 +35,9 @@ module PrimaryApiProgress
       starting_at: 0,
       length: 100
     )
-    handle = EstimatedBar.new(bar, nil, Process.clock_gettime(Process::CLOCK_MONOTONIC), bar.total, load_speed)
+    handle = EstimatedBar.new(
+      bar, nil, Process.clock_gettime(Process::CLOCK_MONOTONIC), bar.total, model, load_speed(model)
+    )
     handle.thread = Thread.new { run_ticker(handle) }
     handle
   end
@@ -58,35 +62,44 @@ module PrimaryApiProgress
     bar.total = progress + 1 if bar.total <= progress
   end
 
-  def stop_ticker(bar, started_at, total_size, speed)
+  def stop_ticker(bar, started_at, total_size, model, speed)
     bar.progress = bar.total
     bar.finish
-    learn_speed(started_at, total_size, speed)
+    learn_speed(started_at, total_size, model, speed)
   rescue StandardError
     nil
   end
 
-  def learn_speed(started_at, total_size, speed)
+  def learn_speed(started_at, total_size, model, speed)
     elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
     return unless elapsed.positive?
 
-    save_speed((speed * 0.7) + ((total_size / elapsed) * 0.3))
+    save_speed(model, (speed * 0.7) + ((total_size / elapsed) * 0.3))
   end
 
   def speed_file
     PROGRESS_SPEED_FILE
   end
 
-  def load_speed
-    speed = File.exist?(speed_file) ? File.read(speed_file).to_f : DEFAULT_PROGRESS_SPEED
+  def load_speed(model)
+    speed = read_speeds.fetch(model, DEFAULT_PROGRESS_SPEED)
     speed.positive? ? speed : DEFAULT_PROGRESS_SPEED
-  rescue SystemCallError
-    DEFAULT_PROGRESS_SPEED
   end
 
-  def save_speed(speed)
-    File.write(speed_file, speed.round(2).to_s)
+  def save_speed(model, speed)
+    speeds = read_speeds
+    speeds[model] = speed.round(2)
+    File.write(speed_file, Oj.dump(speeds))
   rescue SystemCallError
     nil
+  end
+
+  # Reads the persisted {model slug => speed} map; unreadable or non-map content
+  # (including the legacy bare-number format) starts every model from the default.
+  def read_speeds
+    parsed = Oj.load(File.exist?(speed_file) ? File.read(speed_file) : '')
+    parsed.is_a?(Hash) ? parsed.select { |_, speed| speed.is_a?(Numeric) } : {}
+  rescue SystemCallError, Oj::ParseError
+    {}
   end
 end

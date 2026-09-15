@@ -14,3 +14,9 @@ Feature: Estimated-speed progress bar
     When the next request's bar is shown
     Then it advances at a speed blended from the stored estimate and recent measurements
     And the stored estimate updates again when the request finishes
+
+  Scenario: Each model calibrates to its own pace
+    Given different models answer at different speeds
+    When a request runs against one of them
+    Then its bar advances at that model's own stored speed estimate
+    And finishing the request updates only that model's estimate, leaving other models' estimates untouched

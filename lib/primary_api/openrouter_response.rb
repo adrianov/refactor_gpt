@@ -20,9 +20,12 @@ module OpenrouterResponse
 
   # Requests complete without streaming; the estimated-speed bar gives feedback while
   # the blocking chat.complete runs. The bar is rebuilt on fallback retry, so every
-  # attempt gets its own bar and finish runs even when the attempt fails.
+  # attempt gets its own bar (keyed to that attempt's model) and finish runs even when
+  # the attempt fails.
   def complete_with_progress(chat, messages, title)
-    progress = PrimaryApiProgress.create(title: title, estimate_bytes: messages.to_s.bytesize)
+    progress = PrimaryApiProgress.create(
+      title: title, estimate_bytes: messages.to_s.bytesize, model: @model
+    )
     chat.complete
   ensure
     progress&.finish
