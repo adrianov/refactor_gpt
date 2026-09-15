@@ -2,7 +2,7 @@
 
 require "oj"
 
-# Completes OpenRouter requests and normalizes streamed or JSON responses.
+# Completes OpenRouter requests and normalizes JSON responses.
 module OpenrouterResponse
   private
 
@@ -10,7 +10,7 @@ module OpenrouterResponse
     message = translate_api_errors do
       complete_with_upstream_retries do
         chat = build_chat(messages, json: json)
-        title ? complete_streamed(chat, messages, title) : chat.complete
+        title ? complete_with_progress(chat, messages, title) : chat.complete
       end
     end
     answer = ensure_answer!(json_fallback(answer_from(message), json: json), message)
@@ -18,16 +18,14 @@ module OpenrouterResponse
     answer
   end
 
-  def complete_streamed(chat, messages, title)
-    bar = PrimaryApiProgress.create(title: title, estimate_bytes: messages.to_s.bytesize)
-    chat.complete do |chunk|
-      delta = chunk.content.to_s
-      next if delta.empty?
-
-      PrimaryApiProgress.record(bar, bar.progress + delta.bytesize)
-    end
+  # Requests complete without streaming; the estimated-speed bar gives feedback while
+  # the blocking chat.complete runs. The bar is rebuilt on fallback retry, so every
+  # attempt gets its own bar and finish runs even when the attempt fails.
+  def complete_with_progress(chat, messages, title)
+    progress = PrimaryApiProgress.create(title: title, estimate_bytes: messages.to_s.bytesize)
+    chat.complete
   ensure
-    PrimaryApiProgress.finish(bar)
+    progress&.finish
   end
 
   def answer_from(message)

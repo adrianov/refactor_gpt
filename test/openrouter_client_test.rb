@@ -103,51 +103,6 @@ client.send(:answer_from, assistant_message(content: nil, thinking_text: 'from t
       Class.new(OpenrouterClient) { def load_env_vars(*); {}; end }.new(api_key: 'test-key').model
   end
 
-  def env_with_status(status)
-    Object.new.tap { |env| env.define_singleton_method(:status) { status } }
-  end
-
-  def test_streaming_shim_routes_two_arg_on_data_to_chunk_path
-    seen = []
-    failed = []
-    handler = TyphoeusStreamingCompat.v2_on_data(->(chunk, _env) { seen << chunk }, ->(chunk, _env) { failed << chunk })
-    handler.call('data: {"id":1}', 13)
-    assert_equal ['data: {"id":1}'], seen
-    assert_empty failed
-  end
-
-  def test_streaming_shim_keeps_three_arg_behavior
-    ok = []
-    failed = []
-    handler = TyphoeusStreamingCompat.v2_on_data(->(chunk, _env) { ok << chunk }, ->(chunk, _env) { failed << chunk })
-    handler.call('a', 1, env_with_status(200))
-    handler.call('b', 2, env_with_status(500))
-    assert_equal ['a'], ok
-    assert_equal ['b'], failed
-  end
-
-  def streaming_handler(&on_chunk)
-    UsageLimitCompat.apply
-    TyphoeusStreamingCompat.apply
-    streamer = Object.new.extend(RubyLLM::Streaming)
-    streamer.define_singleton_method(:parse_error) { |response| response.body.to_s }
-    streamer.send(:build_on_data_handler, &on_chunk)
-  end
-  def test_streaming_two_arg_error_chunk_classifies_usage_limit
-    seen = []
-    assert_includes assert_raises(UsageLimitCompat::UsageLimitError) {
-      streaming_handler { |chunk| seen << chunk }
-        .call('{"error":{"message":"Usage limit reached for 5 hour. Your limit will reset at 2026-09-15 18:00:07"}}')
-    }.message, 'Usage limit reached'
-    assert_empty seen
-  end
-
-  def test_streaming_two_arg_success_chunks_still_parse
-    seen = []
-    streaming_handler { |chunk| seen << chunk }.call("data: {\"id\":1}\n\n", 0)
-    assert_equal({ 'id' => 1 }, seen.first)
-  end
-
   def test_fallback_connection_loads_from_env
     fallback = Class.new(OpenrouterClient) do
       def load_env_vars(*)

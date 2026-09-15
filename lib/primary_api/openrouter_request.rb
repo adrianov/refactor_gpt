@@ -9,11 +9,7 @@ module OpenrouterRequest
   def build_ruby_llm_context
     proxy_url = PrimaryApiProxy.resolve(nil, load_env_vars)
     socks = proxy_url.to_s.match?(%r{\Asocks5://}i)
-    if socks
-      require "faraday/typhoeus"
-      require_relative "streaming_compat"
-      TyphoeusStreamingCompat.apply
-    end
+    require "faraday/typhoeus" if socks
     require_relative "usage_limit_compat"
     UsageLimitCompat.apply
     RubyLLM.context { |config| apply_context_config(config, proxy_url, socks) }
