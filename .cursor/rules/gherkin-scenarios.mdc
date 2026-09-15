@@ -1,0 +1,19 @@
+---
+description: Describe scenario features in plain Gherkin under doc/features/*.feature; documentation only, no runner
+alwaysApply: true
+---
+
+# Scenario Features in Gherkin
+
+- Every user-facing feature — a behavior a user or calling tool can observe — is described in plain Gherkin in `doc/features/<feature-name>.feature` (kebab-case, one file per feature area).
+- `.feature` files are documentation and the source of truth for intended behavior. The project deliberately has NO Gherkin runner (no Cucumber, turnip, spinach, or custom parser wired into the test suite), and none may be added. Executable verification stays in minitest under `test/`.
+- Create or update the `.feature` file in the same change that builds or alters the behavior; delete scenarios whose behavior is gone.
+
+## Format
+
+- `Feature:` — one line naming the capability and who benefits, followed by a short free-text intent paragraph.
+- `Background:` — only setup shared by every scenario in the file; nothing else.
+- `Scenario:` — one observable behavior per scenario. Split compound or overlapping scenarios instead of stacking outcomes.
+- Steps use `Given` for initial state, `When` for the triggering action, `Then` for the observable outcome, with `And`/`But` as continuations. Never swap roles mid-scenario.
+- Steps stay declarative: name user-visible state and actions, never implementation details (class names, method names, env var names, protocol internals).
+- Repeated data variations use `Scenario Outline:` with an `Examples:` table of concrete values — no free-form placeholders in prose steps.
