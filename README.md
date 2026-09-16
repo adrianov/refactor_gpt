@@ -43,7 +43,7 @@ Ruby CLI tools that use large language models for refactoring, code search, shel
    - `BASE_URL` (default `https://openrouter.ai/api/v1`)
    - `MODEL` (default `stealth/ox-alpha`)
    - `REQUEST_TIMEOUT` (default `600` seconds)
-   - `REASONING_EFFORT` (default `low`): reasoning effort for the git-commit planner model call;
+   - `REASONING_EFFORT` (default `medium`): reasoning effort for the git-commit planner model call;
      possible values `low`, `medium`, `high`
    - `API_KEY_2` / `BASE_URL_2` / `MODEL_2` (optional fallback connection, retried once when the
      primary fails unrecoverably: usage limit, exhausted balance, or unauthorized key)

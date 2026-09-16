@@ -9,7 +9,7 @@ class CommitPlanClient
   # Single ceiling for commit-plan user message (static sections + one unified diff body); MR uses numstat only.
   COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT = 200 * 1024
 
-  # Resolves REASONING_EFFORT from the app .env (file wins over process env); defaults to low.
+  # Resolves REASONING_EFFORT from the app .env (file wins over process env); defaults to medium.
   def self.reasoning_effort(env = ENV.to_h.merge(Utility.load_env_vars))
     value = env['REASONING_EFFORT'].to_s.strip.downcase
     return DEFAULT_REASONING_EFFORT if value.empty?
@@ -19,9 +19,9 @@ class CommitPlanClient
     exit 1
   end
 
-  # Commit planning is a constrained JSON task; low reasoning keeps it fast.
+  # Commit planning is a constrained JSON task; medium balances depth against speed.
   REASONING_EFFORT_VALUES = %w[low medium high].freeze
-  DEFAULT_REASONING_EFFORT = 'low'
+  DEFAULT_REASONING_EFFORT = 'medium'
   REASONING = { effort: reasoning_effort }.freeze
 
   USER_CONTENT_SECTIONS = [

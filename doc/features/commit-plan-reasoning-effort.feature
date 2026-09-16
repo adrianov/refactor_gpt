@@ -6,7 +6,7 @@ Feature: Configurable reasoning effort for commit planning
   Scenario: Default keeps planning fast
     Given the user has not configured a reasoning effort
     When the tool plans commits for the working tree
-    Then the planner model is asked for low reasoning effort
+    Then the planner model is asked for medium reasoning effort
 
   Scenario: User-selected effort is honored
     Given the user configured high reasoning effort in the app settings
@@ -22,4 +22,4 @@ Feature: Configurable reasoning effort for commit planning
   Scenario: Blank effort value behaves as unconfigured
     Given the app settings contain an empty reasoning effort entry
     When the tool plans commits for the working tree
-    Then the planner model is asked for low reasoning effort
+    Then the planner model is asked for medium reasoning effort

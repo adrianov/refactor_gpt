@@ -4,12 +4,12 @@ require "minitest/autorun"
 require_relative "../lib/loader"
 
 class TestCommitPlanClient < Minitest::Test
-  def test_missing_effort_falls_back_to_low
-    assert_equal "low", CommitPlanClient.send(:reasoning_effort, {})
+  def test_missing_effort_falls_back_to_medium
+    assert_equal "medium", CommitPlanClient.send(:reasoning_effort, {})
   end
 
-  def test_blank_effort_falls_back_to_low
-    assert_equal "low", CommitPlanClient.send(:reasoning_effort, "REASONING_EFFORT" => "   ")
+  def test_blank_effort_falls_back_to_medium
+    assert_equal "medium", CommitPlanClient.send(:reasoning_effort, "REASONING_EFFORT" => "   ")
   end
 
   def test_supported_effort_is_normalized_to_lowercase
