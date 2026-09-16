@@ -9,8 +9,20 @@ class CommitPlanClient
   # Single ceiling for commit-plan user message (static sections + one unified diff body); MR uses numstat only.
   COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT = 200 * 1024
 
+  # Resolves REASONING_EFFORT from the app .env (file wins over process env); defaults to low.
+  def self.reasoning_effort(env = ENV.to_h.merge(Utility.load_env_vars))
+    value = env['REASONING_EFFORT'].to_s.strip.downcase
+    return DEFAULT_REASONING_EFFORT if value.empty?
+    return value if REASONING_EFFORT_VALUES.include?(value)
+
+    warn("Invalid REASONING_EFFORT: #{value.inspect}; expected one of #{REASONING_EFFORT_VALUES.join(', ')}.")
+    exit 1
+  end
+
   # Commit planning is a constrained JSON task; low reasoning keeps it fast.
-  REASONING = { effort: 'low' }.freeze
+  REASONING_EFFORT_VALUES = %w[low medium high].freeze
+  DEFAULT_REASONING_EFFORT = 'low'
+  REASONING = { effort: reasoning_effort }.freeze
 
   USER_CONTENT_SECTIONS = [
     {
@@ -89,11 +101,12 @@ class CommitPlanClient
     end
   end
 
-  private_class_method :sum_static_section_lengths, :sum_diff_header_lengths
+  private_class_method :reasoning_effort, :sum_static_section_lengths, :sum_diff_header_lengths
 
   def initialize(model: nil, debug: false, progress: true)
-    title = progress ? "Planning".cyan : nil
-    @client = OpenrouterClient.new(model: model, debug: debug, progress_title: title, reasoning: REASONING)
+    @client = OpenrouterClient.new(
+      model: model, debug: debug, progress_title: progress ? 'Planning'.cyan : nil, reasoning: REASONING
+    )
   end
 
   def ask(prompts, json: false)
