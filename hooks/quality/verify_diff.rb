@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative '../../lib/branch_point'
+
 module Quality
   # Histogram diff for the VERIFY follow-up.
   # Every main module that differs from the branch point is included:
@@ -7,8 +9,6 @@ module Quality
   module VerifyDiff
     # Always pass all four; never drop -w, -W, --histogram, or --no-prefix.
     VERIFY_DIFF_OPTS = %w[-w -W --histogram --no-prefix].freeze
-    # First ref that exists wins. origin/HEAD is the remote's default branch.
-    BASE_REFS = %w[origin/HEAD origin/master origin/main master main].freeze
 
     def verify_diff_body(files)
       rows = branch_rows(files)
@@ -83,39 +83,7 @@ module Quality
     end
 
     def branch_point(root)
-      (@branch_points ||= {})[root] ||= resolve_branch_point(root)
-    end
-
-    # [rev, label]. Label is HEAD when this branch has not diverged, so the
-    # attached text does not claim a merge-base that is just the latest commit.
-    def resolve_branch_point(root)
-      BASE_REFS.each do |ref|
-        next unless ref_commit?(root, ref)
-
-        sha = merge_base(root, ref)
-        next unless sha
-        return [sha, 'HEAD'] if sha == git_head(root)
-
-        return [sha, "merge-base with #{ref_name(root, ref)} (#{sha[0, 12]})"]
-      end
-      ['HEAD', 'HEAD']
-    end
-
-    def ref_commit?(root, name)
-      _, _, code = capture('git', '-C', root, 'rev-parse', '-q', '--verify', "#{name}^{commit}")
-      code.zero?
-    end
-
-    def merge_base(root, ref)
-      out, _, code = capture('git', '-C', root, 'merge-base', ref, 'HEAD')
-      out.strip if code.zero? && !out.strip.empty?
-    end
-
-    def ref_name(root, ref)
-      return ref unless ref == 'origin/HEAD'
-
-      out, _, code = capture('git', '-C', root, 'rev-parse', '--abbrev-ref', 'origin/HEAD')
-      code.zero? && !out.strip.empty? ? out.strip : ref
+      (@branch_points ||= {})[root] ||= BranchPoint.resolve(root)
     end
 
     # Mirror Cursor's Hq() serializer: <git_diff> + indented intro + body.
