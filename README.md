@@ -164,6 +164,7 @@ Features:
 - `--file PATH`: repeatable. Restrict planning and the commit to this pathspec. Existing files or directories, deleted files git still lists, paths that contain `/`, and arguments after `--` count as well. A matching rename (both names) and deletions in the same directory or the parent directory are included; other dirty files stay unstaged.
 - `--watch`: re-plan every 30s when analyzed files change
 - Ctrl-C during Planning stops the request and exits
+- Analyzes the net diff since the branch point (the default branch), including commits already on the branch and uncommitted edits. New commits still include only uncommitted files
 - `--commit auto|yes|no`: default `auto` (flag may be omitted). `auto` — commit if there are no warnings, else ask. `yes` — commit. `no` — skip commit and push.
 - `--auto [level]`: quiet mode; commits when every warning is ≤ `level`% (default 50; also `--auto=75`). Prints warnings and the commit/push result only — omits diff, RuboCop hint, progress bar, impact, and sounds. Without `--push`, does not ask to push. `--commit yes|no` overrides whether to commit.
 - `--push`: after a successful commit, push without asking. Ignored if nothing was committed.

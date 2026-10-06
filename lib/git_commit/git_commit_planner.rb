@@ -19,9 +19,8 @@ class GitCommitPlanner
     return :no_changes if status.nil?
 
     context = plan_context(status)
-    diff = uncommitted_diff(context[:budgets])
     @capture.show_if_needed(show_diff)
-    finalize_plan(request_plan(status, context, diff), status)
+    finalize_plan(request_plan(status, context), status)
   end
 
   private
@@ -75,33 +74,39 @@ class GitCommitPlanner
   end
 
   def plan_context(status)
-    mr_numstat = @capture.fetch_mr_numstat
+    rev = @capture.branch_rev
     recent_commits = Utility.utf8_safe(`git log -10 --oneline 2>/dev/null`).strip
     recent_commands = RecentShellCommands.last_few(5)
+    room = diff_budgets(status, recent_commits, recent_commands)[:uncommitted]
+    uncommitted = uncommitted_diff(room)
     {
-      mr_numstat: mr_numstat,
+      branch_diff: @capture.compact_branch_diff(rev, room - uncommitted.length),
+      uncommitted_diff: uncommitted,
       recent_commits: recent_commits,
-      recent_commands: recent_commands,
-      budgets: CommitPlanClient.diff_body_budgets_chars(
-        cli_hint: @hint,
-        status_output: status,
-        recent_commits: recent_commits,
-        recent_commands: recent_commands,
-        mr_numstat: mr_numstat
-      )
+      recent_commands: recent_commands
     }
   end
 
-  def uncommitted_diff(budgets)
-    diff = Utility.utf8_safe(@capture.compact_uncommitted_diff(budgets[:uncommitted]))
+  def diff_budgets(status, recent_commits, recent_commands)
+    CommitPlanClient.diff_body_budgets_chars(
+      cli_hint: @hint,
+      status_output: status,
+      recent_commits: recent_commits,
+      recent_commands: recent_commands
+    )
+  end
+
+  def uncommitted_diff(limit)
+    diff = Utility.utf8_safe(@capture.compact_uncommitted_diff(limit))
     diff = Utility.utf8_safe(@capture.fallback_uncommitted_diff) if diff.strip.empty?
     @capture.abort_without_uncommitted_diff if diff.nil?
     diff
   end
 
-  def request_plan(status, context, diff)
+  def request_plan(status, context)
     CommitPlanClient.new(debug: @debug, progress: !@quiet).commit_plan(
-      status, context[:mr_numstat], diff, @hint, context[:recent_commits], context[:recent_commands]
+      status, context[:branch_diff], context[:uncommitted_diff], @hint,
+      context[:recent_commits], context[:recent_commands]
     )
   end
 

@@ -32,23 +32,7 @@ class UtilityUtf8SafeTest < Minitest::Test
 
   def test_commit_plan_builds_utf8_payload_from_ascii_tagged_git_bits
     with_us_ascii_locale do
-      status = ascii_tagged("## main\n M file.rb\n")
-      commits = ascii_tagged("a75b598 Recall — Москва\n")
-      diff = ascii_tagged("+puts 'hello'\n")
-      numstat = ascii_tagged("1\t2\tpath.rb\n")
-      budgets = CommitPlanClient.diff_body_budgets_chars(
-        cli_hint: "",
-        status_output: status,
-        recent_commits: Utility.utf8_safe(commits).strip,
-        recent_commands: "",
-        mr_numstat: numstat
-      )
-      assert budgets[:uncommitted].positive?
-
-      content = CommitPlanClient.allocate.send(
-        :build_user_content, status, numstat, diff, "",
-        Utility.utf8_safe(commits).strip, ""
-      )
+      content = ascii_plan_content
       assert_equal Encoding::UTF_8, content.encoding
       assert content.valid_encoding?
       assert_includes content, "Москва"
@@ -57,6 +41,17 @@ class UtilityUtf8SafeTest < Minitest::Test
   end
 
   private
+
+  def ascii_plan_content
+    status = ascii_tagged("## main\n M file.rb\n")
+    commits = Utility.utf8_safe(ascii_tagged("a75b598 Recall — Москва\n")).strip
+    assert CommitPlanClient.diff_body_budgets_chars(
+      cli_hint: "", status_output: status, recent_commits: commits, recent_commands: ""
+    )[:uncommitted].positive?
+    CommitPlanClient.allocate.send(
+      :build_user_content, status, ascii_tagged("1\t2\tpath.rb\n"), ascii_tagged("+puts 'hello'\n"), "", commits, ""
+    )
+  end
 
   def ascii_tagged(str)
     str.dup.force_encoding(Encoding::US_ASCII)

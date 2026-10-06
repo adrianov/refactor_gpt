@@ -6,7 +6,7 @@ require "colorize"
 class CommitPlanClient
   include AgentsFileHandler
 
-  # Single ceiling for commit-plan user message (static sections + one unified diff body); MR uses numstat only.
+  # Single ceiling for the commit-plan user message (static sections plus both diff bodies).
   COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT = 200 * 1024
 
   # Resolves REASONING_EFFORT from the app .env (file wins over process env); defaults to medium.
@@ -44,12 +44,11 @@ class CommitPlanClient
       key: :uncommitted_diff_output
     },
     {
-      type: :static,
-      key: :mr_numstat_output,
-      optional: true,
-      template: "(2) Already on branch vs origin/HEAD — context only (not for commit message wording). " \
-                "Per-file insert/delete counts from `git diff --numstat -w origin/HEAD...` " \
-                "(no unified patch for already-committed branch work):\n\n%s\n"
+      type: :diff,
+      label: "(2) Net changes since the branch point — code assessment " \
+             "(commits on this branch and uncommitted edits). " \
+             "Not a source of new commit files or commit-message topics:",
+      key: :branch_diff_output
     },
     {
       type: :static,
@@ -66,20 +65,18 @@ class CommitPlanClient
     }
   ].freeze
 
-  # Single payload ceiling: uncommitted diff budget is what remains after all static sections (incl. MR numstat).
-  def self.diff_body_budgets_chars(cli_hint:, status_output:, recent_commits:, recent_commands:, mr_numstat: "")
+  # Room left for diff bodies after static sections and both diff headers.
+  def self.diff_body_budgets_chars(cli_hint:, status_output:, recent_commits:, recent_commands:)
     remaining = COMMIT_PLAN_USER_PAYLOAD_CHAR_LIMIT - sum_static_section_lengths(
       utf8_plan_data(
         cli_hint: cli_hint,
         status_output: status_output,
         recent_commits: recent_commits,
-        recent_commands: recent_commands,
-        mr_numstat_output: mr_numstat
+        recent_commands: recent_commands
       )
     ) - sum_diff_header_lengths -
       [USER_CONTENT_SECTIONS.size - 1, 0].max
-    remaining = remaining.positive? ? remaining : 0
-    {uncommitted: remaining}
+    {uncommitted: remaining.positive? ? remaining : 0}
   end
 
   def self.utf8_plan_data(**fields)
@@ -113,12 +110,12 @@ class CommitPlanClient
     @client.ask(prompts, json: json)
   end
 
-  def commit_plan(status_output, mr_numstat_output, uncommitted_diff_output, cli_hint, recent_commits,
+  def commit_plan(status_output, branch_diff_output, uncommitted_diff_output, cli_hint, recent_commits,
     recent_commands)
     messages = [
       {role: "system", content: system_instruction},
       {role: "user",
-       content: build_user_content(status_output, mr_numstat_output, uncommitted_diff_output, cli_hint,
+       content: build_user_content(status_output, branch_diff_output, uncommitted_diff_output, cli_hint,
          recent_commits, recent_commands)}
     ]
     payload_size_kb = CommitPlanResponse.payload_size_kb(@client.model, messages)
@@ -186,11 +183,11 @@ class CommitPlanClient
     current_size_chars
   end
 
-  def build_user_content(status_output, mr_numstat_output, uncommitted_diff_output, cli_hint, recent_commits,
+  def build_user_content(status_output, branch_diff_output, uncommitted_diff_output, cli_hint, recent_commits,
     recent_commands)
     data = self.class.utf8_plan_data(
       status_output: status_output,
-      mr_numstat_output: mr_numstat_output,
+      branch_diff_output: branch_diff_output,
       uncommitted_diff_output: uncommitted_diff_output,
       cli_hint: cli_hint,
       recent_commits: recent_commits,

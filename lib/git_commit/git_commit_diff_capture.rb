@@ -4,9 +4,18 @@ require "open3"
 require "shellwords"
 require "colorize"
 
-# Captures uncommitted unified diffs and MR numstat for git_commit_gpt planning.
+# Captures the uncommitted diff and the net diff since the branch point for planning.
 class GitCommitDiffCapture
   DIFF_PAYLOAD_NOTE_RESERVE_CHARS = 2048
+  UNCOMMITTED_OMITTED_NOTE = <<~NOTE.rstrip
+    Unified diff omitted under size limits for these paths (insert/delete counts remain in the numstat block above).
+    Each path is still an uncommitted change: assign it to exactly one commit with related files.
+    Use git status, filename, and numstat when patch text is absent.
+  NOTE
+  BRANCH_OMITTED_NOTE = <<~NOTE.rstrip
+    Unified diff omitted under size limits for these paths (insert/delete counts remain in the numstat block above).
+    Judge these paths from the numstat counts. Paths absent from git status are already committed.
+  NOTE
   # User review: drop only -W when a path's function-context diff is this long or longer.
   REVIEW_DIFF_MAX_LINES = 500
   REVIEW_DIFF_SHORT_OPTS = (GitCommitDiffCompaction::FULL_OPTS - %w[-W]).freeze
@@ -21,26 +30,18 @@ class GitCommitDiffCapture
     show_uncommitted_diff if show_diff
   end
 
-  def fetch_mr_numstat
-    return "" unless system("git rev-parse -q --verify origin/HEAD >#{File::NULL} 2>&1")
+  def branch_rev
+    BranchPoint.rev
+  end
 
-    out, _, st = Open3.capture3("git", "diff", "--numstat", "-w", "origin/HEAD...", *pathspec_args)
-    return "" unless st.success?
+  def compact_branch_diff(rev, limit_chars)
+    return '' if rev.nil? || limit_chars <= 0
 
-    Utility.utf8_safe(out).strip
+    compact_against(rev, limit_chars, BRANCH_OMITTED_NOTE)
   end
 
   def compact_uncommitted_diff(limit_chars)
-    result = GitCommitDiffCompaction.build(
-      ref_spec: worktree_uncommitted_ancestor,
-      limit_chars: [limit_chars - DIFF_PAYLOAD_NOTE_RESERVE_CHARS, 0].max,
-      pathspecs: @pathspecs
-    )
-    note = format_budget_omitted_paths_note(result.budget_omitted_paths, DIFF_PAYLOAD_NOTE_RESERVE_CHARS)
-    body = Utility.utf8_safe(result.body)
-    return body if note.empty?
-
-    Utility.utf8_join("\n\n", body, note)
+    compact_against(worktree_uncommitted_ancestor, limit_chars, UNCOMMITTED_OMITTED_NOTE)
   end
 
   def fallback_uncommitted_diff
@@ -129,17 +130,24 @@ class GitCommitDiffCapture
     system(*cmd)
   end
 
-  def format_budget_omitted_paths_note(paths, max_chars)
+  def compact_against(ref, limit_chars, omitted_note)
+    result = GitCommitDiffCompaction.build(
+      ref_spec: ref,
+      limit_chars: [limit_chars - DIFF_PAYLOAD_NOTE_RESERVE_CHARS, 0].max,
+      pathspecs: @pathspecs
+    )
+    note = format_budget_omitted_paths_note(result.budget_omitted_paths, omitted_note, DIFF_PAYLOAD_NOTE_RESERVE_CHARS)
+    body = Utility.utf8_safe(result.body)
+    return body if note.empty?
+
+    Utility.utf8_join("\n\n", body, note)
+  end
+
+  def format_budget_omitted_paths_note(paths, omitted_note, max_chars)
     return "" if paths.empty? || max_chars < 64
 
     uniq_sorted = paths.map { |p| Utility.utf8_safe(p) }.uniq.sort
-    header = <<~NOTE.rstrip
-      ---
-      Unified diff omitted under size limits for these paths (insert/delete counts remain in the numstat block above).
-      Each path is still an uncommitted change: assign it to exactly one commit with related files, and include it in
-      quality_assessment and warnings using git status, filename, and numstat when patch text is absent.
-    NOTE
-    text = Utility.utf8_join("\n", header, Utility.utf8_join("\n", uniq_sorted))
+    text = Utility.utf8_join("\n", Utility.utf8_join("\n", '---', omitted_note), Utility.utf8_join("\n", uniq_sorted))
     return text if text.length <= max_chars
 
     Utility.utf8_join("\n", text[0, [max_chars - 48, 0].max], "… (#{uniq_sorted.size} paths total)")
