@@ -3,14 +3,14 @@
 require "oj"
 
 # Completes OpenRouter requests and normalizes JSON responses.
+# The HTTP read runs on a side thread so Ctrl-C on the main thread can exit.
 module OpenrouterResponse
   private
 
   def run(messages, json:, title:)
     message = translate_api_errors do
       complete_with_upstream_retries do
-        chat = build_chat(messages, json: json)
-        title ? complete_with_progress(chat, messages, title) : chat.complete
+        complete_chat(build_chat(messages, json: json), messages, title)
       end
     end
     answer = ensure_answer!(json_fallback(answer_from(message), json: json), message)
@@ -19,15 +19,35 @@ module OpenrouterResponse
   end
 
   # Requests complete without streaming; the estimated-speed bar gives feedback while
-  # the blocking chat.complete runs. The bar is rebuilt on fallback retry, so every
-  # attempt gets its own bar (keyed to that attempt's model) and finish runs even when
-  # the attempt fails.
-  def complete_with_progress(chat, messages, title)
-    progress = PrimaryApiProgress.create(
-      title: title, estimate_bytes: messages.to_s.bytesize, model: @model
-    )
-    chat.complete
+  # chat.complete runs. The read sits in OpenSSL or curl, which does not return on
+  # SIGINT, so the call runs on a side thread and the main thread waits in Ruby.
+  # Ctrl-C then raises here and the process exits. The bar is rebuilt on fallback
+  # retry, so every attempt gets its own bar and finish runs even when the attempt fails.
+  def complete_chat(chat, messages, title)
+    progress = progress_for(messages, title)
+    request = Thread.new { chat.complete }
+    request.report_on_exception = false
+    interruptible_result(request, progress)
   ensure
+    finish_request(request, progress)
+  end
+
+  def progress_for(messages, title)
+    return unless title
+
+    PrimaryApiProgress.create(title: title, estimate_bytes: messages.to_s.bytesize, model: @model)
+  end
+
+  def interruptible_result(request, progress)
+    PrimaryApiProgress.await(request)
+  rescue Interrupt
+    finish_request(request, progress)
+    warn ''
+    exit!(SignalHandler::EXIT_SIGINT)
+  end
+
+  def finish_request(request, progress)
+    request&.kill if request&.alive?
     progress&.finish
   end
 

@@ -26,6 +26,21 @@ class TestPrimaryApiProgress < Minitest::Test
     handle.finish
   end
 
+  def test_await_returns_the_request_value
+    assert_equal :done, PrimaryApiProgress.await(Thread.new { :done })
+  end
+
+  def test_interrupt_during_await_exits
+    pid = fork_blocked_request
+    watchdog = kill_later(pid)
+    sleep 0.2
+    Process.kill('INT', pid)
+    _, status = Process.wait2(pid)
+    assert_equal SignalHandler::EXIT_SIGINT, status.exitstatus
+  ensure
+    watchdog&.kill
+  end
+
   def test_bar_advances_by_estimated_speed
     Dir.mktmpdir do |dir|
       with_speed_file(File.join(dir, 'speed')) do
@@ -103,6 +118,27 @@ class TestPrimaryApiProgress < Minitest::Test
       with_speed_file(path) do
         assert_equal 300.0, PrimaryApiProgress.load_speed('glm-5.3')
       end
+    end
+  end
+
+  private
+
+  def fork_blocked_request
+    fork do
+      $stderr.reopen(File::NULL)
+      $stdout.reopen(File::NULL)
+      request = Thread.new { sleep }
+      request.report_on_exception = false
+      Object.new.extend(OpenrouterResponse).send(:interruptible_result, request, nil)
+    end
+  end
+
+  def kill_later(pid)
+    Thread.new do
+      sleep 3
+      Process.kill('KILL', pid)
+    rescue StandardError
+      nil
     end
   end
 end

@@ -27,6 +27,12 @@ module PrimaryApiProgress
 
   module_function
 
+  # Main-thread wait. join is interruptible, unlike the HTTP read on the side thread.
+  def await(thread)
+    nil until thread.join(TICK_SECONDS)
+    thread.value
+  end
+
   def create(title:, estimate_bytes:, model:)
     bar = ProgressBar.create(
       title: title.to_s,

@@ -3,6 +3,11 @@ Feature: Estimated-speed progress bar
   alive and roughly how far along it should be, so long planning or review waits feel
   accountable instead of silent.
 
+  Scenario: Interrupt during the wait stops the tool
+    Given a request is waiting on a model response
+    When the user interrupts the wait
+    Then the tool exits
+
   Scenario: Bar advances while the response is pending
     Given a request is sent with a progress label
     When the response has not arrived yet
