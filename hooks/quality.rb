@@ -15,8 +15,12 @@
 #    scan when `.cursor/rules/rspec-no-def.mdc` is present. Failures retry this
 #    stage after the agent fixes them.
 # 3. Review: completion check and scatter (once per cycle; reset if formal
-#    complains). Re-emit is skipped when the edited-module count is unchanged
-#    since the last scatter. schema.rb: once per cycle; own-repo remotes exempt.
+#    complains). The check attaches the histogram diff from the branch point
+#    (merge-base with origin/HEAD, else origin/master, origin/main, master,
+#    main; else HEAD) for every main module changed since that point,
+#    committed or uncommitted.
+#    Re-emit is skipped when the edited-module count is unchanged since the
+#    last scatter. schema.rb: once per cycle; own-repo remotes exempt.
 # 4. Document: wording for new .md files only, once, right before commit.
 #    Edits to existing .md skip this stage. Markdown-only edits continue to
 #    commit. A full cycle restart can reach this stage again.

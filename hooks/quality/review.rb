@@ -42,8 +42,8 @@ module Quality
       return nil if stable_scatter?(files)
 
       set_review_flag('verify')
-      diff = verify_histogram_diff(files)
-      diff.empty? ? VERIFY : "#{VERIFY}\n\n#{git_diff_attach(diff)}"
+      body = verify_diff_body(files)
+      body ? "#{VERIFY}\n\n#{body}" : VERIFY
     end
     def scatter_part(files)
       n = module_edit_count(files)
