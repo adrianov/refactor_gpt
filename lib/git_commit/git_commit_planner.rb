@@ -77,10 +77,10 @@ class GitCommitPlanner
     rev = @capture.branch_rev
     recent_commits = Utility.utf8_safe(`git log -10 --oneline 2>/dev/null`).strip
     recent_commands = RecentShellCommands.last_few(5)
-    room = diff_budgets(status, recent_commits, recent_commands)[:uncommitted]
-    uncommitted = uncommitted_diff(room)
+    diffs = diff_budgets(status, recent_commits, recent_commands)[:diffs]
+    uncommitted = uncommitted_diff(diffs)
     {
-      branch_diff: @capture.compact_branch_diff(rev, room - uncommitted.length),
+      branch_diff: @capture.compact_branch_diff(rev, diffs - uncommitted.length),
       uncommitted_diff: uncommitted,
       recent_commits: recent_commits,
       recent_commands: recent_commands

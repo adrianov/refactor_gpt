@@ -47,7 +47,7 @@ class UtilityUtf8SafeTest < Minitest::Test
     commits = Utility.utf8_safe(ascii_tagged("a75b598 Recall — Москва\n")).strip
     assert CommitPlanClient.diff_body_budgets_chars(
       cli_hint: "", status_output: status, recent_commits: commits, recent_commands: ""
-    )[:uncommitted].positive?
+    )[:diffs].positive?
     CommitPlanClient.allocate.send(
       :build_user_content, status, ascii_tagged("1\t2\tpath.rb\n"), ascii_tagged("+puts 'hello'\n"), "", commits, ""
     )

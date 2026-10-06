@@ -76,7 +76,7 @@ class CommitPlanClient
       )
     ) - sum_diff_header_lengths -
       [USER_CONTENT_SECTIONS.size - 1, 0].max
-    {uncommitted: remaining.positive? ? remaining : 0}
+    {diffs: remaining.positive? ? remaining : 0}
   end
 
   def self.utf8_plan_data(**fields)
