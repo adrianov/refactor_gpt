@@ -79,13 +79,9 @@ class TestGitCommitRebase < Minitest::Test
   end
 
   def test_warns_when_fetch_fails
-    in_repo("master") do
-      write_commit("a.rb", "a\n")
-      system("git", "remote", "add", "origin", File.join(Dir.pwd, "missing.git"), exception: true)
-      result, output = run_rebase
-
-      assert_nil result
-      assert_match(/stale remote-tracking refs/, output)
+    Dir.mktmpdir do |dir|
+      prepare_unreachable_stale_clone(dir)
+      Dir.chdir(File.join(dir, "clone")) { assert_stale_fetch_rebase }
     end
   end
 
@@ -94,5 +90,27 @@ class TestGitCommitRebase < Minitest::Test
       prepare_stale_clone(dir)
       Dir.chdir(File.join(dir, "clone")) { assert_fetched_rebase }
     end
+  end
+
+  private
+
+  def prepare_unreachable_stale_clone(dir)
+    prepare_stale_clone(dir)
+    clone = File.join(dir, "clone")
+    Dir.chdir(clone) { system("git", "fetch", "-q", "origin", exception: true) }
+    push_to_origin(File.join(dir, "origin.git"), "d.rb", "d\n")
+    system("git", "-C", clone, "remote", "set-url", "origin", File.join(dir, "missing.git"), exception: true)
+  end
+
+  def assert_stale_fetch_rebase
+    stale = sha("origin/master")
+    result, output = run_rebase
+
+    assert_match(/stale remote-tracking refs/, output)
+    assert_equal stale, sha("origin/master")
+    assert_equal stale, sha(result)
+    assert_equal stale, sha("HEAD^")
+    assert_equal "b\n", File.read("b.rb")
+    refute File.exist?("d.rb")
   end
 end
