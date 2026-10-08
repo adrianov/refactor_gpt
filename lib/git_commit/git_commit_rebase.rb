@@ -47,7 +47,9 @@ class GitCommitRebase
     return unless remote
 
     puts "Running: git fetch #{remote}".green
-    system("git", "fetch", "--quiet", remote)
+    return if system("git", "fetch", "--quiet", remote)
+
+    warn "Fetch failed; continuing with stale remote-tracking refs.".yellow
   end
 
   def moved_base
