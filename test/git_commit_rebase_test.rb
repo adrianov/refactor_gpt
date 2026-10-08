@@ -78,7 +78,7 @@ class TestGitCommitRebase < Minitest::Test
     end
   end
 
-  def test_warns_when_fetch_fails
+  def test_rebases_onto_stale_remote_refs_when_fetch_fails
     Dir.mktmpdir do |dir|
       prepare_unreachable_stale_clone(dir)
       Dir.chdir(File.join(dir, "clone")) { assert_stale_fetch_rebase }
