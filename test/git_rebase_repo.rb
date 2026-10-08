@@ -44,8 +44,8 @@ module GitRebaseRepo
 
   def run_rebase
     result = nil
-    output, = capture_io { result = GitCommitRebase.run }
-    [result, output]
+    io = capture_io { result = GitCommitRebase.run }
+    [result, io[0] + io[1]]
   end
 
   def branch_with_moved_base

@@ -78,6 +78,17 @@ class TestGitCommitRebase < Minitest::Test
     end
   end
 
+  def test_warns_when_fetch_fails
+    in_repo("master") do
+      write_commit("a.rb", "a\n")
+      system("git", "remote", "add", "origin", File.join(Dir.pwd, "missing.git"), exception: true)
+      result, output = run_rebase
+
+      assert_nil result
+      assert_match(/stale remote-tracking refs/, output)
+    end
+  end
+
   def test_fetches_remote_base_then_rebases
     Dir.mktmpdir do |dir|
       prepare_stale_clone(dir)
