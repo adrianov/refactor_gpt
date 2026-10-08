@@ -168,6 +168,7 @@ Features:
 - `--commit auto|yes|no`: default `auto` (flag may be omitted). `auto` — commit if there are no warnings, else ask. `yes` — commit. `no` — skip commit and push.
 - `--auto [level]`: quiet mode; commits when every warning is ≤ `level`% (default 50; also `--auto=75`). Prints warnings and the commit/push result only — omits diff, RuboCop hint, progress bar, impact, and sounds. Without `--push`, does not ask to push. `--commit yes|no` overrides whether to commit.
 - `--push`: after a successful commit, push without asking. Ignored if nothing was committed.
+- When pushing, if the default branch has moved past this branch's branch point and a rebase onto it is clean, rebases onto that branch and pushes with `--force-with-lease`. A conflicting replay, uncommitted edits to tracked files, or a current branch point keep a normal push. The default branch itself is not rebased. If fetching the remote fails, that failure is reported and the rebase decision uses the remote state already known locally.
 - Reads `git status --porcelain` and `git diff` for the current repository
 - Groups changed files into a small number of coherent commits (by feature, refactor, docs, tests, etc.)
 - Writes conventional-style one-line commit messages
