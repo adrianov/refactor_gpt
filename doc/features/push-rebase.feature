@@ -21,11 +21,11 @@ Feature: Push rebases onto a moved base branch
     And it rebases the feature branch onto that updated default branch
 
   Scenario: A failed fetch keeps the known remote state
-    Given a feature branch has a remote
-    And that remote cannot be fetched
+    Given a feature branch is behind the remote default branch already known locally
+    And a newer update of that remote cannot be fetched
     When the commit tool pushes
     Then it warns that the fetch failed
-    And it keeps using the remote state already known locally
+    And it rebases onto that already known remote default branch
 
   Scenario: A conflicting replay is not rebased
     Given a feature branch whose branch point is behind the default branch
