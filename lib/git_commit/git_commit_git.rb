@@ -3,7 +3,7 @@
 require "colorize"
 require "shellwords"
 
-# Handles repository commands, status checks, and pushing for a commit session.
+# Repository commands, status checks, and push; a clean rebase onto a moved base uses --force-with-lease.
 module GitCommitGit
   private
 
@@ -58,8 +58,9 @@ module GitCommitGit
   end
 
   def git_push
-    puts "Running: git push".green
-    system("git push") || exit(1)
+    command = GitCommitRebase.push_command(GitCommitRebase.run)
+    puts "Running: #{command.join(" ")}".green
+    system(*command) || exit(1)
     exit 0
   end
 end
