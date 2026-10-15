@@ -5,7 +5,6 @@ require 'fileutils'
 
 module Quality
   # Review and document follow-up text: verify, scatter, one-shot schema, new markdown.
-  # Histogram diff body for VERIFY lives in Quality::VerifyDiff.
   module Review
     # Survives formal flag resets so an unchanged module count does not
     # re-loop the verify+scatter follow-up; cleared on a fresh user turn.
@@ -42,8 +41,7 @@ module Quality
       return nil if stable_scatter?(files)
 
       set_review_flag('verify')
-      body = verify_diff_body(files)
-      body ? "#{VERIFY}\n\n#{body}" : VERIFY
+      VERIFY
     end
     def scatter_part(files)
       n = module_edit_count(files)

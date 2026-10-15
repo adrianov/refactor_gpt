@@ -9,32 +9,9 @@ module BranchPoint
 
   module_function
 
-  # [rev, label]. Label is HEAD when this branch has not diverged.
-  def resolve(root = nil)
-    BASE_REFS.each do |ref|
-      sha = merge_base(root, ref)
-      next unless sha
-      return [sha, 'HEAD'] if sha == head_sha(root)
-
-      return [sha, "merge-base with #{ref_label(root, ref)} (#{sha[0, 12]})"]
-    end
-    ['HEAD', 'HEAD']
-  end
-
-  # SHA to diff against, or nil when HEAD has not diverged from the branch point.
-  def rev(root = nil)
-    sha, label = resolve(root)
-    label == 'HEAD' ? nil : sha
-  end
-
   def merge_base(root, ref)
     out, _, status = git(root, 'merge-base', ref, 'HEAD')
     out.strip if status.success? && !out.strip.empty?
-  end
-
-  def head_sha(root)
-    out, _, status = git(root, 'rev-parse', 'HEAD')
-    status.success? ? out.strip : ''
   end
 
   def ref_label(root, ref)

@@ -37,8 +37,6 @@ module Quality
   # treated long-running siblings as abandoned and let quality run too early.
   SESSION_OPEN_AGE = 60 * 60
   LIMIT = 6000
-  # Safety ceiling only: normal VERIFY diffs are attached in full.
-  VERIFY_DIFF_LIMIT = 1_000_000
   FOLLOWUP_REPEATS = 2
   # Cursor file-mutation tools. Presence in this session (path under a
   # workspace root) is the stop-pipeline gate; leftover git dirt is not enough.
